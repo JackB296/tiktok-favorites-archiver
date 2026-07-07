@@ -1,185 +1,126 @@
-# TikTok Favorite Videos Downloader
+# TikTok Favorites Downloader
 
-This project is a Python script to download every video from your favorites on TikTok. It uses the Cobalt API to download videos and slideshows. Unfortuneatly cobalt has discontinued the free hosted api and you must now self host. Luckily it is incredibly easy to do and I have provided instructions from chatgpt on how to do exactly that.
+Download every video and photo slideshow you've ever favorited on TikTok, straight from your official data export.
 
-## Table of Contents
+[![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Cobalt](https://img.shields.io/badge/Powered%20by-Cobalt-8B5CF6)](https://github.com/imputnet/cobalt)
 
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Starting the Cobalt API](#starting-the-cobalt-api)
-- [Usage](#usage)
-- [Errors](#errors)
-- [Getting Your TikTok Data](#getting-your-tiktok-data)
-- [License](#license)
+TikTok lets you export your data, but that export is a JSON file full of links, not your actual videos. This tool reads that file and pulls down every favorite you have. Regular videos are saved as-is. Photo posts are rebuilt into MP4 slideshows with their original sound, so everything lands in one folder you can drop into Plex, a backup drive, or anywhere else.
+
+Downloading runs through a self-hosted [Cobalt](https://github.com/imputnet/cobalt) instance, so your favorites never pass through a third-party server.
+
+## Features
+
+- **Full library export.** Reads the `FavoriteVideoList` from your TikTok data file and downloads all of it in one run.
+- **Slideshow reconstruction.** Photo posts come back as separate images plus an audio track. The tool resizes and pads each image to a uniform frame, then loops the sound to match the slideshow length and encodes a single MP4. When TikTok has already deleted the original audio, it falls back to a bundled default track instead of failing.
+- **Resumable.** Every finished link is written to `last_downloaded_link.txt`. If the run crashes or you stop it, the next run continues from that point instead of starting over.
+- **Safe to re-run.** Output files are numbered sequentially and the tool continues from the highest existing number, so an interrupted run never overwrites what you already have.
+- **Retries built in.** Failed downloads retry up to five times before the tool moves on and logs the failure.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[TikTok data<br/>export .json] --> B[tiktok.py]
+    B --> C[Cobalt API<br/>localhost:9000]
+    C -->|video| D[Save MP4]
+    C -->|photo post| E[Build slideshow<br/>images + audio]
+    E --> D
+    D --> F[downloads/]
+```
+
+The script sends each favorite link to your local Cobalt instance. Cobalt resolves the real media URLs and reports whether the post is a video or a photo set. Videos download directly. Photo sets get downloaded frame by frame, normalized, and encoded into a slideshow with [MoviePy](https://zulko.github.io/moviepy/).
+
+## Prerequisites
+
+- Python 3.9 or newer (developed on 3.12)
+- A running Cobalt instance ([setup below](#setting-up-cobalt))
+- FFmpeg, used by MoviePy to encode slideshows. MoviePy usually fetches it automatically via `imageio-ffmpeg`; if encoding fails, install FFmpeg and make sure it's on your `PATH`.
 
 ## Installation
 
-1. Clone the repository:
+```bash
+git clone https://github.com/JackB296/tiktok-favorites-downloader.git
+cd tiktok-favorites-downloader
 
-    ```bash
-    git clone https://github.com/JackB296/tiktok-favorites-downloader.git
-    cd tiktok-favorites-downloader
-    ```
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
 
-2. Create a virtual environment and activate it:
+pip install -r requirements.txt
+```
 
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-    ```
+## Getting your TikTok data
 
-3. Install the required packages:
+1. On the TikTok web app, open **Settings and privacy → Account → Download your data**.
+2. Select **All data** and **JSON** as the format, then submit the request.
+3. Wait for TikTok to process it (usually a few minutes), reload, and download the archive.
+4. Unzip it and copy `user_data_tiktok.json` into the project directory.
 
-    ```bash
-    pip install -r requirements.txt
-    ```
+If your links stop resolving partway through a run, the export can go stale. Re-download your data and try again.
 
-## Configuration
+## Setting up Cobalt
 
-Open that baby up and mess with these parameters if ya want. It would be pretty easy to change the script to not delete the `IMG_DIR` after the video is generated. I use plex to view these video afterwards so I prefer the video format but your more than likely to keep each image directory and make a special more tiktok esque viewer.
+Cobalt discontinued its free hosted API, so you run your own instance. It's a small Node service and Cobalt maintains full [self-hosting docs](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md). Docker is the quickest path if you have it; the manual build below works anywhere Node 18+ runs.
 
-- `RETRY_DELAY`: Time in seconds between each retry attempt.
-- `DOWNLOAD_DIR`: Directory where downloaded videos will be stored.
-- `IMG_DIR`: Temporary directory for creating slideshows.
-- `LAST_DOWNLOADED_LINK_FILE`: File to store the last downloaded link.
-- `VIDEO_LINKS_FILE`: TikTok data file containing favorite video links.
-- `DURATION_PER_IMAGE`: Duration each slide is shown in the slideshow video.
-- `TARGET_SIZE`: Target resolution for images.
+1. Install [Node.js](https://nodejs.org/) 18 or newer and [pnpm](https://pnpm.io/installation).
+2. Clone Cobalt and install its API dependencies:
 
-## Starting the Cobalt API
+   ```bash
+   git clone https://github.com/imputnet/cobalt.git
+   cd cobalt/api/src
+   pnpm install
+   ```
 
-This script relies on the Cobalt API for downloading videos. Follow these steps to set up and start your own instance of the API on Windows using WSL:
+3. Create a `.env` file in that directory with:
 
-### Prerequisites
+   ```env
+   API_URL=http://localhost:9000/
+   ```
 
-- **Windows Subsystem for Linux (WSL)** with a Linux distribution installed (e.g., Ubuntu).
-- **Node.js** version 18 or higher.
-- **Git** for cloning repositories.
-- **pnpm** (a fast, disk space-efficient package manager).
+4. Start it:
 
-### Steps to Set Up the Cobalt API
+   ```bash
+   pnpm start
+   ```
 
-1. **Install WSL and a Linux Distribution (if not already installed):**
+Leave this running in its own terminal. The API listens on `http://localhost:9000`, which is the address `tiktok.py` points at by default. Stop it with `Ctrl+C`.
 
-    Open PowerShell as an administrator and run:
-
-    ```bash
-    wsl --install
-    ```
-
-    Restart your computer when prompted, and complete the installation of Ubuntu.
-
-2. **Update and Upgrade Your Linux Distribution:**
-
-    Open your Ubuntu terminal and run:
-
-    ```bash
-    sudo apt update && sudo apt upgrade -y
-    ```
-
-3. **Install Node.js (Version 18 or Higher):**
-
-    Install the Node.js version manager (nvm):
-
-    ```bash
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.4/install.sh | bash
-    source ~/.bashrc
-    ```
-
-    Install Node.js 18 and use it:
-
-    ```bash
-    nvm install 18
-    nvm use 18
-    ```
-
-    Verify the installation:
-
-    ```bash
-    node -v
-    ```
-
-4. **Install Git:**
-
-    ```bash
-    sudo apt install git -y
-    ```
-
-5. **Install pnpm:**
-
-    ```bash
-    npm install -g pnpm
-    ```
-
-6. **Clone the Cobalt Repository:**
-
-    ```bash
-    git clone https://github.com/imputnet/cobalt.git
-    ```
-
-7. **Navigate to the API Directory:**
-
-    ```bash
-    cd cobalt/api/src
-    ```
-
-8. **Install Dependencies:**
-
-    ```bash
-    pnpm install
-    ```
-
-9. **Create a `.env` File with Required Environment Variables:**
-
-    Create and edit the `.env` file:
-
-    ```bash
-    nano .env
-    ```
-
-    Add the following content:
-
-    ```env
-    API_URL=http://localhost:9000/
-    ```
-
-    Save and exit the editor (`Ctrl+O` to save, `Ctrl+X` to exit in nano).
-
-10. **Start the Cobalt API Server:**
-
-    ```bash
-    pnpm start
-    ```
-
-    The server should now be running on port 9000.
-
-11. **Stopping the Server:**
-
-    You can use Ctrl+C in the terminal running the api to stop the server.
+> **Windows:** run Cobalt inside [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) for the smoothest experience.
 
 ## Usage
 
-1. Ensure you have your TikTok data file (`user_data_tiktok.json`) in the project directory. For instructions on how to get this data, see the [Getting Your TikTok Data](#getting-your-tiktok-data) section.
+With Cobalt running and `user_data_tiktok.json` in place:
 
-2. Start the Cobalt API (see [Starting the Cobalt API](#starting-the-cobalt-api)).
+```bash
+python tiktok.py
+```
 
-3. Run the script:
+Videos and slideshows are written to `downloads/`, numbered in order. Progress is logged to the terminal.
 
-    ```bash
-    python tiktok.py
-    ```
+## Configuration
 
-## Errors
+Adjust these constants at the top of [`tiktok.py`](tiktok.py):
 
-- If the program has an error, my best suggestion is to copy the last link from the terminal and put it into the `last_downloaded_link.txt` file, then rerun the program. 
-- If you get a 404 error, your API may not be working correctly.
-- If your links just dont seem to be working I reccomend re-downloading your data and trying again. This had happened to me on multiple occasions.
+| Setting | Default | Description |
+| --- | --- | --- |
+| `COBALT_API_URL` | `http://localhost:9000/` | Address of your Cobalt instance |
+| `RETRY_DELAY` | `0.5` | Seconds to wait between download attempts |
+| `DOWNLOAD_DIR` | `downloads` | Where finished videos are saved |
+| `IMG_DIR` | `img_dir` | Temporary working folder for slideshow frames |
+| `LAST_DOWNLOADED_LINK_FILE` | `last_downloaded_link.txt` | Tracks the last completed link for resuming |
+| `VIDEO_LINKS_FILE` | `user_data_tiktok.json` | Your TikTok data export |
+| `DURATION_PER_IMAGE` | `2.5` | Seconds each photo shows in a slideshow |
+| `TARGET_SIZE` | `(1280, 720)` | Frame resolution slideshow images are fit to |
 
-## Getting Your TikTok Data
+The tool deletes the temporary `IMG_DIR` after each slideshow. If you'd rather keep the raw images (for example, to build your own TikTok-style viewer), remove the `shutil.rmtree(IMG_DIR)` call in `main()`.
 
-To download your favorites you will need to get your TikTok data:
+## Troubleshooting
 
-1. **Go to Settings**: On the TikTok web, navigate to the settings page.
-2. **Request Data**: Find the `Data` section and click on the `Download Your Data` button. Choose all data and JSON format.
-3. **Wait and Download**: Wait a few minutes for TikTok to process your request. Reload the page and you should be able to download your data.
-4. **Extract Data**: Extract the `user_data_tiktok.json` file from the downloaded zip and place it in the project directory.
+- **A run stopped partway.** Copy the last link from the terminal into `last_downloaded_link.txt`, then run the script again to resume from there.
+- **404 errors.** Your Cobalt instance probably isn't reachable. Confirm it's running and that `COBALT_API_URL` matches its address.
+- **Links won't resolve.** Re-download your TikTok data. Exports expire, and stale links are the usual cause.
+
+## License
+
+[MIT](LICENSE) © Jack Bialecki
