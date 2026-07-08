@@ -1,17 +1,24 @@
 """``python -m core`` entry point.
 
-    python -m core sync [--cobalt-url ... --data-file ... --download-dir ...]
-        Run the DB-driven concurrent sync engine.
-    python -m core [--cobalt-url ...]
-        Run the legacy single-pass CLI download flow.
+    python -m core sync      [opts]   Run the DB-driven concurrent sync engine.
+    python -m core backfill  [opts]   Recover raw slideshow assets for past favorites.
+    python -m core enrich    [opts]   Fetch captions/authors via oEmbed.
+    python -m core           [opts]   Legacy single-pass CLI download flow.
 """
 import sys
 
 
 def main():
     args = sys.argv[1:]
-    if args and args[0] == "sync":
+    command = args[0] if args else None
+    if command == "sync":
         from core.sync import run_cli
+        run_cli(args[1:])
+    elif command == "backfill":
+        from core.sync import run_backfill_cli
+        run_backfill_cli(args[1:])
+    elif command == "enrich":
+        from core.enrich import run_cli
         run_cli(args[1:])
     else:
         from core.cli import main as legacy_main

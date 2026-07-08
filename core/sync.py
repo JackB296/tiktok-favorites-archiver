@@ -32,6 +32,33 @@ def _errstr(error):
     return None if error is None else str(error)
 
 
+def _drive(items, concurrency, state, wait, handle):
+    """Run ``handle(item)`` over ``items`` with a bounded pool, honoring pause/stop.
+
+    ``state()`` returns the current run_state; ``wait()`` is the pause poll;
+    ``handle(item)`` does the per-item work and its own DB writes. Shared by the
+    sync and backfill orchestrators so the pause/stop logic lives in one place.
+    """
+    if concurrency <= 1:
+        for item in items:
+            if state() in _HALT:
+                break
+            handle(item)
+        return
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = []
+        for item in items:
+            if state() in _HALT:
+                break
+            while state() == "paused":
+                wait()
+            if state() in _HALT:
+                break
+            futures.append(pool.submit(handle, item))
+        for f in futures:
+            f.result()
+
+
 def process_item(deps, download_dir, item):
     """Do the work for one item and return an outcome dict (no DB, no pool).
 
@@ -138,29 +165,98 @@ def run_sync(conn, download_dir, deps=None, concurrency=None, progress=None,
         if progress:
             progress({"id": item["id"], **outcome})
 
-    if eff_concurrency <= 1:
-        for item in items:
-            if state() in _HALT:
-                break
-            handle(item)
-    else:
-        with ThreadPoolExecutor(max_workers=eff_concurrency) as pool:
-            futures = []
-            for item in items:
-                if state() in _HALT:
-                    break
-                while state() == "paused":
-                    wait()
-                if state() in _HALT:
-                    break
-                futures.append(pool.submit(handle, item))
-            for f in futures:
-                f.result()
+    _drive(items, eff_concurrency, state, wait, handle)
 
     final = "stopped" if state() in _HALT else "idle"
     with db_lock:
         store.set_run_state(conn, state=final, phase=None)
         return store.counts_by_status(conn)
+
+
+def backfill_item(deps, download_dir, item):
+    """Re-resolve one item to recover raw slideshow assets (does not change status)."""
+    result = deps.resolve(item["link"])
+    kind = result.kind
+    if kind == "video":
+        return {"kind": "video", "has_assets": 0}
+    if kind == "slideshow":
+        images = result.images or []
+        if not images:
+            return {"kind": "slideshow", "has_assets": 0}
+        work = tempfile.mkdtemp(prefix="backfill_")
+        try:
+            local = []
+            for idx, url in enumerate(images):
+                path = os.path.join(work, f"slide_{idx}.jpg")
+                if deps.download_file(url, path):
+                    local.append(path)
+            if not local:
+                return {"kind": "slideshow", "has_assets": 0}
+            if result.audio:
+                audio_tmp = os.path.join(work, "audio.mp3")
+                audio_path = audio_tmp if deps.download_file(result.audio, audio_tmp) else deps.default_audio
+            else:
+                audio_path = deps.default_audio
+            deps.save_assets(download_dir, item["id"], local, audio_path)
+            return {"kind": "slideshow", "has_assets": 1}
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    if kind == "error":
+        return {"kind": "unresolved", "has_assets": 0}
+    return {"kind": "unknown", "has_assets": 0}
+
+
+def items_needing_backfill(conn):
+    """Downloaded items that still lack raw assets and aren't already known videos."""
+    return [
+        row for row in store.all_items(conn)
+        if row["has_assets"] == 0 and row["kind"] != "video"
+        and not str(row["link"]).startswith("local://")
+    ]
+
+
+def run_backfill(conn, download_dir, deps=None, concurrency=None, progress=None, wait=None):
+    """One-time pass: re-resolve past favorites and recover slideshow raw assets.
+
+    Idempotent/resumable — videos get marked (and skipped next time), slideshows
+    with recovered assets drop out of the selection.
+    """
+    if deps is None:
+        deps = build_default_deps()
+    if wait is None:
+        wait = lambda: time.sleep(0.1)  # noqa: E731
+    os.makedirs(download_dir, exist_ok=True)
+    db_lock = threading.Lock()
+
+    def state():
+        with db_lock:
+            return store.get_run_state(conn)["state"]
+
+    with db_lock:
+        rs = store.get_run_state(conn)
+        eff_concurrency = int(concurrency or (rs["concurrency"] if rs else config.CONCURRENCY) or config.CONCURRENCY)
+        store.set_run_state(conn, state="running", phase="backfill")
+        items = items_needing_backfill(conn)
+
+    def handle(item):
+        while state() == "paused":
+            wait()
+        if state() in _HALT:
+            return
+        outcome = backfill_item(deps, download_dir, item)
+        with db_lock:
+            if outcome.get("kind"):
+                store.set_kind(conn, item["id"], outcome["kind"])
+            store.set_has_assets(conn, item["id"], bool(outcome.get("has_assets")))
+        if progress:
+            progress({"id": item["id"], **outcome})
+
+    _drive(items, eff_concurrency, state, wait, handle)
+
+    final = "stopped" if state() in _HALT else "idle"
+    with db_lock:
+        store.set_run_state(conn, state=final, phase=None)
+        return {"with_assets": sum(1 for r in store.all_items(conn) if r["has_assets"] == 1)}
 
 
 def run_cli(argv=None):
@@ -193,3 +289,37 @@ def run_cli(argv=None):
 
     counts = run_sync(conn, config.DOWNLOAD_DIR, concurrency=args.concurrency, progress=progress)
     logging.info(f"Sync complete: {counts}")
+
+
+def run_backfill_cli(argv=None):
+    """`python -m core backfill` — recover raw slideshow assets for past favorites."""
+    import argparse
+    from core import cobalt, importer
+
+    parser = argparse.ArgumentParser(
+        prog="core backfill",
+        description="Recover raw slideshow images+audio for already-downloaded favorites.",
+    )
+    parser.add_argument("--cobalt-url", default=config.COBALT_API_URL)
+    parser.add_argument("--data-file", default=config.VIDEO_LINKS_FILE)
+    parser.add_argument("--download-dir", default=config.DOWNLOAD_DIR)
+    parser.add_argument("--db", default=config.DB_FILE)
+    parser.add_argument("--concurrency", type=int, default=config.CONCURRENCY)
+    args = parser.parse_args(argv)
+
+    config.COBALT_API_URL = args.cobalt_url
+    config.DOWNLOAD_DIR = args.download_dir
+    config.VIDEO_LINKS_FILE = args.data_file
+    config.setup_logging()
+
+    if not cobalt.check_cobalt(config.COBALT_API_URL):
+        logging.error("Cobalt is unreachable — aborting.")
+        return
+    conn = store.init_db(store.connect(args.db))
+    importer.import_all(conn, config.VIDEO_LINKS_FILE, config.DOWNLOAD_DIR)
+
+    def progress(event):
+        logging.info(f"[{event['id']}] backfill: kind={event.get('kind')} assets={event.get('has_assets')}")
+
+    result = run_backfill(conn, config.DOWNLOAD_DIR, concurrency=args.concurrency, progress=progress)
+    logging.info(f"Backfill complete: {result}")
