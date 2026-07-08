@@ -75,6 +75,20 @@ def test_run_state_updates():
     assert rs["concurrency"] == 8 and rs["cobalt_url"] == "http://cobalt:9000/"
 
 
+def test_search_items():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/a", kind="video", status="done")
+    store.insert_item(conn, 2, "https://tiktok.com/b", kind="slideshow", status="pending")
+    store.set_metadata(conn, 1, "cats are great #cats", "alice")
+    store.set_metadata(conn, 2, "dogs everywhere #dogs", "bob")
+    assert [r["id"] for r in store.search_items(conn, query="cats")] == [1]
+    assert [r["id"] for r in store.search_items(conn, query="#dogs")] == [2]
+    assert [r["id"] for r in store.search_items(conn, query="alice")] == [1]        # author match
+    assert [r["id"] for r in store.search_items(conn, kinds=["slideshow"])] == [2]
+    assert [r["id"] for r in store.search_items(conn, statuses=["done"])] == [1]
+    assert [r["id"] for r in store.search_items(conn)] == [1, 2]                     # no filter
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

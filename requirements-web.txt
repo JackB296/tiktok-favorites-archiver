@@ -1,0 +1,5 @@
+# Backend (web app) dependencies — installed in the Docker image alongside
+# requirements.txt (which holds the downloader deps: requests, moviepy, pillow).
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9   # multipart/form-data parsing for the export upload

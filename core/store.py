@@ -155,6 +155,28 @@ def all_items(conn):
     return conn.execute("SELECT * FROM item ORDER BY id").fetchall()
 
 
+def search_items(conn, query=None, kinds=None, statuses=None):
+    """Items filtered by a free-text ``query`` (caption/author/link LIKE) plus
+    optional ``kinds``/``statuses`` lists. Ordered by id."""
+    clauses = []
+    params = []
+    if query:
+        clauses.append("(caption LIKE ? OR author LIKE ? OR link LIKE ?)")
+        like = f"%{query}%"
+        params += [like, like, like]
+    if kinds:
+        clauses.append("kind IN (%s)" % ",".join("?" for _ in kinds))
+        params += list(kinds)
+    if statuses:
+        clauses.append("status IN (%s)" % ",".join("?" for _ in statuses))
+        params += list(statuses)
+    sql = "SELECT * FROM item"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY id"
+    return conn.execute(sql, params).fetchall()
+
+
 def counts_by_status(conn):
     rows = conn.execute("SELECT status, COUNT(*) AS c FROM item GROUP BY status").fetchall()
     return {r["status"]: r["c"] for r in rows}
