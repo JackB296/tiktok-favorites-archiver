@@ -15,8 +15,9 @@ Downloading runs through a self-hosted [Cobalt](https://github.com/imputnet/coba
 - **Full library export.** Reads the `FavoriteVideoList` from your TikTok data file and downloads all of it in one run.
 - **Slideshow reconstruction.** Photo posts come back as separate images plus an audio track. The tool resizes and pads each image to a uniform frame, then loops the sound to match the slideshow length and encodes a single MP4. When TikTok has already deleted the original audio, it falls back to a bundled default track instead of failing.
 - **Resumable.** Every finished link is written to `last_downloaded_link.txt`. If the run crashes or you stop it, the next run continues from that point instead of starting over.
-- **Safe to re-run.** Output files are numbered sequentially and the tool continues from the highest existing number, so an interrupted run never overwrites what you already have.
-- **Retries built in.** Failed downloads retry up to five times before the tool moves on and logs the failure.
+- **Safe to re-run.** Output files are numbered sequentially and the tool continues from the highest existing number, so an interrupted run never overwrites what you already have. Downloads are written to a temporary `.part` file and moved into place only once complete, so a crash never leaves a half-written video behind.
+- **Provenance manifest.** Every download is logged to `downloads/manifest.csv` — the output filename, its original TikTok link, whether it was a video or a slideshow, and a timestamp — so you can always tell what `147.mp4` actually is. On the first run with the manifest, it also backfills best-effort provenance for anything you'd already downloaded (mapping file `N.mp4` to the Nth link in your export; rows marked `backfilled` since failed links in past runs can shift that).
+- **Retries built in.** Failed downloads retry up to five times before the tool moves on and logs the failure. The tool also checks that Cobalt is reachable before it starts, so a misconfigured instance fails fast with a clear message.
 
 ## How it works
 
@@ -100,16 +101,28 @@ Videos and slideshows are written to `downloads/`, numbered in order. Progress i
 
 ## Configuration
 
-Adjust these constants at the top of [`tiktok.py`](tiktok.py):
+The most commonly changed settings can be passed as command-line flags instead of editing the source, e.g.:
+
+```bash
+python tiktok.py --cobalt-url http://localhost:9000/ --download-dir ~/tiktok
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--cobalt-url` | `http://localhost:9000/` | Address of your Cobalt instance |
+| `--data-file` | `user_data_tiktok.json` | Your TikTok data export |
+| `--download-dir` | `downloads` | Where finished videos are saved |
+| `--retry-delay` | `0.5` | Seconds between download attempts and requests |
+
+Run `python tiktok.py --help` to see these along with their current defaults.
+
+For everything else, adjust these constants at the top of [`tiktok.py`](tiktok.py):
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `COBALT_API_URL` | `http://localhost:9000/` | Address of your Cobalt instance |
-| `RETRY_DELAY` | `0.5` | Seconds to wait between download attempts |
-| `DOWNLOAD_DIR` | `downloads` | Where finished videos are saved |
 | `IMG_DIR` | `img_dir` | Temporary working folder for slideshow frames |
 | `LAST_DOWNLOADED_LINK_FILE` | `last_downloaded_link.txt` | Tracks the last completed link for resuming |
-| `VIDEO_LINKS_FILE` | `user_data_tiktok.json` | Your TikTok data export |
+| `MANIFEST_FILE` | `manifest.csv` | Provenance log written inside the download directory |
 | `DURATION_PER_IMAGE` | `2.5` | Seconds each photo shows in a slideshow |
 | `TARGET_SIZE` | `(1280, 720)` | Frame resolution slideshow images are fit to |
 
