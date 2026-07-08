@@ -10,6 +10,26 @@ TikTok lets you export your data, but that export is a JSON file full of links, 
 
 Downloading runs through a self-hosted [Cobalt](https://github.com/imputnet/cobalt) instance, so your favorites never pass through a third-party server.
 
+## Web app (recommended)
+
+The easiest way to use this is the bundled local web app — a control center to run downloads plus a TikTok-style viewer to browse them. It brings up its own Cobalt instance for you, so there's nothing else to set up.
+
+```bash
+docker compose up --build
+```
+
+Then open **http://localhost:8080**:
+
+- **Sync** — upload your TikTok data export (there's a how-to button), then Start / Pause / Continue / Stop a run and watch live per-item progress.
+- **Feed** — a vertical, TikTok-style scroll of your favorites. Videos autoplay; photo posts play as an image carousel with their original sound.
+- **Gallery** — a searchable grid (by caption, hashtag, or author) of everything you've saved.
+
+Media lands in `./downloads` on your host, so you can point **Plex** at that folder for TV playback; state lives in a small SQLite database under `./appdata`.
+
+> **Backfill:** downloaded favorites before this app existed? The Sync tab's **Backfill assets** re-fetches the raw slideshow images for your existing files so they render in the Feed and Gallery.
+
+Prefer the command line? The original headless CLI (`python tiktok.py`) is documented below and still works.
+
 ## Features
 
 - **Full library export.** Reads the `FavoriteVideoList` from your TikTok data file and downloads all of it in one run.

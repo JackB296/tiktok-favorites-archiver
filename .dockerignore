@@ -1,0 +1,23 @@
+.git
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.venv
+venv
+
+# runtime data / media (mounted as volumes, never baked into the image)
+downloads/
+appdata/
+data/
+img_dir/
+user_data_tiktok.json
+last_downloaded_link.txt
+
+# frontend build artifacts (built inside the image)
+web/node_modules
+web/dist
+
+# local-only working docs
+docs/
+tasks/
+plans/

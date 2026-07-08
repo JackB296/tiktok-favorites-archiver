@@ -1,0 +1,39 @@
+# Boots the official Cobalt instance + this archive app together.
+#   docker compose up --build
+# Then open http://localhost:8080
+services:
+  cobalt:
+    # Official Cobalt API image. Check https://github.com/imputnet/cobalt
+    # (docs/run-an-instance) for the current tag if this one is stale.
+    image: ghcr.io/imputnet/cobalt:11
+    init: true
+    restart: unless-stopped
+    environment:
+      API_URL: "http://cobalt:9000/"
+      # Raise these if you want faster syncs (the app's rate limiter should stay under them):
+      # RATELIMIT_MAX: "200"
+      # RATELIMIT_WINDOW: "60"
+    expose:
+      - "9000"
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - cobalt
+    environment:
+      COBALT_API_URL: "http://cobalt:9000/"
+      DOWNLOAD_DIR: "/app/downloads"
+      DB_FILE: "/app/data/archive.db"
+      APP_PORT: "8080"
+      # Keep this comfortably below Cobalt's RATELIMIT_MAX/WINDOW above:
+      CONCURRENCY: "4"
+      RATE_MAX_CALLS: "8"
+      RATE_PERIOD: "1.0"
+    ports:
+      - "8080:8080"
+    volumes:
+      # Media lands here on the host — point Plex at ./downloads.
+      - ./downloads:/app/downloads
+      # SQLite state (kept off the media folder).
+      - ./appdata:/app/data
