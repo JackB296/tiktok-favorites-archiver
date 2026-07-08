@@ -1,158 +1,137 @@
-# TikTok Favorites Downloader
+# TikTok Favorites Archive
 
-Download every video and photo slideshow you've ever favorited on TikTok, straight from your official data export.
+Turn your TikTok data export into a self-hosted archive of everything you've favorited, then scroll it like TikTok itself. Videos download as-is. Photo slideshows are rebuilt into MP4s with their original sound. A local web app runs the downloads and browses the results, and Plex handles the TV.
 
-[![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB)](https://react.dev/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Cobalt](https://img.shields.io/badge/Powered%20by-Cobalt-8B5CF6)](https://github.com/imputnet/cobalt)
 
-TikTok lets you export your data, but that export is a JSON file full of links, not your actual videos. This tool reads that file and pulls down every favorite you have. Regular videos are saved as-is. Photo posts are rebuilt into MP4 slideshows with their original sound, so everything lands in one folder you can drop into Plex, a backup drive, or anywhere else.
+<p align="center">
+  <img src="screenshots/feed.png" alt="The Feed: a vertical, TikTok-style scroll of your saved favorites" width="820">
+</p>
 
-Downloading runs through a self-hosted [Cobalt](https://github.com/imputnet/cobalt) instance, so your favorites never pass through a third-party server.
+Everything runs on your own machine through a self-hosted [Cobalt](https://github.com/imputnet/cobalt) instance, so your favorites never pass through anyone else's server.
 
-## Web app (recommended)
+## Quick start
 
-The easiest way to use this is the bundled local web app — a control center to run downloads plus a TikTok-style viewer to browse them. It brings up its own Cobalt instance for you, so there's nothing else to set up.
+You need [Docker](https://www.docker.com/).
 
 ```bash
+git clone https://github.com/JackB296/tiktok-favorites-archive.git
+cd tiktok-favorites-archive
 docker compose up --build
 ```
 
-Then open **http://localhost:8080**:
+Open **http://localhost:8080**. That one command starts the app and its own Cobalt instance together, so there is nothing else to install. Then:
 
-- **Sync** — upload your TikTok data export (there's a how-to button), then Start / Pause / Continue / Stop a run and watch live per-item progress.
-- **Feed** — a vertical, TikTok-style scroll of your favorites. Videos autoplay; photo posts play as an image carousel with their original sound.
-- **Gallery** — a searchable grid (by caption, hashtag, or author) of everything you've saved.
+1. Open the **Sync** tab, upload your TikTok data export (the how-to button walks you through getting it), and press Start.
+2. Watch each favorite download in real time.
+3. Browse them in **Feed** and **Gallery**.
 
-Media lands in `./downloads` on your host, so you can point **Plex** at that folder for TV playback; state lives in a small SQLite database under `./appdata`.
+Media is written to `./downloads` on your host. Point Plex at that folder and your favorites play on the TV.
 
-> **Backfill:** downloaded favorites before this app existed? The Sync tab's **Backfill assets** re-fetches the raw slideshow images for your existing files so they render in the Feed and Gallery.
+## The app
 
-Prefer the command line? The original headless CLI (`python tiktok.py`) is documented below and still works.
+**Feed.** A vertical scroll of your favorites, one at a time. Videos autoplay as they come into view; photo posts play as an image carousel with their original audio.
 
-## Features
+**Gallery.** A thumbnail grid of everything, searchable by caption, hashtag, or author (pulled from TikTok's public oEmbed data), with filters by type.
 
-- **Full library export.** Reads the `FavoriteVideoList` from your TikTok data file and downloads all of it in one run.
-- **Slideshow reconstruction.** Photo posts come back as separate images plus an audio track. The tool resizes and pads each image to a uniform frame, then loops the sound to match the slideshow length and encodes a single MP4. When TikTok has already deleted the original audio, it falls back to a bundled default track instead of failing.
-- **Resumable.** Every finished link is written to `last_downloaded_link.txt`. If the run crashes or you stop it, the next run continues from that point instead of starting over.
-- **Safe to re-run.** Output files are numbered sequentially and the tool continues from the highest existing number, so an interrupted run never overwrites what you already have. Downloads are written to a temporary `.part` file and moved into place only once complete, so a crash never leaves a half-written video behind.
-- **Provenance manifest.** Every download is logged to `downloads/manifest.csv` — the output filename, its original TikTok link, whether it was a video or a slideshow, and a timestamp — so you can always tell what `147.mp4` actually is. On the first run with the manifest, it also backfills best-effort provenance for anything you'd already downloaded (mapping file `N.mp4` to the Nth link in your export; rows marked `backfilled` since failed links in past runs can shift that).
-- **Retries built in.** Failed downloads retry up to five times before the tool moves on and logs the failure. The tool also checks that Cobalt is reachable before it starts, so a misconfigured instance fails fast with a clear message.
+**Sync.** The control center. Upload your export, then start, pause, resume, or stop a run and watch per-item status update live over Server-Sent Events.
+
+<p align="center">
+  <img src="screenshots/sync.png" alt="The Sync dashboard: upload, run controls, live per-item progress" width="820">
+</p>
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    A[TikTok data<br/>export .json] --> B[tiktok.py]
-    B --> C[Cobalt API<br/>localhost:9000]
-    C -->|video| D[Save MP4]
-    C -->|photo post| E[Build slideshow<br/>images + audio]
+    A[TikTok export .json] --> B[Web app + SQLite]
+    B --> C[Cobalt]
+    C -->|video| D[MP4]
+    C -->|photo post| E[Rebuild slideshow<br/>keep raw images]
     E --> D
     D --> F[downloads/]
+    F --> G[Plex on TV]
+    F --> H[Web viewer]
 ```
 
-The script sends each favorite link to your local Cobalt instance. Cobalt resolves the real media URLs and reports whether the post is a video or a photo set. Videos download directly. Photo sets get downloaded frame by frame, normalized, and encoded into a slideshow with [MoviePy](https://zulko.github.io/moviepy/).
+The app reads your export, records every favorite in a SQLite database, and works through them with a bounded pool of workers that stays under Cobalt's rate limit. Cobalt resolves each link to real media. Videos download directly. For a photo post, the images and audio are downloaded, rebuilt into a slideshow MP4 (each image centered on a black canvas sized to the largest image, with no downscaling), and the raw images are kept so the web viewer can render them as a carousel.
 
-## Prerequisites
+File numbering is stable: `147.mp4` is item 147 in the database. A rerun never renumbers or overwrites what you already have, and Plex keeps its place.
 
-- Python 3.9 or newer (developed on 3.12)
-- A running Cobalt instance ([setup below](#setting-up-cobalt))
-- FFmpeg, used by MoviePy to encode slideshows. MoviePy usually fetches it automatically via `imageio-ffmpeg`; if encoding fails, install FFmpeg and make sure it's on your `PATH`.
+## Details worth knowing
 
-## Installation
+- **Resumable and crash-safe.** Progress lives in SQLite, so a rerun knows exactly which favorites still need work. Downloads stream to a `.part` file and are renamed into place only once complete, so a crash never leaves a half-written video behind.
+- **Original slideshow audio.** Photo posts request the full original sound. If TikTok has already deleted it, a bundled default track fills in instead of failing the encode.
+- **Backfill.** Already downloaded favorites before this existed? The Sync tab's Backfill re-fetches the raw slideshow images for your existing files so they render in the viewer.
+- **Rate-limit aware.** The worker pool backs off on HTTP 429 and holds a configurable request rate, so a self-hosted Cobalt is not overwhelmed.
+- **Provenance.** `downloads/manifest.csv` maps each file to its source link, type, and status alongside the database.
 
-```bash
-git clone https://github.com/JackB296/tiktok-favorites-downloader.git
-cd tiktok-favorites-downloader
+## Architecture
 
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-
-pip install -r requirements.txt
+```
+core/     download engine: export parsing, Cobalt client, slideshow encoder,
+          SQLite store, concurrent sync, oEmbed enrichment, asset backfill
+server/   FastAPI backend: REST + Server-Sent Events, background job manager,
+          range-capable media streaming
+web/      React + Vite + Tailwind SPA: Feed, Gallery, Sync
+Dockerfile + docker-compose.yml   the app plus an official Cobalt image
 ```
 
-## Getting your TikTok data
-
-1. On the TikTok web app, open **Settings and privacy → Account → Download your data**.
-2. Select **All data** and **JSON** as the format, then submit the request.
-3. Wait for TikTok to process it (usually a few minutes), reload, and download the archive.
-4. Unzip it and copy `user_data_tiktok.json` into the project directory.
-
-If your links stop resolving partway through a run, the export can go stale. Re-download your data and try again.
-
-## Setting up Cobalt
-
-Cobalt discontinued its free hosted API, so you run your own instance. It's a small Node service and Cobalt maintains full [self-hosting docs](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md). Docker is the quickest path if you have it; the manual build below works anywhere Node 18+ runs.
-
-1. Install [Node.js](https://nodejs.org/) 18 or newer and [pnpm](https://pnpm.io/installation).
-2. Clone Cobalt and install its API dependencies:
-
-   ```bash
-   git clone https://github.com/imputnet/cobalt.git
-   cd cobalt/api/src
-   pnpm install
-   ```
-
-3. Create a `.env` file in that directory with:
-
-   ```env
-   API_URL=http://localhost:9000/
-   ```
-
-4. Start it:
-
-   ```bash
-   pnpm start
-   ```
-
-Leave this running in its own terminal. The API listens on `http://localhost:9000`, which is the address `tiktok.py` points at by default. Stop it with `Ctrl+C`.
-
-> **Windows:** run Cobalt inside [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) for the smoothest experience.
-
-## Usage
-
-With Cobalt running and `user_data_tiktok.json` in place:
-
-```bash
-python tiktok.py
-```
-
-Videos and slideshows are written to `downloads/`, numbered in order. Progress is logged to the terminal.
+The download engine is a standalone Python package with no web dependency, covered by a unit-test suite (run with `python3 tests/test_*.py`). The backend wraps it with job control and live progress. The frontend talks to a small typed API and never reaches Cobalt directly.
 
 ## Configuration
 
-The most commonly changed settings can be passed as command-line flags instead of editing the source, e.g.:
+With Docker, set these on the `app` service in `docker-compose.yml`:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `COBALT_API_URL` | `http://cobalt:9000/` | Address of the Cobalt service |
+| `DOWNLOAD_DIR` | `/app/downloads` | Where media is saved |
+| `CONCURRENCY` | `4` | Simultaneous downloads |
+| `RATE_MAX_CALLS` / `RATE_PERIOD` | `8` / `1.0` | Requests allowed per window, in seconds |
+
+If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATELIMIT_WINDOW` in the same file to match.
+
+## Getting your TikTok data
+
+1. In TikTok, open **Settings and privacy → Account → Download your data**.
+2. Choose **All data** and the **JSON** format, then submit the request.
+3. When TikTok has prepared it, download and unzip the archive.
+4. Upload `user_data_tiktok.json` in the Sync tab.
+
+Exports expire. If links stop resolving partway through a run, request a fresh one.
+
+## Headless CLI
+
+<details>
+<summary>Run the downloader without the web app</summary>
+
+The original command-line downloader still ships in the repo. It needs its own Cobalt instance (see Cobalt's [run-an-instance guide](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md)) and Python 3.9+ with FFmpeg on your `PATH`.
 
 ```bash
-python tiktok.py --cobalt-url http://localhost:9000/ --download-dir ~/tiktok
+python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+python tiktok.py --data-file user_data_tiktok.json
 ```
 
-| Flag | Default | Description |
-| --- | --- | --- |
-| `--cobalt-url` | `http://localhost:9000/` | Address of your Cobalt instance |
-| `--data-file` | `user_data_tiktok.json` | Your TikTok data export |
-| `--download-dir` | `downloads` | Where finished videos are saved |
-| `--retry-delay` | `0.5` | Seconds between download attempts and requests |
+Flags: `--cobalt-url`, `--data-file`, `--download-dir`, `--retry-delay`. Run `python tiktok.py --help` for the defaults.
 
-Run `python tiktok.py --help` to see these along with their current defaults.
+</details>
 
-For everything else, adjust these constants at the top of [`tiktok.py`](tiktok.py):
+## Built with
 
-| Setting | Default | Description |
-| --- | --- | --- |
-| `IMG_DIR` | `img_dir` | Temporary working folder for slideshow frames |
-| `LAST_DOWNLOADED_LINK_FILE` | `last_downloaded_link.txt` | Tracks the last completed link for resuming |
-| `MANIFEST_FILE` | `manifest.csv` | Provenance log written inside the download directory |
-| `DURATION_PER_IMAGE` | `2.5` | Seconds each photo shows in a slideshow |
-| `TARGET_SIZE` | `(1280, 720)` | Frame resolution slideshow images are fit to |
+Python · FastAPI · SQLite · MoviePy · React · Vite · TypeScript · Tailwind CSS · Docker · [Cobalt](https://github.com/imputnet/cobalt)
 
-The tool deletes the temporary `IMG_DIR` after each slideshow. If you'd rather keep the raw images (for example, to build your own TikTok-style viewer), remove the `shutil.rmtree(IMG_DIR)` call in `main()`.
+## Disclaimer
 
-## Troubleshooting
+Not affiliated with, endorsed by, or sponsored by TikTok or ByteDance Ltd. "TikTok" is a trademark of its respective owner and is used here only to describe what this tool works with.
 
-- **A run stopped partway.** Copy the last link from the terminal into `last_downloaded_link.txt`, then run the script again to resume from there.
-- **404 errors.** Your Cobalt instance probably isn't reachable. Confirm it's running and that `COBALT_API_URL` matches its address.
-- **Links won't resolve.** Re-download your TikTok data. Exports expire, and stale links are the usual cause.
+This is a tool for **privately archiving your own favorited content** from the data export TikTok provides to you. It runs entirely on your own machine — nothing you import or download is sent to any external service or to the author. You are responsible for complying with [TikTok's Terms of Service](https://www.tiktok.com/legal/) and with the copyright of the original creators; keep downloaded media for personal use and don't redistribute it. The software is provided "as is", without warranty, under the [MIT License](LICENSE).
 
 ## License
 

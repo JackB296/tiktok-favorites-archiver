@@ -168,3 +168,7 @@ downloads/
 img_dir/
 data/
 appdata/
+
+# Local planning / scaffolding docs — not part of the published project
+docs/
+tasks/
