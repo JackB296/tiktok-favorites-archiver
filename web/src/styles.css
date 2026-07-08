@@ -1,0 +1,95 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+/* ---- Design tokens (see /design-taste-frontend read) --------------------
+   Dark is the default (media viewing). Light via [data-theme="light"].
+   ONE accent (coral) locked across the app; status hues are separate.
+   ONE radius system: media 16px, controls 10px, chips pill.               */
+:root {
+  --canvas: #0a0a0b;
+  --surface: #141416;
+  --elevated: #1c1c1f;
+  --line: #2a2a2e;
+  --ink: #f4f4f5;
+  --ink-dim: #a1a1aa;
+  --ink-faint: #71717a;
+  --accent: #ff6a3d;
+  --accent-strong: #e85529;
+  --on-accent: #180d07;
+  --ok: #34d399;
+  --active: #38bdf8;
+  --warn: #fbbf24;
+  --bad: #f87171;
+
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root[data-theme="light"] {
+  --canvas: #fafafa;
+  --surface: #ffffff;
+  --elevated: #f4f4f5;
+  --line: #e4e4e7;
+  --ink: #18181b;
+  --ink-dim: #52525b;
+  --ink-faint: #a1a1aa;
+  --accent: #ff6a3d;
+  --accent-strong: #e85529;
+  --on-accent: #ffffff;
+  --ok: #059669;
+  --active: #0284c7;
+  --warn: #d97706;
+  --bad: #dc2626;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-dim: var(--ink-dim);
+  --color-ink-faint: var(--ink-faint);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-on-accent: var(--on-accent);
+  --color-ok: var(--ok);
+  --color-active: var(--active);
+  --color-bad: var(--bad);
+  --color-warn: var(--warn);
+
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+
+  --radius-media: 16px;
+  --radius-control: 10px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numbers/IDs read as data. */
+.tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
