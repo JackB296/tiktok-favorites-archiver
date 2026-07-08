@@ -20,8 +20,8 @@ Everything runs on your own machine through a self-hosted [Cobalt](https://githu
 You need [Docker](https://www.docker.com/).
 
 ```bash
-git clone https://github.com/JackB296/tiktok-favorites-archive.git
-cd tiktok-favorites-archive
+git clone https://github.com/JackB296/tiktok-favorites-archiver.git
+cd tiktok-favorites-archiver
 docker compose up --build
 ```
 
