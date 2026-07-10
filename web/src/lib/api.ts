@@ -1,0 +1,91 @@
+import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent } from "./types";
+
+async function json<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export interface ItemQuery {
+  search?: string;
+  kind?: string;
+  status?: string;
+}
+
+export const api = {
+  health: () => json<{ status: string; cobalt_reachable: boolean }>("/api/health"),
+
+  items: (q: ItemQuery = {}) => {
+    const p = new URLSearchParams();
+    if (q.search) p.set("search", q.search);
+    if (q.kind) p.set("kind", q.kind);
+    if (q.status) p.set("status", q.status);
+    const qs = p.toString();
+    return json<Item[]>(`/api/items${qs ? `?${qs}` : ""}`);
+  },
+
+  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc"; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; date_from?: string; date_to?: string; orientation?: string; include?: string; exclude?: string } = {}) => {
+    const p = new URLSearchParams();
+    if (q.search) p.set("search", q.search);
+    if (q.kind) p.set("kind", q.kind);
+    if (q.status) p.set("status", q.status);
+    if (q.cursor) p.set("cursor", String(q.cursor));
+    if (q.limit) p.set("limit", String(q.limit));
+    if (q.order) p.set("order", q.order);
+    if (q.min_duration) p.set("min_duration", String(q.min_duration));
+    if (q.max_duration) p.set("max_duration", String(q.max_duration));
+    if (q.min_size) p.set("min_size", String(q.min_size));
+    if (q.max_size) p.set("max_size", String(q.max_size));
+    if (q.date_from) p.set("date_from", q.date_from);
+    if (q.date_to) p.set("date_to", q.date_to);
+    if (q.orientation) p.set("orientation", q.orientation);
+    if (q.include) p.set("include", q.include);
+    if (q.exclude) p.set("exclude", q.exclude);
+    return json<ItemPage>(`/api/items/page?${p}`);
+  },
+
+  item: (n: number) => json<Item>(`/api/items/${n}`),
+  itemIds: () => json<number[]>("/api/items/ids"),
+  itemSelection: (ids: number[]) => json<Item[]>("/api/items/selection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }),
+  itemWindow: (n: number) => json<ItemPage>(`/api/items/${n}/window`),
+
+  status: () => json<RunStatus>("/api/status"),
+
+  librarySettings: () => json<{ index_enabled: number; thumbnail_width: 320 | 480 }>("/api/library-settings"),
+  updateLibrarySettings: (settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480 }) =>
+    json<{ index_enabled: number; thumbnail_width: 320 | 480 }>("/api/library-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    }),
+
+  howto: async () => {
+    const res = await fetch("/api/howto");
+    return res.text();
+  },
+
+  importExport: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return json<ImportResult>("/api/import", { method: "POST", body });
+  },
+
+  syncAction: (action: "start" | "backfill" | "pause" | "continue" | "stop") =>
+    json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}`, { method: "POST" }),
+
+  /** Subscribe to the SSE progress stream. Returns an unsubscribe fn. */
+  events: (onEvent: (e: ProgressEvent) => void): (() => void) => {
+    const es = new EventSource("/api/events");
+    es.onmessage = (msg) => {
+      try {
+        onEvent(JSON.parse(msg.data) as ProgressEvent);
+      } catch {
+        /* ignore keep-alive / malformed frames */
+      }
+    };
+    return () => es.close();
+  },
+};

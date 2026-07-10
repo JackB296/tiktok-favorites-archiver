@@ -7,6 +7,7 @@ import {
   SpeakerSimpleHigh,
   SpeakerSimpleX,
   ImageSquare,
+  SlidersHorizontal,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
@@ -27,12 +28,36 @@ export function Gallery() {
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<Item | null>(null);
+  const [advanced, setAdvanced] = useState(false);
+  const [status, setStatus] = useState("");
+  const [order, setOrder] = useState<"latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc">("latest");
+  const [minDuration, setMinDuration] = useState("");
+  const [maxDuration, setMaxDuration] = useState("");
+  const [minSize, setMinSize] = useState("");
+  const [maxSize, setMaxSize] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [orientation, setOrientation] = useState("");
+  const [include, setInclude] = useState("");
+  const [exclude, setExclude] = useState("");
+
+  const pageQuery = {
+    search, kind, status, limit: 50, order,
+    min_duration: minDuration ? Number(minDuration) : undefined,
+    max_duration: maxDuration ? Number(maxDuration) : undefined,
+    min_size: minSize ? Number(minSize) * 1024 * 1024 : undefined,
+    max_size: maxSize ? Number(maxSize) * 1024 * 1024 : undefined,
+    date_from: dateFrom || undefined,
+    date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
+    orientation: orientation || undefined,
+    include, exclude,
+  };
 
   useEffect(() => {
     let alive = true;
     const t = window.setTimeout(() => {
       api
-        .itemPage({ search, kind, limit: 50, order: "latest" })
+        .itemPage(pageQuery)
         .then((page) => {
           if (!alive) return;
           setItems(page.items);
@@ -44,13 +69,13 @@ export function Gallery() {
       alive = false;
       window.clearTimeout(t);
     };
-  }, [search, kind]);
+  }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, dateFrom, dateTo, orientation, include, exclude]);
 
   async function loadMore() {
     if (nextCursor == null || loadingMore) return;
     setLoadingMore(true);
     try {
-      const page = await api.itemPage({ search, kind, limit: 50, cursor: nextCursor, order: "latest" });
+      const page = await api.itemPage({ ...pageQuery, cursor: nextCursor });
       setItems((current) => [...(current ?? []), ...page.items]);
       setNextCursor(page.next_cursor);
     } finally {
@@ -84,8 +109,41 @@ export function Gallery() {
               {f.label}
             </button>
           ))}
+          <button onClick={() => setAdvanced((value) => !value)} aria-label="Toggle advanced filters" className="rounded-full border border-line p-1.5 text-ink-dim hover:text-ink"><SlidersHorizontal size={16} /></button>
         </div>
       </div>
+
+      {advanced && <section className="mb-5 grid gap-3 rounded-[var(--radius-media)] border border-line bg-surface p-4 sm:grid-cols-2 lg:grid-cols-3">
+        <label className="text-xs text-ink-dim">Sort
+          <select value={order} onChange={(e) => setOrder(e.target.value as typeof order)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="latest">Latest imported favorite</option><option value="archive">Oldest imported favorite</option><option value="favorite_date_desc">Newest favorite date</option><option value="favorite_date_asc">Oldest favorite date</option><option value="size_desc">Largest file</option><option value="duration_desc">Longest video</option><option value="duration_asc">Shortest video</option></select>
+        </label>
+        <label className="text-xs text-ink-dim">Download status
+          <select value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any status</option><option value="done">Ready</option><option value="pending">Pending</option><option value="failed">Failed</option><option value="skipped">Skipped</option><option value="expired">Expired</option></select>
+        </label>
+        <label className="text-xs text-ink-dim">Orientation
+          <select value={orientation} onChange={(e) => setOrientation(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any orientation</option><option value="portrait">Portrait</option><option value="landscape">Landscape</option><option value="square">Square</option></select>
+        </label>
+        <label className="text-xs text-ink-dim">Minimum duration (seconds)
+          <input value={minDuration} onChange={(e) => setMinDuration(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
+        </label>
+        <label className="text-xs text-ink-dim">Maximum duration (seconds)
+          <input value={maxDuration} onChange={(e) => setMaxDuration(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
+        </label>
+        <label className="text-xs text-ink-dim">Minimum file size (MB)
+          <input value={minSize} onChange={(e) => setMinSize(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
+        </label>
+        <label className="text-xs text-ink-dim">Maximum file size (MB)
+          <input value={maxSize} onChange={(e) => setMaxSize(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
+        </label>
+        <label className="text-xs text-ink-dim">Favorited on or after
+          <input value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} type="date" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
+        </label>
+        <label className="text-xs text-ink-dim">Favorited on or before
+          <input value={dateTo} onChange={(e) => setDateTo(e.target.value)} type="date" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
+        </label>
+        <label className="text-xs text-ink-dim">Include authors / tags (comma-separated)<input value={include} onChange={(e) => setInclude(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" /></label>
+        <label className="text-xs text-ink-dim">Exclude authors / tags<input value={exclude} onChange={(e) => setExclude(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" /></label>
+      </section>}
 
       {!items ? (
         <Grid>

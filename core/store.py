@@ -272,17 +272,90 @@ def search_items(conn, query=None, kinds=None, statuses=None):
     return conn.execute(sql, params).fetchall()
 
 
-def page_items(conn, query=None, kinds=None, statuses=None, limit=50, cursor=None, order="latest", min_duration=None):
+_PAGE_ORDERS = {
+    "latest": ("id DESC", None, None),
+    "archive": ("id ASC", None, None),
+    "size_desc": ("media_size DESC, id DESC", "media_size", "DESC"),
+    "duration_desc": ("duration_s DESC, id DESC", "duration_s", "DESC"),
+    "duration_asc": ("duration_s ASC, id ASC", "duration_s", "ASC"),
+    "favorite_date_desc": ("favorited_at DESC, id DESC", "favorited_at", "DESC"),
+    "favorite_date_asc": ("favorited_at ASC, id ASC", "favorited_at", "ASC"),
+}
+
+
+def page_items(
+    conn,
+    query=None,
+    kinds=None,
+    statuses=None,
+    limit=50,
+    cursor=None,
+    order="latest",
+    min_duration=None,
+    max_duration=None,
+    min_size=None,
+    max_size=None,
+    date_from=None,
+    date_to=None,
+    orientations=None,
+    include=None,
+    exclude=None,
+):
     """Return one cursor page without materializing the whole Archive library."""
     clauses, params = _item_filters(query, kinds, statuses)
     if min_duration is not None:
         clauses.append("duration_s >= ?")
         params.append(float(min_duration))
-    ordering = {"latest": ("id DESC", "<"), "archive": ("id ASC", ">"), "size_desc": ("media_size DESC, id DESC", "<")}
-    order_sql, comparator = ordering[order]
+    if max_duration is not None:
+        clauses.append("duration_s <= ?")
+        params.append(float(max_duration))
+    if min_size is not None:
+        clauses.append("media_size >= ?")
+        params.append(int(min_size))
+    if max_size is not None:
+        clauses.append("media_size <= ?")
+        params.append(int(max_size))
+    if date_from:
+        clauses.append("favorited_at >= ?")
+        params.append(date_from)
+    if date_to:
+        clauses.append("favorited_at <= ?")
+        params.append(date_to)
+    if orientations:
+        orientation_sql = {
+            "portrait": "media_height > media_width",
+            "landscape": "media_width > media_height",
+            "square": "media_width = media_height",
+        }
+        selected = [orientation_sql[name] for name in orientations if name in orientation_sql]
+        if selected:
+            clauses.append("(" + " OR ".join(selected) + ")")
+    for term in include or []:
+        clauses.append("(caption LIKE ? OR author LIKE ?)")
+        params += [f"%{term}%", f"%{term}%"]
+    for term in exclude or []:
+        clauses.append("NOT (caption LIKE ? OR author LIKE ?)")
+        params += [f"%{term}%", f"%{term}%"]
+    if order not in _PAGE_ORDERS:
+        raise ValueError(f"unknown item order: {order}")
+    order_sql, field, direction = _PAGE_ORDERS[order]
     if cursor is not None:
-        clauses.append(f"id {comparator} ?")
-        params.append(int(cursor))
+        cursor_row = get_item(conn, int(cursor))
+        if cursor_row is None:
+            raise ValueError("unknown pagination cursor")
+        if field is None:
+            comparator = "<" if order == "latest" else ">"
+            clauses.append(f"id {comparator} ?")
+            params.append(int(cursor))
+        else:
+            cursor_value = cursor_row[field]
+            if cursor_value is None:
+                raise ValueError("cursor cannot be used for an unindexed item")
+            comparator = "<" if direction == "DESC" else ">"
+            clauses.append(f"({field} {comparator} ? OR ({field} = ? AND id {comparator} ?))")
+            params += [cursor_value, cursor_value, int(cursor)]
+    if field is not None:
+        clauses.append(f"{field} IS NOT NULL")
     sql = "SELECT * FROM item"
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)

@@ -176,6 +176,44 @@ def test_page_items_filters_duration_and_sorts_by_size():
     assert [row["id"] for row in rows] == [3, 1]
 
 
+def test_page_items_keeps_size_order_across_cursor_pages():
+    conn = _db()
+    for item_id, size in ((1, 10), (2, 40), (3, 30), (4, 20)):
+        store.insert_item(conn, item_id, f"link{item_id}", status="done")
+        store.record_media_index(conn, item_id, {"thumbnail_path": "x", "duration_s": 1, "width": 1, "height": 1, "codec": "h264", "file_size": size}, "x")
+
+    first = store.page_items(conn, order="size_desc", limit=2)
+    second = store.page_items(conn, order="size_desc", limit=2, cursor=first[-1]["id"])
+
+    assert [row["id"] for row in first] == [2, 3]
+    assert [row["id"] for row in second] == [4, 1]
+
+
+def test_page_items_applies_whitelist_blacklist_dates_and_media_filters():
+    conn = _db()
+    store.insert_item(conn, 1, "one", favorited_at="2025-01-10", kind="video", status="done")
+    store.insert_item(conn, 2, "two", favorited_at="2025-02-10", kind="video", status="done")
+    store.insert_item(conn, 3, "three", favorited_at="2025-03-10", kind="slideshow", status="failed")
+    store.set_metadata(conn, 1, "#games highlight", "alice")
+    store.set_metadata(conn, 2, "#fyp games", "bob")
+    store.set_metadata(conn, 3, "#games", "alice")
+    for item_id, duration, width, height, size in ((1, 25, 1080, 1920, 10), (2, 5, 1920, 1080, 30), (3, 40, 1000, 1000, 20)):
+        store.record_media_index(conn, item_id, {"thumbnail_path": "x", "duration_s": duration, "width": width, "height": height, "codec": "h264", "file_size": size}, "x")
+
+    rows = store.page_items(
+        conn,
+        statuses=["done"],
+        min_duration=10,
+        date_from="2025-01-01",
+        date_to="2025-01-31",
+        orientations=["portrait"],
+        include=["games"],
+        exclude=["fyp"],
+    )
+
+    assert [row["id"] for row in rows] == [1]
+
+
 def test_library_index_settings_default_to_high_enabled():
     conn = _db()
 

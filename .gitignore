@@ -15,6 +15,9 @@ downloads/
 eggs/
 .eggs/
 lib/
+# The Python build-output rule above must not hide the web app's source modules.
+!web/src/lib/
+!web/src/lib/*.ts
 lib64/
 parts/
 sdist/

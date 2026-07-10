@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SpeakerSimpleHigh, SpeakerSimpleX, ArrowSquareOut, FilmReel, Shuffle } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
@@ -11,8 +11,14 @@ export function Viewer() {
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [activeId, setActiveId] = useState<number | null>(null);
+  const [randomMode, setRandomMode] = useState(false);
+  const [randomizing, setRandomizing] = useState(false);
   const resumeId = useRef<number | null>(Number(localStorage.getItem("last-watched-favorite")) || null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const randomQueue = useRef<number[]>([]);
+  const randomOffset = useRef(0);
+  const randomGeneration = useRef(0);
+  const randomBatchGeneration = useRef<number | null>(null);
 
   useEffect(() => {
     api
@@ -24,6 +30,30 @@ export function Viewer() {
         if (playable[0]) setActiveId(playable[0].id);
       })
       .catch(() => setItems([]));
+  }, []);
+
+  const loadRandomBatch = useCallback(async (replace = false, generation = randomGeneration.current) => {
+    if (generation !== randomGeneration.current || randomBatchGeneration.current === generation) return;
+    const ids = randomQueue.current.slice(randomOffset.current, randomOffset.current + 50);
+    if (!ids.length) return;
+    randomOffset.current += ids.length;
+    randomBatchGeneration.current = generation;
+    setLoadingMore(true);
+    try {
+      const selected = await api.itemSelection(ids);
+      if (generation !== randomGeneration.current) return;
+      const playable = selected.filter((item) => item.video_url || item.images.length);
+      if (replace) {
+        setItems(playable);
+        setActiveId(playable[0]?.id ?? null);
+        requestAnimationFrame(() => containerRef.current?.scrollTo({ top: 0 }));
+      } else if (playable.length) {
+        setItems((current) => [...(current ?? []), ...playable]);
+      }
+    } finally {
+      if (randomBatchGeneration.current === generation) randomBatchGeneration.current = null;
+      if (generation === randomGeneration.current) setLoadingMore(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -46,8 +76,13 @@ export function Viewer() {
   }, [items]);
 
   useEffect(() => {
-    if (!items?.length || activeId == null || nextCursor == null || loadingMore) return;
+    if (!items?.length || activeId == null || loadingMore) return;
     if (items.findIndex((item) => item.id === activeId) < items.length - 3) return;
+    if (randomMode) {
+      void loadRandomBatch();
+      return;
+    }
+    if (nextCursor == null) return;
     setLoadingMore(true);
     api.itemPage({ limit: 50, cursor: nextCursor, order: "latest" })
       .then((page) => {
@@ -55,7 +90,7 @@ export function Viewer() {
         setNextCursor(page.next_cursor);
       })
       .finally(() => setLoadingMore(false));
-  }, [activeId, items, loadingMore, nextCursor]);
+  }, [activeId, items, loadRandomBatch, loadingMore, nextCursor, randomMode]);
 
   useEffect(() => {
     if (activeId != null) localStorage.setItem("last-watched-favorite", String(activeId));
@@ -65,22 +100,36 @@ export function Viewer() {
     if (resumeId.current == null) return;
     const page = await api.itemWindow(resumeId.current).catch(() => null);
     if (!page?.items.length) return;
+    randomGeneration.current += 1;
+    setRandomMode(false);
     setItems(page.items);
     setActiveId(resumeId.current);
     setNextCursor(page.items[page.items.length - 1]?.id ?? null);
   }
 
   async function startRandom() {
-    const ids = await api.itemIds().catch(() => []);
-    for (let i = ids.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [ids[i], ids[j]] = [ids[j], ids[i]];
+    if (randomizing) return;
+    const generation = randomGeneration.current + 1;
+    randomGeneration.current = generation;
+    setRandomizing(true);
+    try {
+      const ids = await api.itemIds();
+      if (generation !== randomGeneration.current) return;
+      if (!ids.length) return;
+      for (let i = ids.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+      }
+      randomQueue.current = ids;
+      randomOffset.current = 0;
+      setRandomMode(true);
+      setNextCursor(null);
+      await loadRandomBatch(true, generation);
+    } catch {
+      // Keep the current feed usable if randomization cannot be loaded.
+    } finally {
+      setRandomizing(false);
     }
-    const randomItems = await api.itemSelection(ids.slice(0, 100)).catch(() => []);
-    if (!randomItems.length) return;
-    setItems(randomItems);
-    setActiveId(randomItems[0].id);
-    setNextCursor(null);
   }
 
   if (!items) {
@@ -102,19 +151,19 @@ export function Viewer() {
 
   return (
     <PlaybackSession initiallyMuted>
-      <ViewerFeed items={items} activeId={activeId} containerRef={containerRef} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} />
+      <ViewerFeed items={items} activeId={activeId} containerRef={containerRef} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} randomizing={randomizing} />
     </PlaybackSession>
   );
 }
 
-function ViewerFeed({ items, activeId, containerRef, onGoToLastWatched, onRandom }: { items: Item[]; activeId: number | null; containerRef: React.RefObject<HTMLDivElement>; onGoToLastWatched?: () => void; onRandom: () => void }) {
+function ViewerFeed({ items, activeId, containerRef, onGoToLastWatched, onRandom, randomizing }: { items: Item[]; activeId: number | null; containerRef: React.RefObject<HTMLDivElement>; onGoToLastWatched?: () => void; onRandom: () => void; randomizing: boolean }) {
   const { muted, toggleMuted } = usePlayback();
   const Speaker = muted ? SpeakerSimpleX : SpeakerSimpleHigh;
 
   return (
     <div ref={containerRef} className="h-full snap-y snap-mandatory overflow-y-scroll bg-black">
       {onGoToLastWatched && <button onClick={onGoToLastWatched} className="absolute left-4 top-4 z-10 rounded bg-black/40 px-3 py-2 text-xs text-white backdrop-blur-sm">Go to last watched</button>}
-      <button onClick={onRandom} aria-label="Start a new random order" className="absolute left-4 top-14 z-10 rounded bg-black/40 p-2 text-white backdrop-blur-sm"><Shuffle size={18} /></button>
+      <button onClick={onRandom} disabled={randomizing} aria-label="Start a new random order" className="absolute left-4 top-14 z-10 rounded bg-black/40 p-2 text-white backdrop-blur-sm disabled:opacity-50"><Shuffle size={18} /></button>
       {items.map((item) => (
         <section
           key={item.id}

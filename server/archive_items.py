@@ -26,7 +26,7 @@ class ArchiveItems:
         row = store.get_item(self._conn, item_id)
         return None if row is None else self._public(row)
 
-    def page(self, query=None, kinds=None, statuses=None, limit=50, cursor=None, order="latest"):
+    def page(self, query=None, kinds=None, statuses=None, limit=50, cursor=None, order="latest", min_duration=None, max_duration=None, min_size=None, max_size=None, date_from=None, date_to=None, orientations=None, include=None, exclude=None):
         rows = store.page_items(
             self._conn,
             query=query,
@@ -35,6 +35,15 @@ class ArchiveItems:
             limit=limit,
             cursor=cursor,
             order=order,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            min_size=min_size,
+            max_size=max_size,
+            date_from=date_from,
+            date_to=date_to,
+            orientations=orientations,
+            include=include,
+            exclude=exclude,
         )
         items = [self._public(row) for row in rows]
         return {"items": items, "next_cursor": items[-1]["id"] if len(items) == limit else None}

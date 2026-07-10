@@ -70,8 +70,17 @@ def page_items(
     limit: int = 50,
     cursor: int = None,
     order: str = "latest",
+    min_duration: float = None,
+    max_duration: float = None,
+    min_size: int = None,
+    max_size: int = None,
+    date_from: str = None,
+    date_to: str = None,
+    orientation: str = None,
+    include: str = None,
+    exclude: str = None,
 ):
-    if order not in ("latest", "archive"):
+    if order not in ("latest", "archive", "size_desc", "duration_desc", "duration_asc", "favorite_date_desc", "favorite_date_asc"):
         raise HTTPException(status_code=400, detail="unknown item order")
     conn = _open(request)
     try:
@@ -82,6 +91,15 @@ def page_items(
             limit=limit,
             cursor=cursor,
             order=order,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            min_size=min_size,
+            max_size=max_size,
+            date_from=date_from,
+            date_to=date_to,
+            orientations=[term.strip() for term in (orientation or "").split(",") if term.strip()],
+            include=[term.strip() for term in (include or "").split(",") if term.strip()],
+            exclude=[term.strip() for term in (exclude or "").split(",") if term.strip()],
         )
     finally:
         conn.close()
