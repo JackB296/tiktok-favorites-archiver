@@ -49,12 +49,13 @@ export interface ProgressEvent {
   status?: Status;
   kind?: Kind;
   has_assets?: number;
-  event?: "complete" | "error" | "indexing";
+  event?: "complete" | "error" | "indexing" | "sidecars" | "enrichment" | "verify";
   error?: string;
   indexed?: number;
   failed?: number;
   completed?: number;
   total?: number;
+  enriched?: number;
 }
 
 export interface ImportResult {
@@ -106,4 +107,18 @@ export interface GalleryPreset {
   id: number;
   name: string;
   filters: GalleryPresetFilters;
+}
+
+export interface VerifySection {
+  count: number;
+  examples: Array<number | string>;
+}
+
+export interface VerifyReport {
+  favorites: number;
+  done: number;
+  missing: VerifySection;
+  orphans: VerifySection;
+  leftovers: VerifySection;
+  ok: boolean;
 }

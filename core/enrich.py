@@ -15,6 +15,7 @@ from core import config, store
 from core.cobalt import RateLimiter
 
 OEMBED_URL = "https://www.tiktok.com/oembed"
+_HALT = ("stopping", "stopped")
 
 
 def parse_oembed(data):
@@ -52,21 +53,46 @@ def items_needing_enrichment(conn):
     ]
 
 
-def enrich_items(conn, getter=None, limiter=None, progress=None):
+def enrich_items(conn, getter=None, limiter=None, progress=None, should_continue=None):
     """Fetch + store caption/author for items that lack it. Returns count enriched."""
     getter = getter or _default_getter
     if limiter is None:
         limiter = RateLimiter(config.RATE_MAX_CALLS, config.RATE_PERIOD)
+    items = items_needing_enrichment(conn)
     enriched = 0
-    for item in items_needing_enrichment(conn):
+    if progress:
+        progress({"event": "enrichment", "completed": 0, "total": len(items), "enriched": 0})
+    for completed, item in enumerate(items, start=1):
+        if should_continue and not should_continue():
+            break
         limiter.acquire()
         caption, author = fetch_metadata(item["link"], getter=getter)
         if caption is not None or author is not None:
             store.set_metadata(conn, item["id"], caption, author)
             enriched += 1
         if progress:
-            progress({"id": item["id"], "caption": caption, "author": author})
+            progress({
+                "event": "enrichment", "id": item["id"], "caption": caption,
+                "author": author, "completed": completed, "total": len(items),
+                "enriched": enriched,
+            })
     return enriched
+
+
+def run_enrichment(conn, download_dir, progress=None, wait=None, getter=None, limiter=None):
+    """Fetch missing Gallery search metadata as a pausable Archive job."""
+    if wait is None:
+        wait = lambda: time.sleep(0.1)  # noqa: E731
+
+    def keep_going():
+        while store.get_run_state(conn)["state"] == "paused":
+            wait()
+        return store.get_run_state(conn)["state"] not in _HALT
+
+    return enrich_items(
+        conn, getter=getter, limiter=limiter, progress=progress,
+        should_continue=keep_going,
+    )
 
 
 def run_cli(argv=None):
@@ -85,4 +111,3 @@ def run_cli(argv=None):
 
     n = enrich_items(conn, progress=progress)
     logging.info(f"Enriched {n} item(s)")
-

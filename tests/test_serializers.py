@@ -67,6 +67,37 @@ def test_page_returns_latest_items_and_a_cursor():
     assert page["next_cursor"] == 2
 
 
+def test_page_shuffles_with_a_seed_and_keeps_the_cursor_contract():
+    conn = store.init_db(store.connect(":memory:"))
+    for item_id in range(1, 7):
+        store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
+
+    with tempfile.TemporaryDirectory() as dl:
+        items = ArchiveItems(conn, dl)
+        first = items.page(limit=4, order="random", seed=21)
+        second = items.page(limit=4, order="random", seed=21, cursor=first["next_cursor"])
+
+    ids = [item["id"] for item in first["items"]] + [item["id"] for item in second["items"]]
+    assert sorted(ids) == list(range(1, 7))
+    assert first["next_cursor"] == first["items"][-1]["id"]
+    assert second["next_cursor"] is None
+
+
+def test_page_clamps_limit_so_the_cursor_stays_honest():
+    conn = store.init_db(store.connect(":memory:"))
+    for item_id in range(1, 102):
+        store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
+
+    with tempfile.TemporaryDirectory() as dl:
+        items = ArchiveItems(conn, dl)
+        oversized = items.page(limit=500)   # store caps rows at 100
+        tiny = items.page(limit=0)
+
+    assert len(oversized["items"]) == 100
+    assert oversized["next_cursor"] == oversized["items"][-1]["id"]  # not None
+    assert len(tiny["items"]) == 1 and tiny["next_cursor"] == tiny["items"][0]["id"]
+
+
 def test_item_projects_indexed_media_facts():
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 1, "https://tiktok.com/1", kind="video", status="done")

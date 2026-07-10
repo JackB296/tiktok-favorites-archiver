@@ -51,6 +51,29 @@ def test_enrich_is_idempotent_for_captioned():
     assert calls == []  # item already has a caption -> not re-fetched
 
 
+def test_enrichment_job_reports_progress_and_stops_between_items():
+    conn = store.init_db(store.connect(":memory:"))
+    store.upsert_link(conn, "https://tiktok.com/a")
+    store.upsert_link(conn, "https://tiktok.com/b")
+    store.set_run_state(conn, state="running", phase="enrich")
+    events = []
+
+    def getter(link):
+        store.set_run_state(conn, state="stopping")
+        return {"title": "first caption"}
+
+    limiter = cobalt.RateLimiter(1000, 1000, now=lambda: 0.0, sleep=lambda s: None)
+    result = enrich.run_enrichment(conn, ".", getter=getter, limiter=limiter, progress=events.append)
+
+    assert result == 1
+    assert store.get_item(conn, 1)["caption"] == "first caption"
+    assert store.get_item(conn, 2)["caption"] is None
+    assert events[0] == {"event": "enrichment", "completed": 0, "total": 2, "enriched": 0}
+    assert events[-1]["event"] == "enrichment"
+    assert events[-1]["completed"] == 1
+    assert events[-1]["enriched"] == 1
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

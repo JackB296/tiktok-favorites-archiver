@@ -103,6 +103,23 @@ def test_unexpected_item_error_is_recorded_as_retryable_failure():
     assert store.get_run_state(conn)["state"] == "idle"
 
 
+def test_pause_survives_the_indexing_phase_transition():
+    """Entering the indexing phase must not overwrite a concurrent pause/stop."""
+    conn = store.init_db(store.connect(":memory:"))
+    store.set_run_state(conn, state="paused")
+    seen = []
+
+    def indexer(_conn, _directory, thumbnail_width, progress, should_continue):
+        seen.append(store.get_run_state(conn)["state"])
+        return {"indexed": 0, "failed": 0}
+
+    with tempfile.TemporaryDirectory() as dl:
+        sync.run_sync(conn, dl, deps=_fake_deps({}), concurrency=1, indexer=indexer)
+
+    assert seen == ["paused"]
+    assert store.get_run_state(conn)["phase"] == "indexing"
+
+
 def test_sync_indexes_finished_media_by_default():
     conn = store.init_db(store.connect(":memory:"))
     _seed(conn, ["v"])

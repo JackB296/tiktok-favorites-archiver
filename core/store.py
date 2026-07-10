@@ -319,6 +319,40 @@ _PAGE_ORDERS = {
     "relevance": ("rank ASC, id DESC", None, None),
 }
 
+# Seeded shuffle for random paging: ordering by an avalanche hash of
+# (id XOR seed mask) is a stable permutation per seed, so cursor pages never
+# repeat an item the way ORDER BY RANDOM() pages would. The hash is the
+# standard xorshift-multiply 32-bit bijection; every intermediate stays well
+# inside SQLite's 64-bit integers, because overflow would silently degrade the
+# SQL keys to inexact REALs and break the cursor comparison. SQLite has no XOR
+# operator, so the generated SQL spells XOR as (a|b) - (a&b).
+_RANDOM_MODULUS = 2**32
+_RANDOM_HASH_MULTIPLIER = 0x45D9F3B
+
+
+def _random_mask(seed):
+    z = (int(seed) + 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
+    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
+    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
+    return (z ^ (z >> 31)) % _RANDOM_MODULUS
+
+
+def _random_order_key(item_id, seed):
+    x = (int(item_id) ^ _random_mask(seed)) % _RANDOM_MODULUS
+    for _ in range(2):
+        x = ((x ^ (x >> 16)) * _RANDOM_HASH_MULTIPLIER) % _RANDOM_MODULUS
+    return x ^ (x >> 16)
+
+
+def _random_key_sql(seed):
+    def xor(a, b):
+        return f"(({a} | {b}) - ({a} & {b}))"
+
+    x = xor("id", str(_random_mask(seed)))
+    for _ in range(2):
+        x = f"(({xor(f'({x} >> 16)', x)} * {_RANDOM_HASH_MULTIPLIER}) % {_RANDOM_MODULUS})"
+    return xor(f"({x} >> 16)", x)
+
 
 def page_items(
     conn,
@@ -344,6 +378,7 @@ def page_items(
     index_state=None,
     include=None,
     exclude=None,
+    seed=None,
 ):
     """Return one cursor page without materializing the whole Archive library."""
     clauses, params = _item_filters(kinds=kinds, statuses=statuses)
@@ -408,11 +443,24 @@ def page_items(
         params += [f"%{term}%", f"%{term}%"]
     if fts_query and order == "latest":
         order = "relevance"
-    if order not in _PAGE_ORDERS:
+    if order == "random":
+        if seed is None:
+            raise ValueError("random order requires a shuffle seed")
+        seed = int(seed) % _RANDOM_MODULUS
+        order_sql, field, direction = f"{_random_key_sql(seed)} ASC, id ASC", None, None
+    elif order not in _PAGE_ORDERS:
         raise ValueError(f"unknown item order: {order}")
-    order_sql, field, direction = _PAGE_ORDERS[order]
+    else:
+        order_sql, field, direction = _PAGE_ORDERS[order]
     if cursor is not None:
-        if order == "relevance":
+        if order == "random":
+            if get_item(conn, int(cursor)) is None:
+                raise ValueError("unknown pagination cursor")
+            key_sql = _random_key_sql(seed)
+            cursor_key = _random_order_key(cursor, seed)
+            clauses.append(f"({key_sql} > ? OR ({key_sql} = ? AND id > ?))")
+            params += [cursor_key, cursor_key, int(cursor)]
+        elif order == "relevance":
             cursor_row = conn.execute(
                 "WITH matched AS (SELECT item.id, bm25(item_search) AS rank FROM item_search JOIN item ON item_search.rowid = item.id WHERE item_search MATCH ?) SELECT rank FROM matched WHERE id = ?",
                 (fts_query, int(cursor)),

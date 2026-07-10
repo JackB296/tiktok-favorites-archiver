@@ -27,6 +27,18 @@ def test_canvas_empty_and_odd():
     assert slideshow.compute_canvas_size([(3, 5)]) == (4, 6)
 
 
+def test_create_slideshow_is_callable_with_the_sync_deps_contract():
+    """Sync calls build_slideshow(images, audio, out) — three args. The real
+    encoder must accept that call, defaulting the per-image duration."""
+    import inspect
+
+    from core import config
+
+    signature = inspect.signature(slideshow.create_slideshow)
+    signature.bind(["01.jpg"], "audio.mp3", "5.mp4")  # raises TypeError on drift
+    assert signature.parameters["duration_per_image"].default == config.DURATION_PER_IMAGE
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

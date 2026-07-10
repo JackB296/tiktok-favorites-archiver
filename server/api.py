@@ -13,7 +13,7 @@ from queue import Empty
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse
 
-from core import config, store, importer, cobalt
+from core import config, store, importer, cobalt, verify
 from server.archive_items import ArchiveItems
 
 router = APIRouter(prefix="/api")
@@ -148,9 +148,12 @@ def page_items(
     index_state: str = None,
     include: str = None,
     exclude: str = None,
+    seed: int = None,
 ):
-    if order not in ("latest", "archive", "size_desc", "duration_desc", "duration_asc", "favorite_date_desc", "favorite_date_asc"):
+    if order not in ("latest", "archive", "size_desc", "duration_desc", "duration_asc", "favorite_date_desc", "favorite_date_asc", "random"):
         raise HTTPException(status_code=400, detail="unknown item order")
+    if order == "random" and seed is None:
+        raise HTTPException(status_code=400, detail="random order requires a shuffle seed")
     if assets not in (None, "with", "without"):
         raise HTTPException(status_code=400, detail="unknown assets filter")
     if index_state not in (None, "indexed", "missing", "failed"):
@@ -180,6 +183,7 @@ def page_items(
             index_state=index_state,
             include=[term.strip() for term in (include or "").split(",") if term.strip()],
             exclude=[term.strip() for term in (exclude or "").split(",") if term.strip()],
+            seed=seed,
         )
     finally:
         conn.close()
@@ -228,25 +232,60 @@ def item_window(request: Request, n: int, limit: int = 50):
         conn.close()
 
 
+MAX_IMPORT_BYTES = 512 * 1024 * 1024  # far above any real TikTok export
+
+
 @router.post("/import")
 async def import_export(request: Request, file: UploadFile = File(...)):
-    payload = await file.read()
-    tmp_path = os.path.join(tempfile.gettempdir(), "user_data_tiktok.json")
-    with open(tmp_path, "wb") as f:
-        f.write(payload)
-    conn = _open(request)
+    # Stream to a unique temp file: no whole-payload buffering in memory, no
+    # fixed path shared between concurrent imports.
+    fd, tmp_path = tempfile.mkstemp(prefix="tiktok-export-", suffix=".json")
     try:
+        received = 0
+        with os.fdopen(fd, "wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                received += len(chunk)
+                if received > MAX_IMPORT_BYTES:
+                    raise HTTPException(status_code=413, detail="export file too large")
+                f.write(chunk)
+        conn = _open(request)
         try:
-            return importer.import_all(conn, tmp_path, _download_dir(request))
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid export: {e}")
+            try:
+                return importer.import_all(conn, tmp_path, _download_dir(request))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid export: {e}")
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 @router.get("/status")
 def status(request: Request):
     return request.app.state.jobs.status()
+
+
+@router.get("/verify")
+def verify_archive(request: Request):
+    conn = _open(request)
+    try:
+        return verify.verify_archive(conn, _download_dir(request))
+    finally:
+        conn.close()
+
+
+@router.post("/verify/requeue")
+def requeue_missing(request: Request):
+    if request.app.state.jobs.is_running():
+        raise HTTPException(status_code=409, detail="wait for the current run to finish")
+    conn = _open(request)
+    try:
+        return verify.requeue_missing(conn, _download_dir(request))
+    finally:
+        conn.close()
 
 
 @router.get("/library-settings")
@@ -293,6 +332,10 @@ def sync_control(request: Request, action: str):
         return {"started": jm.start("backfill")}
     if action == "reindex":
         return {"started": jm.start("index")}
+    if action == "sidecars":
+        return {"started": jm.start("sidecars")}
+    if action == "enrich":
+        return {"started": jm.start("enrich")}
     if action == "pause":
         jm.pause()
         return {"ok": True}

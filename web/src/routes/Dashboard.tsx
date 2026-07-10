@@ -9,7 +9,7 @@ import {
   Question,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
-import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics } from "../lib/types";
+import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport } from "../lib/types";
 import { Button, StatusBadge, cx } from "../components/ui";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "expired"];
@@ -33,6 +33,10 @@ export function Dashboard() {
   const [library, setLibrary] = useState<LibrarySettings | null>(null);
   const [statistics, setStatistics] = useState<LibraryStatistics | null>(null);
   const [indexProgress, setIndexProgress] = useState<ProgressEvent | null>(null);
+  const [sidecarsProgress, setSidecarsProgress] = useState<ProgressEvent | null>(null);
+  const [enrichmentProgress, setEnrichmentProgress] = useState<ProgressEvent | null>(null);
+  const [verifyReport, setVerifyReport] = useState<VerifyReport | null>(null);
+  const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => api.status().then(setStatus).catch(() => {});
@@ -48,6 +52,8 @@ export function Dashboard() {
     const off = api.events((e) => {
       setEvents((prev) => [e, ...prev].slice(0, 200));
       if (e.event === "indexing") setIndexProgress(e);
+      if (e.event === "sidecars") setSidecarsProgress(e);
+      if (e.event === "enrichment") setEnrichmentProgress(e);
       if (e.event === "complete") {
         refresh();
         refreshLibrary();
@@ -81,9 +87,30 @@ export function Dashboard() {
     if (next) setLibrary(next);
   }
 
-  async function act(a: "start" | "backfill" | "reindex" | "pause" | "continue" | "stop") {
+  async function act(a: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "pause" | "continue" | "stop") {
     await api.syncAction(a).catch(() => {});
     refresh();
+  }
+
+  async function runVerify() {
+    setVerifyMsg("Checking…");
+    try {
+      setVerifyReport(await api.verify());
+      setVerifyMsg(null);
+    } catch (err) {
+      setVerifyMsg((err as Error).message);
+    }
+  }
+
+  async function requeueMissing() {
+    try {
+      const r = await api.requeueMissing();
+      await runVerify();
+      setVerifyMsg(`${r.requeued} favorites queued for the next sync.`);
+      refresh();
+    } catch (err) {
+      setVerifyMsg((err as Error).message);
+    }
   }
 
   async function toggleHowto() {
@@ -133,6 +160,23 @@ export function Dashboard() {
         </section>
 
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Gallery search metadata</h2>
+              <p className="mt-1 text-sm text-ink-dim">Fetches missing captions and creators from TikTok so author, hashtag, and caption search cover more of the archive. This makes one rate-limited request per favorite that has no caption yet; it can be paused or stopped.</p>
+            </div>
+            <Button variant="ghost" disabled={running} onClick={() => act("enrich")}>
+              <ArrowClockwise size={16} /> Fetch missing metadata
+            </Button>
+          </div>
+          {enrichmentProgress?.event === "enrichment" && (
+            <p className="mt-3 text-sm text-ink-dim">
+              {`Checking ${enrichmentProgress.completed ?? 0} of ${enrichmentProgress.total ?? 0} · ${enrichmentProgress.enriched ?? 0} updated`}
+            </p>
+          )}
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
           <h2 className="text-sm font-semibold text-ink">Archive at a glance</h2>
           <p className="mt-1 text-sm text-ink-dim">Totals use downloaded and indexed media already present in this archive.</p>
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -168,6 +212,61 @@ export function Dashboard() {
             </Button>
           </div>
           <p className="mt-2 text-xs text-ink-faint">Rebuild refreshes existing thumbnails and media facts. It is available when indexing is enabled and can be paused or stopped like Sync.</p>
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Media server metadata</h2>
+              <p className="mt-1 text-sm text-ink-dim">
+                Writes an <code>.nfo</code> title file and a <code>.jpg</code> poster next to each video so Plex, Jellyfin, or Kodi show real titles and artwork instead of numbers. Your media files are never modified.
+              </p>
+            </div>
+            <Button variant="ghost" disabled={running} onClick={() => act("sidecars")}>
+              <ArrowClockwise size={16} /> Write metadata
+            </Button>
+          </div>
+          {sidecarsProgress?.event === "sidecars" && (
+            <p className="mt-3 text-sm text-ink-dim">
+              {`Writing ${sidecarsProgress.completed ?? 0} of ${sidecarsProgress.total ?? 0}${sidecarsProgress.failed ? ` · ${sidecarsProgress.failed} failed` : ""}`}
+            </p>
+          )}
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Archive integrity</h2>
+              <p className="mt-1 text-sm text-ink-dim">Checks that every finished favorite has its video on disk and reports strays and leftover temp files. Read-only.</p>
+            </div>
+            <Button variant="ghost" onClick={runVerify}>
+              <Question size={16} /> Verify archive
+            </Button>
+          </div>
+          {verifyReport && (
+            <div className="mt-3 space-y-1 text-sm text-ink-dim">
+              {verifyReport.ok ? (
+                <p>All good: {verifyReport.done} finished favorites, every file accounted for.</p>
+              ) : (
+                <>
+                  {verifyReport.missing.count > 0 && (
+                    <p>
+                      {verifyReport.missing.count} finished favorites are missing their video
+                      {" (e.g. "}{verifyReport.missing.examples.slice(0, 5).map((n) => `#${n}`).join(", ")}{")."}
+                      <button type="button" onClick={requeueMissing} disabled={running} className="ml-2 text-ink underline underline-offset-2 disabled:opacity-40">Queue them for the next sync</button>
+                    </p>
+                  )}
+                  {verifyReport.orphans.count > 0 && (
+                    <p>{verifyReport.orphans.count} video files on disk have no matching favorite — re-import your export to adopt them.</p>
+                  )}
+                  {verifyReport.leftovers.count > 0 && (
+                    <p>{verifyReport.leftovers.count} leftover temp files from interrupted work (safe to delete): {verifyReport.leftovers.examples.slice(0, 3).join(", ")}{verifyReport.leftovers.count > 3 ? ", …" : ""}</p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          {verifyMsg && <p className="mt-2 text-sm text-ink-dim">{verifyMsg}</p>}
         </section>
 
         {/* Controls */}

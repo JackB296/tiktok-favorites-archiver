@@ -9,10 +9,27 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from core import config, store
+from server import spa
 from server.api import router
 from server.jobs import JobManager
+
+
+class SPAStaticFiles(StaticFiles):
+    """Serve the built SPA, answering client routes with the app shell."""
+
+    async def get_response(self, path, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and spa.is_client_route(path):
+                return await super().get_response("index.html", scope)
+            raise
+        if response.status_code == 404 and spa.is_client_route(path):
+            return await super().get_response("index.html", scope)
+        return response
 
 
 def create_app(db_path=None, download_dir=None):
@@ -39,10 +56,11 @@ def create_app(db_path=None, download_dir=None):
         return FileResponse(full)  # FileResponse honors Range requests
 
     # Serve the built SPA at "/" if it has been built (mounted last so /api and
-    # /media take precedence).
+    # /media take precedence). Client routes such as /gallery fall back to the
+    # app shell so deep links and refreshes work.
     web_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "web", "dist"))
     if os.path.isdir(web_dist):
-        app.mount("/", StaticFiles(directory=web_dist, html=True), name="web")
+        app.mount("/", SPAStaticFiles(directory=web_dist, html=True), name="web")
 
     return app
 

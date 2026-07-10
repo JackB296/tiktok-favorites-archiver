@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -23,6 +23,13 @@ const FILTERS = [
 ];
 
 type GalleryDensity = "compact" | "comfortable";
+
+type GalleryOrder = "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "random";
+
+/** One shuffle per Random selection; the seed keeps cursor pages repeat-free. */
+function newShuffleSeed() {
+  return Math.floor(Math.random() * 2_147_483_647);
+}
 
 function filtersToSearchParams(filters: GalleryPresetFilters) {
   const params = new URLSearchParams();
@@ -50,7 +57,8 @@ export function Gallery() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [status, setStatus] = useState(() => fromUrl("status"));
-  const [order, setOrder] = useState<"latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc">(() => fromUrl("sort") as "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" || "latest");
+  const [order, setOrder] = useState<GalleryOrder>(() => (fromUrl("sort") as GalleryOrder) || "latest");
+  const [randomSeed, setRandomSeed] = useState(newShuffleSeed);
   const [minDuration, setMinDuration] = useState(() => fromUrl("min_duration"));
   const [maxDuration, setMaxDuration] = useState(() => fromUrl("max_duration"));
   const [minSize, setMinSize] = useState(() => fromUrl("min_size"));
@@ -73,8 +81,14 @@ export function Gallery() {
   const [presetMessage, setPresetMessage] = useState<string | null>(null);
   const [density, setDensity] = useState<GalleryDensity>(() => localStorage.getItem("gallery-density") === "comfortable" ? "comfortable" : "compact");
 
+  function changeOrder(next: GalleryOrder) {
+    if (next === "random") setRandomSeed(newShuffleSeed());
+    setOrder(next);
+  }
+
   const pageQuery = {
     search, kind, status, limit: 50, order,
+    seed: order === "random" ? randomSeed : undefined,
     min_duration: minDuration ? Number(minDuration) : undefined,
     max_duration: maxDuration ? Number(maxDuration) : undefined,
     min_size: minSize ? Number(minSize) * 1024 * 1024 : undefined,
@@ -92,8 +106,11 @@ export function Gallery() {
     include, exclude,
   };
 
+  const queryVersion = useRef(0);
+
   useEffect(() => {
     let alive = true;
+    queryVersion.current += 1;
     const t = window.setTimeout(() => {
       api
         .itemPage(pageQuery)
@@ -108,7 +125,7 @@ export function Gallery() {
       alive = false;
       window.clearTimeout(t);
     };
-  }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, codec, dateFrom, dateTo, orientation, assets, indexState, include, exclude]);
+  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, codec, dateFrom, dateTo, orientation, assets, indexState, include, exclude]);
 
   useEffect(() => {
     api.galleryPresets().then(setPresets).catch(() => setPresetMessage("Could not load saved filters."));
@@ -126,7 +143,7 @@ export function Gallery() {
     setSearch(filters.search ?? "");
     setKind(filters.kind ?? "");
     setStatus(filters.status ?? "");
-    setOrder((filters.order as typeof order) || "latest");
+    changeOrder((filters.order as GalleryOrder) || "latest");
     setMinDuration(filters.minDuration ?? "");
     setMaxDuration(filters.maxDuration ?? "");
     setMinSize(filters.minSize ?? "");
@@ -173,9 +190,11 @@ export function Gallery() {
 
   async function loadMore() {
     if (nextCursor == null || loadingMore) return;
+    const version = queryVersion.current;
     setLoadingMore(true);
     try {
       const page = await api.itemPage({ ...pageQuery, cursor: nextCursor });
+      if (version !== queryVersion.current) return; // filters changed mid-flight
       setItems((current) => [...(current ?? []), ...page.items]);
       setNextCursor(page.next_cursor);
     } finally {
@@ -270,7 +289,7 @@ export function Gallery() {
           {presetMessage && <span className="text-xs text-ink-faint">{presetMessage}</span>}
         </div>
         <label className="text-xs text-ink-dim">Sort
-          <select value={order} onChange={(e) => setOrder(e.target.value as typeof order)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="latest">Latest imported favorite</option><option value="archive">Oldest imported favorite</option><option value="favorite_date_desc">Newest favorite date</option><option value="favorite_date_asc">Oldest favorite date</option><option value="size_desc">Largest file</option><option value="duration_desc">Longest video</option><option value="duration_asc">Shortest video</option></select>
+          <select value={order} onChange={(e) => changeOrder(e.target.value as GalleryOrder)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="latest">Latest imported favorite</option><option value="archive">Oldest imported favorite</option><option value="favorite_date_desc">Newest favorite date</option><option value="favorite_date_asc">Oldest favorite date</option><option value="size_desc">Largest file</option><option value="duration_desc">Longest video</option><option value="duration_asc">Shortest video</option><option value="random">Random order</option></select>
         </label>
         <label className="text-xs text-ink-dim">Download status
           <select value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any status</option><option value="done">Ready</option><option value="pending">Pending</option><option value="failed">Failed</option><option value="skipped">Skipped</option><option value="expired">Expired</option></select>

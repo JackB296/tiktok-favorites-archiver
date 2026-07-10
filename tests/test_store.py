@@ -189,6 +189,46 @@ def test_page_items_keeps_size_order_across_cursor_pages():
     assert [row["id"] for row in second] == [4, 1]
 
 
+def test_page_items_random_order_pages_one_seeded_shuffle_without_repeats():
+    conn = _db()
+    for n in range(1, 9):
+        store.insert_item(conn, n, f"link-{n}")
+    first = store.page_items(conn, order="random", seed=7, limit=3)
+    second = store.page_items(conn, order="random", seed=7, limit=10, cursor=first[-1]["id"])
+    ids = [row["id"] for row in first] + [row["id"] for row in second]
+    assert sorted(ids) == list(range(1, 9))  # every item exactly once across pages
+    assert ids != list(range(1, 9)) and ids != list(range(8, 0, -1))  # shuffled
+    assert [row["id"] for row in store.page_items(conn, order="random", seed=7, limit=10)] == ids
+    reshuffled = [row["id"] for row in store.page_items(conn, order="random", seed=8, limit=10)]
+    assert reshuffled != ids and sorted(reshuffled) == list(range(1, 9))
+
+
+def test_page_items_random_order_paginates_to_completion_for_any_seed():
+    conn = _db()
+    for n in range(1, 13):
+        store.insert_item(conn, n, f"link-{n}")
+    for seed in (5, 8, 42, 99, 123456789, 2**31 - 1):
+        seen, cursor = [], None
+        for _ in range(10):  # 12 items at limit 5 must finish in 3 pages
+            rows = store.page_items(conn, order="random", seed=seed, limit=5, cursor=cursor)
+            seen += [row["id"] for row in rows]
+            if len(rows) < 5:
+                break
+            cursor = rows[-1]["id"]
+        assert sorted(seen) == list(range(1, 13)), (seed, seen)
+
+
+def test_page_items_random_order_requires_a_seed():
+    conn = _db()
+    store.insert_item(conn, 1, "a")
+    try:
+        store.page_items(conn, order="random")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("random order without a seed must be rejected")
+
+
 def test_page_items_applies_whitelist_blacklist_dates_and_media_filters():
     conn = _db()
     store.insert_item(conn, 1, "one", favorited_at="2025-01-10", kind="video", status="done")

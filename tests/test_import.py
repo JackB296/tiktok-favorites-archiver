@@ -36,6 +36,19 @@ def test_import_export_orders_and_dates():
         assert store.get_item(conn, 3)["link"] == "Lc"
 
 
+def test_import_ignores_crashed_encode_temp_files():
+    conn = store.init_db(store.connect(":memory:"))
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "1.mp4"), "w").close()          # finished item
+        open(os.path.join(dl, "2.mp4.part.mp4"), "w").close()  # crashed slideshow encode
+        open(os.path.join(dl, "3.mp4.part"), "w").close()      # crashed video download
+        marked = importer.import_existing_files(conn, dl)
+    assert marked == 1
+    assert store.get_item(conn, 1)["status"] == "done"
+    assert store.get_item(conn, 2) is None
+    assert store.get_item(conn, 3) is None
+
+
 def test_import_existing_files_and_assets_and_manifest():
     conn = store.init_db(store.connect(":memory:"))
     with tempfile.TemporaryDirectory() as d:

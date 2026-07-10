@@ -11,7 +11,7 @@ runner — no requests/moviepy needed.
 import queue
 import threading
 
-from core import runs, store, sync
+from core import enrich, runs, sidecars, store, sync
 
 
 class Broadcaster:
@@ -43,13 +43,20 @@ class JobManager:
     def __init__(self, db_path, download_dir, runners=None):
         self.db_path = db_path
         self.download_dir = download_dir
-        self.runners = runners or {"sync": sync.run_sync, "backfill": sync.run_backfill, "index": sync.run_index}
+        self.runners = runners or {
+            "sync": sync.run_sync,
+            "backfill": sync.run_backfill,
+            "index": sync.run_index,
+            "sidecars": sidecars.run_sidecars,
+            "enrich": enrich.run_enrichment,
+        }
         self._thread = None
         self._broadcaster = Broadcaster()
         self._lock = threading.Lock()
+        store.init_db(store.connect(db_path)).close()  # once, not per status poll
 
     def _conn(self):
-        return store.init_db(store.connect(self.db_path))
+        return store.connect(self.db_path)
 
     def is_running(self):
         return bool(self._thread and self._thread.is_alive())

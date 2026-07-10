@@ -14,7 +14,7 @@ import shutil
 import tempfile
 import logging
 
-from core import config  # noqa: F401  (kept for parity / future settings use)
+from core import config
 
 
 def _even(n):
@@ -44,7 +44,7 @@ def _pad_image(src, dest, canvas_size):
         canvas.save(dest, quality=95)
 
 
-def create_slideshow(images, audio, output_filename, duration_per_image):
+def create_slideshow(images, audio, output_filename, duration_per_image=config.DURATION_PER_IMAGE):
     """Encode a slideshow MP4 atomically. Returns True on success.
 
     Non-destructive: the input images are read for their sizes and padded into a

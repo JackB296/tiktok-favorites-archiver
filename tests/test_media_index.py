@@ -51,3 +51,18 @@ def test_index_media_uses_first_slideshow_image_as_thumbnail():
     assert result.thumbnail_path == ".archive/thumbnails/1.webp"
     assert calls[0][0] == image
     assert calls[0][2] == 480
+
+
+if __name__ == "__main__":
+    import traceback
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    failures = 0
+    for fn in tests:
+        try:
+            fn()
+            print(f"PASS {fn.__name__}")
+        except Exception:
+            failures += 1
+            print(f"FAIL {fn.__name__}")
+            traceback.print_exc()
+    raise SystemExit(1 if failures else 0)

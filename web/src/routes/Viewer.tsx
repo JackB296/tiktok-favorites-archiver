@@ -291,16 +291,20 @@ function ViewerFeed({ items, activeId, containerRef, onActiveChange, onGoToLastW
             <div className="mx-auto max-w-md">
               {item.author && <p className="text-sm font-semibold text-white">{item.author}</p>}
               {item.caption && <p className="mt-1 line-clamp-2 text-sm text-white/80">{item.caption}</p>}
-              <a
-                href={item.link}
-                target="_blank"
-                rel="noreferrer"
-                className="pointer-events-auto mt-2 inline-flex items-center gap-1.5 text-xs text-white/60 hover:text-white"
-              >
-                <span className="tabular">#{item.id}</span>
-                <ArrowSquareOut size={13} />
-                open on TikTok
-              </a>
+              {/^https?:\/\//i.test(item.link) ? (
+                <a
+                  href={item.link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="pointer-events-auto mt-2 inline-flex items-center gap-1.5 text-xs text-white/60 hover:text-white"
+                >
+                  <span className="tabular">#{item.id}</span>
+                  <ArrowSquareOut size={13} />
+                  open on TikTok
+                </a>
+              ) : (
+                <span className="tabular mt-2 inline-block text-xs text-white/60">#{item.id}</span>
+              )}
             </div>
           </div>
         </section>

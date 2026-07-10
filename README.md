@@ -35,11 +35,11 @@ Media is written to `./downloads` on your host. Point Plex at that folder and yo
 
 ## The app
 
-**Feed.** A vertical scroll of your favorites, one at a time. Videos autoplay as they come into view; photo posts play as an image carousel with their original audio.
+**Feed.** A vertical scroll of your favorites, one at a time. Videos autoplay as they come into view; photo posts play as an image carousel with their original audio. Opens at your newest favorite, remembers where you left off ("go to last watched"), and has a no-repeat shuffle mode. Only a handful of posts are mounted at once, so the Feed stays smooth at 11,000+ favorites.
 
-**Gallery.** A thumbnail grid of everything, searchable by caption, hashtag, or author (pulled from TikTok's public oEmbed data), with filters by type.
+**Gallery.** A thumbnail grid of everything, searchable by caption, hashtag, or author (pulled from TikTok's public oEmbed data), ranked best-match first. Beyond the basic All / Videos / Slideshows filter there's a full advanced panel — date range, duration, file size, resolution, orientation, codec, download status, include/exclude author or tag lists, seven repeatable sort orders plus a fresh random shuffle. Any repeatable combination can be saved as a named preset or shared as a copyable link.
 
-**Sync.** The control center. Upload your export, then start, pause, resume, or stop a run and watch per-item status update live over Server-Sent Events.
+**Sync.** The control center. Upload your export, then start, pause, resume, or stop a run and watch per-item status update live over Server-Sent Events. It also houses the library settings: Gallery indexing (thumbnails + media facts, with a quality choice), media-server metadata export, and an archive integrity check.
 
 <p align="center">
   <img src="screenshots/sync.png" alt="The Sync dashboard: upload, run controls, live per-item progress" width="820">
@@ -70,6 +70,12 @@ File numbering is stable: `147.mp4` is item 147 in the database. A rerun never r
 - **Backfill.** Already downloaded favorites before this existed? The Sync tab's Backfill re-fetches the raw slideshow images for your existing files so they render in the viewer.
 - **Rate-limit aware.** The worker pool backs off on HTTP 429 and holds a configurable request rate, so a self-hosted Cobalt is not overwhelmed.
 - **Provenance.** `downloads/manifest.csv` maps each file to its source link, type, and status alongside the database.
+- **Gallery index.** Sync automatically records duration, dimensions, codec, and file size and renders a WebP thumbnail per favorite (480px or 320px, your choice), so the Gallery pages instantly instead of decoding video. Indexing runs on a small worker pool and can be rebuilt, paused, or turned off in the Sync tab.
+- **Search metadata.** The Sync tab can fetch missing captions and creator names from TikTok's public oEmbed endpoint. It runs at the configured rate limit, skips entries already enriched, and can be paused or stopped; this powers complete author, hashtag, and caption search.
+- **Random Gallery order.** Random mode makes a new shuffle whenever you enter it, as intended; use a saved filter or a shared link for repeatable searches and sorts.
+- **Media-server metadata.** One click writes a `.nfo` title file and `.jpg` poster next to every video — Plex, Jellyfin, and Kodi show real titles and artwork instead of bare numbers. Your media files are never modified.
+- **Integrity check.** The Sync tab can verify the whole archive: finished favorites missing their video (one click re-queues them), stray files no favorite claims, and leftover temp files from interrupted runs.
+- **Localhost only.** The app has no login, so Docker binds it to `127.0.0.1` — nothing else on your network can reach it. Plex reads `./downloads` from disk and is unaffected.
 
 ## Architecture
 
@@ -122,6 +128,23 @@ python -m core sync --data-file user_data_tiktok.json
 Flags: `--cobalt-url`, `--data-file`, `--download-dir`, `--db`, `--concurrency`. Run `python -m core sync --help` for the defaults.
 
 </details>
+
+## Development
+
+Backend tests are stdlib-only — no dependencies to install:
+
+```bash
+for f in tests/test_*.py; do python3 "$f"; done
+```
+
+The web app needs Node 20.19+ (see `web/.nvmrc`). `npm run dev` serves the SPA with hot reload and proxies `/api` and `/media` to a backend on `localhost:8080`, so start the Docker app (or `uvicorn server.main:app`) first:
+
+```bash
+cd web
+npm ci
+npm run dev     # SPA on http://localhost:5173, API proxied to :8080
+npm run build   # type-check + production bundle
+```
 
 ## Built with
 

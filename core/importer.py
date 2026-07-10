@@ -28,7 +28,9 @@ def import_existing_files(conn, download_dir):
     marked = 0
     for name in os.listdir(download_dir):
         stem = name.split(".")[0]
-        if not (name.endswith(".mp4") and stem.isdigit()):
+        # Exactly "<n>.mp4": a crashed encode's "<n>.mp4.part.mp4" temp must not
+        # be imported as a finished item.
+        if not (stem.isdigit() and name == f"{stem}.mp4"):
             continue
         n = int(stem)
         item = store.get_item(conn, n)

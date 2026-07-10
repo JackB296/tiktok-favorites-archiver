@@ -155,8 +155,10 @@ def run_sync(conn, download_dir, deps=None, concurrency=None, progress=None,
     _drive(items, eff_concurrency, state, wait, handle)
 
     if indexer is not None and library["index_enabled"] and state() not in _HALT:
+        # Update only the phase: writing state here would overwrite a pause or
+        # stop issued between the check above and this write.
         with db_lock:
-            store.set_run_state(conn, state="running", phase="indexing")
+            store.set_run_state(conn, phase="indexing")
 
         def continue_indexing():
             while state() == "paused":

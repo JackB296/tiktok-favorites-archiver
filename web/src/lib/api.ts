@@ -1,4 +1,4 @@
-import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters } from "./types";
+import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, VerifyReport } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -35,7 +35,7 @@ export const api = {
     return json<Item[]>(`/api/items${qs ? `?${qs}` : ""}`);
   },
 
-  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc"; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string } = {}) => {
+  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string } = {}) => {
     const p = new URLSearchParams();
     if (q.search) p.set("search", q.search);
     if (q.kind) p.set("kind", q.kind);
@@ -43,6 +43,7 @@ export const api = {
     if (q.cursor) p.set("cursor", String(q.cursor));
     if (q.limit) p.set("limit", String(q.limit));
     if (q.order) p.set("order", q.order);
+    if (q.seed != null) p.set("seed", String(q.seed));
     if (q.min_duration) p.set("min_duration", String(q.min_duration));
     if (q.max_duration) p.set("max_duration", String(q.max_duration));
     if (q.min_size) p.set("min_size", String(q.min_size));
@@ -69,6 +70,9 @@ export const api = {
 
   status: () => json<RunStatus>("/api/status"),
 
+  verify: () => json<VerifyReport>("/api/verify"),
+  requeueMissing: () => json<{ requeued: number }>("/api/verify/requeue", { method: "POST" }),
+
   librarySettings: () => json<LibrarySettings>("/api/library-settings"),
   libraryStats: () => json<LibraryStatistics>("/api/library-stats"),
   updateLibrarySettings: (settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480 }) =>
@@ -89,7 +93,7 @@ export const api = {
     return json<ImportResult>("/api/import", { method: "POST", body });
   },
 
-  syncAction: (action: "start" | "backfill" | "reindex" | "pause" | "continue" | "stop") =>
+  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "pause" | "continue" | "stop") =>
     json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}`, { method: "POST" }),
 
   /** Subscribe to the SSE progress stream. Returns an unsubscribe fn. */
