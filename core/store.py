@@ -272,10 +272,13 @@ def search_items(conn, query=None, kinds=None, statuses=None):
     return conn.execute(sql, params).fetchall()
 
 
-def page_items(conn, query=None, kinds=None, statuses=None, limit=50, cursor=None, order="latest"):
+def page_items(conn, query=None, kinds=None, statuses=None, limit=50, cursor=None, order="latest", min_duration=None):
     """Return one cursor page without materializing the whole Archive library."""
     clauses, params = _item_filters(query, kinds, statuses)
-    ordering = {"latest": ("id DESC", "<"), "archive": ("id ASC", ">")}
+    if min_duration is not None:
+        clauses.append("duration_s >= ?")
+        params.append(float(min_duration))
+    ordering = {"latest": ("id DESC", "<"), "archive": ("id ASC", ">"), "size_desc": ("media_size DESC, id DESC", "<")}
     order_sql, comparator = ordering[order]
     if cursor is not None:
         clauses.append(f"id {comparator} ?")

@@ -165,6 +165,17 @@ def test_playable_item_ids_return_finished_media_only():
     assert store.playable_item_ids(conn) == [1]
 
 
+def test_page_items_filters_duration_and_sorts_by_size():
+    conn = _db()
+    for item_id, size, duration in ((1, 10, 30), (2, 30, 10), (3, 20, 20)):
+        store.insert_item(conn, item_id, f"link{item_id}", status="done")
+        store.record_media_index(conn, item_id, {"thumbnail_path": "x", "duration_s": duration, "width": 1, "height": 1, "codec": "h264", "file_size": size}, "x")
+
+    rows = store.page_items(conn, min_duration=15, order="size_desc")
+
+    assert [row["id"] for row in rows] == [3, 1]
+
+
 def test_library_index_settings_default_to_high_enabled():
     conn = _db()
 
