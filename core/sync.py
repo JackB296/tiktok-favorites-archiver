@@ -155,10 +155,47 @@ def run_sync(conn, download_dir, deps=None, concurrency=None, progress=None,
     _drive(items, eff_concurrency, state, wait, handle)
 
     if indexer is not None and library["index_enabled"] and state() not in _HALT:
-        indexer(conn, download_dir, thumbnail_width or library["thumbnail_width"])
+        with db_lock:
+            store.set_run_state(conn, state="running", phase="indexing")
+
+        def continue_indexing():
+            while state() == "paused":
+                wait()
+            return state() not in _HALT
+
+        indexer(
+            conn,
+            download_dir,
+            thumbnail_width=thumbnail_width or library["thumbnail_width"],
+            progress=progress,
+            should_continue=continue_indexing,
+        )
 
     with db_lock:
         return store.counts_by_status(conn)
+
+
+def run_index(conn, download_dir, progress=None, wait=None, indexer=archive_indexer.rebuild_index):
+    """Rebuild the Gallery index as a controllable Archive job."""
+    if wait is None:
+        wait = lambda: time.sleep(0.1)  # noqa: E731
+
+    def state():
+        return store.get_run_state(conn)["state"]
+
+    def continue_indexing():
+        while state() == "paused":
+            wait()
+        return state() not in _HALT
+
+    settings = store.get_library_settings(conn)
+    return indexer(
+        conn,
+        download_dir,
+        thumbnail_width=settings["thumbnail_width"],
+        progress=progress,
+        should_continue=continue_indexing,
+    )
 
 
 def backfill_item(deps, download_dir, item):

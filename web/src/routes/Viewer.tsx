@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { SpeakerSimpleHigh, SpeakerSimpleX, ArrowSquareOut, FilmReel, Shuffle } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
@@ -6,7 +7,11 @@ import { PostMedia } from "../components/PostMedia";
 import { PlaybackSession, usePlayback } from "../components/playback";
 import { EmptyState, Skeleton } from "../components/ui";
 
+const KEEP_BEHIND = 5;
+const PRELOAD_AHEAD = 2;
+
 export function Viewer() {
+  const [searchParams] = useSearchParams();
   const [items, setItems] = useState<Item[] | null>(null);
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -19,18 +24,46 @@ export function Viewer() {
   const randomOffset = useRef(0);
   const randomGeneration = useRef(0);
   const randomBatchGeneration = useRef<number | null>(null);
+  const requestedItemId = Number(searchParams.get("item")) || null;
 
   useEffect(() => {
-    api
-      .itemPage({ limit: 50, order: "latest" })
-      .then((page) => {
-        const playable = page.items.filter((i) => i.video_url || i.images.length);
-        setItems(playable);
-        setNextCursor(page.next_cursor);
-        if (playable[0]) setActiveId(playable[0].id);
-      })
-      .catch(() => setItems([]));
-  }, []);
+    let alive = true;
+    const openLatest = () => api.itemPage({ limit: 50, order: "latest" }).then((page) => {
+      if (!alive) return;
+      const playable = page.items.filter((i) => i.video_url || i.images.length);
+      setItems(playable);
+      setNextCursor(page.next_cursor);
+      if (playable[0]) setActiveId(playable[0].id);
+    });
+
+    if (requestedItemId != null) {
+      api.itemWindow(requestedItemId)
+        .then((page) => {
+          if (!alive) return;
+          const playable = page.items.filter((i) => i.video_url || i.images.length);
+          if (!playable.some((item) => item.id === requestedItemId)) return openLatest();
+          setItems(playable);
+          setActiveId(requestedItemId);
+          setNextCursor(page.items[page.items.length - 1]?.id ?? null);
+        })
+        .catch(() => openLatest().catch(() => alive && setItems([])));
+    } else {
+      openLatest().catch(() => alive && setItems([]));
+    }
+
+    return () => {
+      alive = false;
+    };
+  }, [requestedItemId]);
+
+  /*
+   * Gallery hands off with ?item=<id>. The selected item becomes the first
+   * visible Feed entry; the normal older-neighbor cursor then takes over.
+   */
+  useEffect(() => {
+    if (requestedItemId == null || activeId !== requestedItemId) return;
+    requestAnimationFrame(() => containerRef.current?.scrollTo({ top: 0 }));
+  }, [activeId, requestedItemId]);
 
   const loadRandomBatch = useCallback(async (replace = false, generation = randomGeneration.current) => {
     if (generation !== randomGeneration.current || randomBatchGeneration.current === generation) return;
@@ -93,6 +126,18 @@ export function Viewer() {
   }, [activeId, items, loadRandomBatch, loadingMore, nextCursor, randomMode]);
 
   useEffect(() => {
+    if (activeId == null) return;
+    const activeIndex = items?.findIndex((item) => item.id === activeId) ?? -1;
+    const removeCount = activeIndex - KEEP_BEHIND;
+    if (removeCount <= 0) return;
+    setItems((current) => current?.slice(removeCount) ?? null);
+    requestAnimationFrame(() => {
+      const root = containerRef.current;
+      if (root) root.scrollTop -= removeCount * root.clientHeight;
+    });
+  }, [activeId, items]);
+
+  useEffect(() => {
     if (activeId != null) localStorage.setItem("last-watched-favorite", String(activeId));
   }, [activeId]);
 
@@ -105,6 +150,7 @@ export function Viewer() {
     setItems(page.items);
     setActiveId(resumeId.current);
     setNextCursor(page.items[page.items.length - 1]?.id ?? null);
+    requestAnimationFrame(() => containerRef.current?.scrollTo({ top: 0 }));
   }
 
   async function startRandom() {
@@ -159,18 +205,19 @@ export function Viewer() {
 function ViewerFeed({ items, activeId, containerRef, onGoToLastWatched, onRandom, randomizing }: { items: Item[]; activeId: number | null; containerRef: React.RefObject<HTMLDivElement>; onGoToLastWatched?: () => void; onRandom: () => void; randomizing: boolean }) {
   const { muted, toggleMuted } = usePlayback();
   const Speaker = muted ? SpeakerSimpleX : SpeakerSimpleHigh;
+  const activeIndex = items.findIndex((item) => item.id === activeId);
 
   return (
     <div ref={containerRef} className="h-full snap-y snap-mandatory overflow-y-scroll bg-black">
       {onGoToLastWatched && <button onClick={onGoToLastWatched} className="absolute left-4 top-4 z-10 rounded bg-black/40 px-3 py-2 text-xs text-white backdrop-blur-sm">Go to last watched</button>}
       <button onClick={onRandom} disabled={randomizing} aria-label="Start a new random order" className="absolute left-4 top-14 z-10 rounded bg-black/40 p-2 text-white backdrop-blur-sm disabled:opacity-50"><Shuffle size={18} /></button>
-      {items.map((item) => (
+      {items.map((item, index) => (
         <section
           key={item.id}
           data-id={item.id}
           className="relative flex h-full snap-start items-center justify-center"
         >
-          <PostMedia item={item} active={item.id === activeId} />
+          <PostMedia item={item} active={item.id === activeId} preload={index > activeIndex && index <= activeIndex + PRELOAD_AHEAD} />
 
           <button
             onClick={toggleMuted}

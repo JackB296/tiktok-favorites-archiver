@@ -9,7 +9,7 @@ import {
   Question,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
-import type { RunStatus, ProgressEvent, Status } from "../lib/types";
+import type { RunStatus, ProgressEvent, Status, LibrarySettings } from "../lib/types";
 import { Button, StatusBadge, cx } from "../components/ui";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "expired"];
@@ -21,19 +21,25 @@ export function Dashboard() {
   const [howto, setHowto] = useState<string | null>(null);
   const [howtoOpen, setHowtoOpen] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
-  const [library, setLibrary] = useState<{ index_enabled: number; thumbnail_width: 320 | 480 } | null>(null);
+  const [library, setLibrary] = useState<LibrarySettings | null>(null);
+  const [indexProgress, setIndexProgress] = useState<ProgressEvent | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => api.status().then(setStatus).catch(() => {});
+  const refreshLibrary = () => api.librarySettings().then(setLibrary).catch(() => {});
 
   useEffect(() => {
     refresh();
     api.health().then((h) => setCobaltOk(h.cobalt_reachable)).catch(() => setCobaltOk(false));
-    api.librarySettings().then(setLibrary).catch(() => {});
+    refreshLibrary();
     const poll = window.setInterval(refresh, 2000);
     const off = api.events((e) => {
       setEvents((prev) => [e, ...prev].slice(0, 200));
-      if (e.event === "complete") refresh();
+      if (e.event === "indexing") setIndexProgress(e);
+      if (e.event === "complete") {
+        refresh();
+        refreshLibrary();
+      }
     });
     return () => {
       window.clearInterval(poll);
@@ -62,7 +68,7 @@ export function Dashboard() {
     if (next) setLibrary(next);
   }
 
-  async function act(a: "start" | "backfill" | "pause" | "continue" | "stop") {
+  async function act(a: "start" | "backfill" | "reindex" | "pause" | "continue" | "stop") {
     await api.syncAction(a).catch(() => {});
     refresh();
   }
@@ -127,6 +133,17 @@ export function Dashboard() {
               <option value={320}>Standard — 320px WebP (about 165–550 MB / 11,000)</option>
             </select>
           </div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+            <p className="text-sm text-ink-dim">
+              {indexProgress?.event === "indexing"
+                ? `Indexing ${indexProgress.completed ?? 0} of ${indexProgress.total ?? 0} · ${indexProgress.failed ?? 0} failed`
+                : `${library?.index.indexed ?? 0} of ${library?.index.total ?? 0} local favorites indexed${library?.index.pending ? ` · ${library.index.pending} pending` : ""}${library?.index.failed ? ` · ${library.index.failed} failed` : ""}`}
+            </p>
+            <Button variant="ghost" disabled={running || library?.index_enabled !== 1} onClick={() => act("reindex")}>
+              <ArrowClockwise size={16} /> Rebuild index
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-ink-faint">Rebuild refreshes existing thumbnails and media facts. It is available when indexing is enabled and can be paused or stopped like Sync.</p>
         </section>
 
         {/* Controls */}
@@ -182,7 +199,7 @@ export function Dashboard() {
                 {events.map((e, i) => (
                   <li key={i} className="flex items-center justify-between px-4 py-2 text-sm">
                     {e.event ? (
-                      <span className="text-ink-dim">{e.event === "complete" ? "Run complete" : `Error: ${e.error}`}</span>
+                      <span className="text-ink-dim">{e.event === "complete" ? "Run complete" : e.event === "indexing" ? `Indexing ${e.completed ?? 0}/${e.total ?? 0}` : `Error: ${e.error}`}</span>
                     ) : (
                       <>
                         <span className="tabular text-ink-dim">#{e.id}</span>

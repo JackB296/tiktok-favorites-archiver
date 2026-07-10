@@ -8,6 +8,8 @@ Uses only the standard library (``sqlite3``), so it is testable without any
 third-party install.
 """
 import os
+import json
+import re
 import sqlite3
 from datetime import datetime
 
@@ -57,6 +59,29 @@ CREATE TABLE IF NOT EXISTS library_settings (
     thumbnail_width INTEGER NOT NULL DEFAULT 480,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS gallery_preset (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    filters_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS item_search USING fts5(
+    caption,
+    author,
+    link,
+    content='item',
+    content_rowid='id'
+);
+CREATE TRIGGER IF NOT EXISTS item_search_insert AFTER INSERT ON item BEGIN
+    INSERT INTO item_search(rowid, caption, author, link) VALUES (new.id, new.caption, new.author, new.link);
+END;
+CREATE TRIGGER IF NOT EXISTS item_search_delete AFTER DELETE ON item BEGIN
+    INSERT INTO item_search(item_search, rowid, caption, author, link) VALUES ('delete', old.id, old.caption, old.author, old.link);
+END;
+CREATE TRIGGER IF NOT EXISTS item_search_update AFTER UPDATE OF caption, author, link ON item BEGIN
+    INSERT INTO item_search(item_search, rowid, caption, author, link) VALUES ('delete', old.id, old.caption, old.author, old.link);
+    INSERT INTO item_search(rowid, caption, author, link) VALUES (new.id, new.caption, new.author, new.link);
+END;
 """
 
 _ITEM_MIGRATIONS = {
@@ -95,6 +120,10 @@ def init_db(conn):
     for name, type_name in _ITEM_MIGRATIONS.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE item ADD COLUMN {name} {type_name}")
+    item_count = conn.execute("SELECT COUNT(*) FROM item").fetchone()[0]
+    search_count = conn.execute("SELECT COUNT(*) FROM item_search").fetchone()[0]
+    if item_count and search_count != item_count:
+        conn.execute("INSERT INTO item_search(item_search) VALUES ('rebuild')")
     if conn.execute("SELECT 1 FROM run_state WHERE id = 1").fetchone() is None:
         conn.execute(
             "INSERT INTO run_state (id, state, phase, concurrency, cobalt_url, updated_at) "
@@ -249,10 +278,6 @@ def all_items(conn):
 def _item_filters(query=None, kinds=None, statuses=None):
     clauses = []
     params = []
-    if query:
-        clauses.append("(caption LIKE ? OR author LIKE ? OR link LIKE ?)")
-        like = f"%{query}%"
-        params += [like, like, like]
     if kinds:
         clauses.append("kind IN (%s)" % ",".join("?" for _ in kinds))
         params += list(kinds)
@@ -262,13 +287,24 @@ def _item_filters(query=None, kinds=None, statuses=None):
     return clauses, params
 
 
+def _fts_query(query):
+    """Turn free text into a safe, prefix-searchable FTS expression."""
+    terms = re.findall(r"[A-Za-z0-9_]+", query or "")
+    return " AND ".join(f'"{term}"*' for term in terms)
+
+
 def search_items(conn, query=None, kinds=None, statuses=None):
     """Items filtered by a free-text ``query`` and optional classifications."""
-    clauses, params = _item_filters(query, kinds, statuses)
-    sql = "SELECT * FROM item"
+    clauses, params = _item_filters(kinds=kinds, statuses=statuses)
+    fts_query = _fts_query(query)
+    sql = "SELECT item.* FROM item"
+    if fts_query:
+        sql += " JOIN item_search ON item_search.rowid = item.id"
+        clauses.append("item_search MATCH ?")
+        params.append(fts_query)
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY id"
+    sql += " ORDER BY bm25(item_search), item.id DESC" if fts_query else " ORDER BY item.id"
     return conn.execute(sql, params).fetchall()
 
 
@@ -280,6 +316,7 @@ _PAGE_ORDERS = {
     "duration_asc": ("duration_s ASC, id ASC", "duration_s", "ASC"),
     "favorite_date_desc": ("favorited_at DESC, id DESC", "favorited_at", "DESC"),
     "favorite_date_asc": ("favorited_at ASC, id ASC", "favorited_at", "ASC"),
+    "relevance": ("rank ASC, id DESC", None, None),
 }
 
 
@@ -302,7 +339,8 @@ def page_items(
     exclude=None,
 ):
     """Return one cursor page without materializing the whole Archive library."""
-    clauses, params = _item_filters(query, kinds, statuses)
+    clauses, params = _item_filters(kinds=kinds, statuses=statuses)
+    fts_query = _fts_query(query)
     if min_duration is not None:
         clauses.append("duration_s >= ?")
         params.append(float(min_duration))
@@ -336,27 +374,43 @@ def page_items(
     for term in exclude or []:
         clauses.append("NOT (caption LIKE ? OR author LIKE ?)")
         params += [f"%{term}%", f"%{term}%"]
+    if fts_query and order == "latest":
+        order = "relevance"
     if order not in _PAGE_ORDERS:
         raise ValueError(f"unknown item order: {order}")
     order_sql, field, direction = _PAGE_ORDERS[order]
     if cursor is not None:
-        cursor_row = get_item(conn, int(cursor))
-        if cursor_row is None:
-            raise ValueError("unknown pagination cursor")
-        if field is None:
-            comparator = "<" if order == "latest" else ">"
-            clauses.append(f"id {comparator} ?")
-            params.append(int(cursor))
+        if order == "relevance":
+            cursor_row = conn.execute(
+                "WITH matched AS (SELECT item.id, bm25(item_search) AS rank FROM item_search JOIN item ON item_search.rowid = item.id WHERE item_search MATCH ?) SELECT rank FROM matched WHERE id = ?",
+                (fts_query, int(cursor)),
+            ).fetchone()
+            if cursor_row is None:
+                raise ValueError("unknown pagination cursor")
+            clauses.append("(rank > ? OR (rank = ? AND id < ?))")
+            params += [cursor_row["rank"], cursor_row["rank"], int(cursor)]
         else:
-            cursor_value = cursor_row[field]
-            if cursor_value is None:
-                raise ValueError("cursor cannot be used for an unindexed item")
-            comparator = "<" if direction == "DESC" else ">"
-            clauses.append(f"({field} {comparator} ? OR ({field} = ? AND id {comparator} ?))")
-            params += [cursor_value, cursor_value, int(cursor)]
+            cursor_row = get_item(conn, int(cursor))
+            if cursor_row is None:
+                raise ValueError("unknown pagination cursor")
+            if field is None:
+                comparator = "<" if order == "latest" else ">"
+                clauses.append(f"id {comparator} ?")
+                params.append(int(cursor))
+            else:
+                cursor_value = cursor_row[field]
+                if cursor_value is None:
+                    raise ValueError("cursor cannot be used for an unindexed item")
+                comparator = "<" if direction == "DESC" else ">"
+                clauses.append(f"({field} {comparator} ? OR ({field} = ? AND id {comparator} ?))")
+                params += [cursor_value, cursor_value, int(cursor)]
     if field is not None:
         clauses.append(f"{field} IS NOT NULL")
-    sql = "SELECT * FROM item"
+    if fts_query:
+        sql = "WITH matched AS (SELECT item.*, bm25(item_search) AS rank FROM item_search JOIN item ON item_search.rowid = item.id WHERE item_search MATCH ?) SELECT * FROM matched"
+        params = [fts_query, *params]
+    else:
+        sql = "SELECT * FROM item"
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += f" ORDER BY {order_sql} LIMIT ?"
@@ -400,6 +454,22 @@ def get_library_settings(conn):
     return conn.execute("SELECT * FROM library_settings WHERE id = 1").fetchone()
 
 
+def library_index_status(conn):
+    """Summarize durable Gallery-index coverage for the Sync screen."""
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN thumbnail_path IS NOT NULL THEN 1 ELSE 0 END) AS indexed,
+            SUM(CASE WHEN thumbnail_path IS NULL THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN thumbnail_path IS NULL AND index_error IS NOT NULL THEN 1 ELSE 0 END) AS failed
+        FROM item
+        WHERE status = 'done'
+        """
+    ).fetchone()
+    return {name: int(row[name] or 0) for name in ("total", "indexed", "pending", "failed")}
+
+
 def set_library_settings(conn, index_enabled=None, thumbnail_width=None):
     fields = {}
     if index_enabled is not None:
@@ -414,3 +484,25 @@ def set_library_settings(conn, index_enabled=None, thumbnail_width=None):
     assignments = ", ".join(f"{name} = ?" for name in fields)
     conn.execute(f"UPDATE library_settings SET {assignments} WHERE id = 1", tuple(fields.values()))
     conn.commit()
+
+
+# --- saved Gallery filters -------------------------------------------------
+
+def list_gallery_presets(conn):
+    rows = conn.execute("SELECT id, name, filters_json FROM gallery_preset ORDER BY name COLLATE NOCASE, id").fetchall()
+    return [{"id": row["id"], "name": row["name"], "filters": json.loads(row["filters_json"])} for row in rows]
+
+
+def save_gallery_preset(conn, name, filters):
+    cursor = conn.execute(
+        "INSERT INTO gallery_preset (name, filters_json, created_at) VALUES (?, ?, ?)",
+        (name, json.dumps(filters, separators=(",", ":"), sort_keys=True), _now()),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def delete_gallery_preset(conn, preset_id):
+    cursor = conn.execute("DELETE FROM gallery_preset WHERE id = ?", (preset_id,))
+    conn.commit()
+    return cursor.rowcount > 0

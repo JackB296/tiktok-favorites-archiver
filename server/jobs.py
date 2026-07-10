@@ -43,7 +43,7 @@ class JobManager:
     def __init__(self, db_path, download_dir, runners=None):
         self.db_path = db_path
         self.download_dir = download_dir
-        self.runners = runners or {"sync": sync.run_sync, "backfill": sync.run_backfill}
+        self.runners = runners or {"sync": sync.run_sync, "backfill": sync.run_backfill, "index": sync.run_index}
         self._thread = None
         self._broadcaster = Broadcaster()
         self._lock = threading.Lock()

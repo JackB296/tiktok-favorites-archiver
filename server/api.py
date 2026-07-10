@@ -6,6 +6,7 @@ Each request opens its own SQLite connection (safe under WAL + busy_timeout).
 """
 import os
 import json
+import sqlite3
 import tempfile
 from queue import Empty
 
@@ -38,6 +39,26 @@ def _archive_items(request: Request, conn):
     return ArchiveItems(conn, _download_dir(request))
 
 
+def _library_settings(conn):
+    settings = dict(store.get_library_settings(conn))
+    settings["index"] = store.library_index_status(conn)
+    return settings
+
+
+_GALLERY_PRESET_FIELDS = {
+    "search", "kind", "status", "order", "minDuration", "maxDuration",
+    "minSize", "maxSize", "dateFrom", "dateTo", "orientation", "include", "exclude",
+}
+
+
+def _gallery_preset_filters(value):
+    if not isinstance(value, dict):
+        raise ValueError("filters must be an object")
+    if any(key not in _GALLERY_PRESET_FIELDS or not isinstance(item, str) for key, item in value.items()):
+        raise ValueError("filters contain an unsupported value")
+    return {key: item for key, item in value.items() if item}
+
+
 @router.get("/health")
 def health():
     return {"status": "ok", "cobalt_reachable": cobalt.check_cobalt(config.COBALT_API_URL)}
@@ -46,6 +67,46 @@ def health():
 @router.get("/howto", response_class=PlainTextResponse)
 def howto():
     return HOWTO
+
+
+@router.get("/gallery-presets")
+def list_gallery_presets(request: Request):
+    conn = _open(request)
+    try:
+        return store.list_gallery_presets(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/gallery-presets")
+async def create_gallery_preset(request: Request):
+    body = await request.json()
+    name = body.get("name") if isinstance(body, dict) else None
+    if not isinstance(name, str) or not (name := name.strip()) or len(name) > 80:
+        raise HTTPException(status_code=400, detail="name must be between 1 and 80 characters")
+    try:
+        filters = _gallery_preset_filters(body.get("filters"))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    conn = _open(request)
+    try:
+        preset_id = store.save_gallery_preset(conn, name, filters)
+        return {"id": preset_id, "name": name, "filters": filters}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="a preset with that name already exists")
+    finally:
+        conn.close()
+
+
+@router.delete("/gallery-presets/{preset_id}")
+def delete_gallery_preset(request: Request, preset_id: int):
+    conn = _open(request)
+    try:
+        if not store.delete_gallery_preset(conn, preset_id):
+            raise HTTPException(status_code=404, detail="preset not found")
+        return {"ok": True}
+    finally:
+        conn.close()
 
 
 @router.get("/items")
@@ -173,7 +234,7 @@ def status(request: Request):
 def library_settings(request: Request):
     conn = _open(request)
     try:
-        return dict(store.get_library_settings(conn))
+        return _library_settings(conn)
     finally:
         conn.close()
 
@@ -188,7 +249,7 @@ async def update_library_settings(request: Request):
             index_enabled=body.get("index_enabled"),
             thumbnail_width=body.get("thumbnail_width"),
         )
-        return dict(store.get_library_settings(conn))
+        return _library_settings(conn)
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error))
     finally:
@@ -202,6 +263,8 @@ def sync_control(request: Request, action: str):
         return {"started": jm.start("sync")}
     if action == "backfill":
         return {"started": jm.start("backfill")}
+    if action == "reindex":
+        return {"started": jm.start("index")}
     if action == "pause":
         jm.pause()
         return {"ok": True}

@@ -1,4 +1,4 @@
-import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent } from "./types";
+import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, GalleryPreset, GalleryPresetFilters } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -17,6 +17,14 @@ export interface ItemQuery {
 
 export const api = {
   health: () => json<{ status: string; cobalt_reachable: boolean }>("/api/health"),
+
+  galleryPresets: () => json<GalleryPreset[]>("/api/gallery-presets"),
+  createGalleryPreset: (name: string, filters: GalleryPresetFilters) => json<GalleryPreset>("/api/gallery-presets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, filters }),
+  }),
+  deleteGalleryPreset: (id: number) => json<{ ok: boolean }>(`/api/gallery-presets/${id}`, { method: "DELETE" }),
 
   items: (q: ItemQuery = {}) => {
     const p = new URLSearchParams();
@@ -54,9 +62,9 @@ export const api = {
 
   status: () => json<RunStatus>("/api/status"),
 
-  librarySettings: () => json<{ index_enabled: number; thumbnail_width: 320 | 480 }>("/api/library-settings"),
+  librarySettings: () => json<LibrarySettings>("/api/library-settings"),
   updateLibrarySettings: (settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480 }) =>
-    json<{ index_enabled: number; thumbnail_width: 320 | 480 }>("/api/library-settings", {
+    json<LibrarySettings>("/api/library-settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
@@ -73,7 +81,7 @@ export const api = {
     return json<ImportResult>("/api/import", { method: "POST", body });
   },
 
-  syncAction: (action: "start" | "backfill" | "pause" | "continue" | "stop") =>
+  syncAction: (action: "start" | "backfill" | "reindex" | "pause" | "continue" | "stop") =>
     json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}`, { method: "POST" }),
 
   /** Subscribe to the SSE progress stream. Returns an unsubscribe fn. */

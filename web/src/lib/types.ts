@@ -44,12 +44,44 @@ export interface ProgressEvent {
   status?: Status;
   kind?: Kind;
   has_assets?: number;
-  event?: "complete" | "error";
+  event?: "complete" | "error" | "indexing";
   error?: string;
+  indexed?: number;
+  failed?: number;
+  completed?: number;
+  total?: number;
 }
 
 export interface ImportResult {
   favorites: number;
   existing_files: number;
   manifest_rows: number;
+}
+
+export interface LibrarySettings {
+  index_enabled: number;
+  thumbnail_width: 320 | 480;
+  index: { total: number; indexed: number; pending: number; failed: number };
+}
+
+export interface GalleryPresetFilters {
+  search?: string;
+  kind?: string;
+  status?: string;
+  order?: string;
+  minDuration?: string;
+  maxDuration?: string;
+  minSize?: string;
+  maxSize?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  orientation?: string;
+  include?: string;
+  exclude?: string;
+}
+
+export interface GalleryPreset {
+  id: number;
+  name: string;
+  filters: GalleryPresetFilters;
 }

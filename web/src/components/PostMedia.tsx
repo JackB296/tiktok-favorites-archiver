@@ -9,14 +9,19 @@ import { usePlayback } from "./playback";
  * videos autoplay while `active`; slideshows auto-advance (2.5s) with their audio,
  * plus manual prev/next. Nothing plays unless `active`.
  */
-export function PostMedia({ item, active }: { item: Item; active: boolean }) {
+export function PostMedia({ item, active, preload = false }: { item: Item; active: boolean; preload?: boolean }) {
   const { muted } = usePlayback();
-  if (item.video_url) return <VideoMedia src={item.video_url} active={active} muted={muted} />;
+  if (!active && !preload) return <MediaPlaceholder />;
+  if (item.video_url) return <VideoMedia src={item.video_url} active={active} muted={muted} preload={preload} />;
   if (item.images.length) return <SlideMedia images={item.images} audio={item.audio} active={active} muted={muted} />;
   return <div className="flex h-full w-full items-center justify-center text-sm text-ink-faint">no media yet</div>;
 }
 
-function VideoMedia({ src, active, muted }: { src: string; active: boolean; muted: boolean }) {
+function MediaPlaceholder() {
+  return <div aria-hidden="true" className="h-full w-full bg-black" />;
+}
+
+function VideoMedia({ src, active, muted, preload }: { src: string; active: boolean; muted: boolean; preload: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const v = ref.current;
@@ -27,7 +32,7 @@ function VideoMedia({ src, active, muted }: { src: string; active: boolean; mute
   useEffect(() => {
     if (ref.current) ref.current.muted = muted;
   }, [muted]);
-  return <video ref={ref} src={src} loop playsInline muted className="max-h-full max-w-full object-contain" />;
+  return <video ref={ref} src={src} preload={active || preload ? "auto" : "none"} loop playsInline muted className="max-h-full max-w-full object-contain" />;
 }
 
 const SLIDE_MS = 2500;

@@ -40,7 +40,7 @@ def _seed(conn, links):
 
 
 def _run_sync(conn, download_dir, **kwargs):
-    kwargs.setdefault("indexer", lambda *_args: {"indexed": 0, "failed": 0})
+    kwargs.setdefault("indexer", lambda *_args, **_kwargs: {"indexed": 0, "failed": 0})
     return runs.execute(conn, "sync", sync.run_sync, download_dir, **kwargs)
 
 
@@ -115,11 +115,30 @@ def test_sync_indexes_finished_media_by_default():
             dl,
             deps=_fake_deps({"v": result}),
             concurrency=1,
-            indexer=lambda _conn, directory, thumbnail_width: calls.append((directory, thumbnail_width)),
+            indexer=lambda _conn, directory, thumbnail_width, **_kwargs: calls.append((directory, thumbnail_width)),
         )
 
     assert len(calls) == 1
     assert calls[0][1] == 480
+
+
+def test_rebuild_index_uses_library_quality_and_reports_progress():
+    conn = store.init_db(store.connect(":memory:"))
+    store.set_library_settings(conn, thumbnail_width=320)
+    calls, events = [], []
+
+    def indexer(_conn, directory, thumbnail_width, progress, should_continue):
+        calls.append((directory, thumbnail_width, should_continue()))
+        progress({"event": "indexing", "indexed": 1, "failed": 0, "completed": 1, "total": 1})
+        return {"indexed": 1, "failed": 0}
+
+    with tempfile.TemporaryDirectory() as dl:
+        result = runs.execute(conn, "index", sync.run_index, dl, indexer=indexer, progress=events.append)
+
+    assert result == {"indexed": 1, "failed": 0}
+    assert calls == [(dl, 320, True)]
+    assert events == [{"event": "indexing", "indexed": 1, "failed": 0, "completed": 1, "total": 1}]
+    assert store.get_run_state(conn)["state"] == "idle"
 
 
 def test_stop_halts_remaining_items():

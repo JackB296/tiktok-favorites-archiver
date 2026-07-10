@@ -223,6 +223,51 @@ def test_library_index_settings_default_to_high_enabled():
     assert settings["thumbnail_width"] == 480
 
 
+def test_library_index_status_reports_indexed_pending_and_failed_items():
+    conn = _db()
+    for item_id in range(1, 4):
+        store.insert_item(conn, item_id, f"link{item_id}", status="done")
+    store.record_media_index(conn, 1, {"thumbnail_path": "x", "duration_s": 1, "width": 1, "height": 1, "codec": "h264", "file_size": 1}, "x")
+    store.record_media_index_error(conn, 3, "ffmpeg failed")
+
+    assert store.library_index_status(conn) == {"total": 3, "indexed": 1, "pending": 2, "failed": 1}
+
+
+def test_gallery_presets_round_trip_and_can_be_deleted():
+    conn = _db()
+
+    preset_id = store.save_gallery_preset(conn, "Games without fyp", {"include": "games", "exclude": "fyp", "kind": "video"})
+
+    assert store.list_gallery_presets(conn) == [{
+        "id": preset_id,
+        "name": "Games without fyp",
+        "filters": {"include": "games", "exclude": "fyp", "kind": "video"},
+    }]
+    assert store.delete_gallery_preset(conn, preset_id) is True
+    assert store.list_gallery_presets(conn) == []
+
+
+def test_page_items_searches_metadata_with_relevance_and_updates_index():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/@alice/video/1", status="done")
+    store.insert_item(conn, 2, "https://tiktok.com/@bob/video/2", status="done")
+    store.insert_item(conn, 3, "https://tiktok.com/@carol/video/3", status="done")
+    store.set_metadata(conn, 1, "#games games games speedrun", "alice")
+    store.set_metadata(conn, 2, "#games speedrun", "bob")
+    store.set_metadata(conn, 3, "cooking", "games curator")
+
+    rows = store.page_items(conn, query="#games", limit=10)
+    assert {row["id"] for row in rows} == {1, 2, 3}
+    assert rows[0]["id"] == 1
+
+    first = store.page_items(conn, query="games", limit=1)
+    second = store.page_items(conn, query="games", limit=10, cursor=first[0]["id"])
+    assert {row["id"] for row in [*first, *second]} == {1, 2, 3}
+
+    store.set_metadata(conn, 2, "travel", "bob")
+    assert [row["id"] for row in store.page_items(conn, query="games", limit=10)] == [1, 3]
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

@@ -1,18 +1,16 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   MagnifyingGlass,
-  X,
   Play,
-  SpeakerSimpleHigh,
-  SpeakerSimpleX,
   ImageSquare,
   SlidersHorizontal,
+  BookmarkSimple,
+  Trash,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
-import type { Item } from "../lib/types";
-import { PostMedia } from "../components/PostMedia";
-import { PlaybackSession, usePlayback } from "../components/playback";
+import type { GalleryPreset, GalleryPresetFilters, Item } from "../lib/types";
 import { EmptyState, Skeleton, cx } from "../components/ui";
 
 const FILTERS = [
@@ -22,12 +20,12 @@ const FILTERS = [
 ];
 
 export function Gallery() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("");
   const [items, setItems] = useState<Item[] | null>(null);
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [selected, setSelected] = useState<Item | null>(null);
   const [advanced, setAdvanced] = useState(false);
   const [status, setStatus] = useState("");
   const [order, setOrder] = useState<"latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc">("latest");
@@ -40,6 +38,10 @@ export function Gallery() {
   const [orientation, setOrientation] = useState("");
   const [include, setInclude] = useState("");
   const [exclude, setExclude] = useState("");
+  const [presets, setPresets] = useState<GalleryPreset[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState("");
+  const [presetName, setPresetName] = useState("");
+  const [presetMessage, setPresetMessage] = useState<string | null>(null);
 
   const pageQuery = {
     search, kind, status, limit: 50, order,
@@ -71,6 +73,56 @@ export function Gallery() {
     };
   }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, dateFrom, dateTo, orientation, include, exclude]);
 
+  useEffect(() => {
+    api.galleryPresets().then(setPresets).catch(() => setPresetMessage("Could not load saved filters."));
+  }, []);
+
+  function currentFilters(): GalleryPresetFilters {
+    return { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, dateFrom, dateTo, orientation, include, exclude };
+  }
+
+  function applyPreset(filters: GalleryPresetFilters) {
+    setSearch(filters.search ?? "");
+    setKind(filters.kind ?? "");
+    setStatus(filters.status ?? "");
+    setOrder((filters.order as typeof order) || "latest");
+    setMinDuration(filters.minDuration ?? "");
+    setMaxDuration(filters.maxDuration ?? "");
+    setMinSize(filters.minSize ?? "");
+    setMaxSize(filters.maxSize ?? "");
+    setDateFrom(filters.dateFrom ?? "");
+    setDateTo(filters.dateTo ?? "");
+    setOrientation(filters.orientation ?? "");
+    setInclude(filters.include ?? "");
+    setExclude(filters.exclude ?? "");
+  }
+
+  async function savePreset() {
+    if (!presetName.trim()) return;
+    try {
+      const saved = await api.createGalleryPreset(presetName.trim(), currentFilters());
+      setPresets((current) => [...current, saved].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedPresetId(String(saved.id));
+      setPresetName("");
+      setPresetMessage("Saved.");
+    } catch (error) {
+      setPresetMessage((error as Error).message);
+    }
+  }
+
+  async function deletePreset() {
+    const id = Number(selectedPresetId);
+    if (!id) return;
+    try {
+      await api.deleteGalleryPreset(id);
+      setPresets((current) => current.filter((preset) => preset.id !== id));
+      setSelectedPresetId("");
+      setPresetMessage("Deleted.");
+    } catch (error) {
+      setPresetMessage((error as Error).message);
+    }
+  }
+
   async function loadMore() {
     if (nextCursor == null || loadingMore) return;
     setLoadingMore(true);
@@ -95,6 +147,7 @@ export function Gallery() {
             placeholder="Search caption, hashtag, author"
             className="h-10 w-full rounded-[var(--radius-control)] border border-line bg-surface pl-9 pr-3 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
           />
+          {search.trim() && <p className="mt-1 text-xs text-ink-faint">Best matches first. Choose an advanced sort to override relevance.</p>}
         </div>
         <div className="flex gap-1.5">
           {FILTERS.map((f) => (
@@ -114,6 +167,17 @@ export function Gallery() {
       </div>
 
       {advanced && <section className="mb-5 grid gap-3 rounded-[var(--radius-media)] border border-line bg-surface p-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:col-span-3">
+          <label className="min-w-48 flex-1 text-xs text-ink-dim">Saved filters
+            <select value={selectedPresetId} onChange={(e) => { const preset = presets.find((item) => item.id === Number(e.target.value)); setSelectedPresetId(e.target.value); if (preset) applyPreset(preset.filters); }} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Apply a saved filter…</option>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select>
+          </label>
+          <label className="min-w-48 flex-1 text-xs text-ink-dim">Save current filters as
+            <input value={presetName} onChange={(e) => setPresetName(e.target.value)} maxLength={80} placeholder="e.g. Games without fyp" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" />
+          </label>
+          <button type="button" onClick={savePreset} disabled={!presetName.trim()} className="inline-flex h-9 items-center gap-1 rounded border border-line px-3 text-sm text-ink-dim hover:text-ink disabled:opacity-40"><BookmarkSimple size={15} /> Save</button>
+          {selectedPresetId && <button type="button" onClick={deletePreset} className="inline-flex h-9 items-center gap-1 rounded border border-line px-3 text-sm text-ink-dim hover:text-bad"><Trash size={15} /> Delete</button>}
+          {presetMessage && <span className="text-xs text-ink-faint">{presetMessage}</span>}
+        </div>
         <label className="text-xs text-ink-dim">Sort
           <select value={order} onChange={(e) => setOrder(e.target.value as typeof order)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="latest">Latest imported favorite</option><option value="archive">Oldest imported favorite</option><option value="favorite_date_desc">Newest favorite date</option><option value="favorite_date_asc">Oldest favorite date</option><option value="size_desc">Largest file</option><option value="duration_desc">Longest video</option><option value="duration_asc">Shortest video</option></select>
         </label>
@@ -161,7 +225,7 @@ export function Gallery() {
         <>
           <Grid>
             {items.map((it) => (
-              <Thumb key={it.id} item={it} onClick={() => setSelected(it)} />
+              <Thumb key={it.id} item={it} onClick={() => navigate(`/?item=${it.id}`)} />
             ))}
           </Grid>
           {nextCursor != null && (
@@ -177,8 +241,6 @@ export function Gallery() {
           )}
         </>
       )}
-
-      {selected && <Lightbox item={selected} onClose={() => setSelected(null)} />}
     </div>
     </div>
   );
@@ -223,55 +285,5 @@ function Thumb({ item, onClick }: { item: Item; onClick: () => void }) {
         {item.caption && <p className="truncate text-[11px] text-white/70">{item.caption}</p>}
       </div>
     </button>
-  );
-}
-
-function Lightbox({ item, onClose }: { item: Item; onClose: () => void }) {
-  return (
-    <PlaybackSession initiallyMuted={false}>
-      <LightboxContent item={item} onClose={onClose} />
-    </PlaybackSession>
-  );
-}
-
-function LightboxContent({ item, onClose }: { item: Item; onClose: () => void }) {
-  const { muted, toggleMuted } = usePlayback();
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const Speaker = muted ? SpeakerSimpleX : SpeakerSimpleHigh;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4" onClick={onClose}>
-      <button
-        onClick={onClose}
-        aria-label="Close"
-        className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20"
-      >
-        <X size={20} />
-      </button>
-      <div
-        className="relative flex h-full max-h-[90dvh] w-full max-w-md items-center justify-center"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <PostMedia item={item} active />
-        <button
-          onClick={toggleMuted}
-          aria-label={muted ? "Unmute" : "Mute"}
-          className="absolute right-3 top-3 rounded-full bg-black/40 p-2 text-white backdrop-blur-sm transition hover:bg-black/60"
-        >
-          <Speaker size={18} weight="fill" />
-        </button>
-        {(item.author || item.caption) && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent p-4">
-            {item.author && <p className="text-sm font-semibold text-white">{item.author}</p>}
-            {item.caption && <p className="mt-1 line-clamp-2 text-sm text-white/80">{item.caption}</p>}
-          </div>
-        )}
-      </div>
-    </div>
   );
 }
