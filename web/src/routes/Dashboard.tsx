@@ -8,6 +8,7 @@ import {
   Stop,
   ArrowClockwise,
   Question,
+  CaretDown,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport, RunHistoryEntry, SyncSettings } from "../lib/types";
@@ -41,6 +42,8 @@ export function Dashboard() {
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
   const [syncSettings, setSyncSettings] = useState<SyncSettings | null>(null);
+  const [metadataOpen, setMetadataOpen] = useState(false);
+  const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => api.status().then(setStatus).catch(() => {});
@@ -77,6 +80,12 @@ export function Dashboard() {
 
   const running = !!status?.running;
   const paused = status?.state === "paused";
+
+  useEffect(() => {
+    if (!running) return;
+    if (status?.phase === "enrich") setMetadataOpen(true);
+    if (["index", "sidecars", "backfill"].includes(status?.phase ?? "")) setMaintenanceOpen(true);
+  }, [running, status?.phase]);
 
   async function onFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -173,22 +182,22 @@ export function Dashboard() {
           {importMsg && <p className="mt-3 text-sm text-ink-dim">{importMsg}</p>}
         </section>
 
-        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+        <details open={metadataOpen} onToggle={(event) => setMetadataOpen(event.currentTarget.open)} className="group mb-4 rounded-[var(--radius-media)] border border-line bg-surface">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-semibold text-ink"><span>Gallery search metadata{running && status?.phase === "enrich" ? <span className="ml-2 text-xs font-normal text-active">running</span> : null}</span><CaretDown size={16} className="text-ink-faint transition group-open:rotate-180" /></summary>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-5 py-4">
             <div>
-              <h2 className="text-sm font-semibold text-ink">Gallery search metadata</h2>
               <p className="mt-1 text-sm text-ink-dim">Fetches missing captions and creators from TikTok so author, hashtag, and caption search cover more of the archive. This makes one rate-limited request per favorite that has no caption yet; it can be paused or stopped.</p>
             </div>
             <Button variant="ghost" disabled={running} onClick={() => act("enrich")}>
               <ArrowClockwise size={16} /> Fetch missing metadata
             </Button>
-          </div>
           {enrichmentProgress?.event === "enrichment" && (
             <p className="mt-3 text-sm text-ink-dim">
               {`Checking ${enrichmentProgress.completed ?? 0} of ${enrichmentProgress.total ?? 0} · ${enrichmentProgress.enriched ?? 0} updated`}
             </p>
           )}
-        </section>
+          </div>
+        </details>
 
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
           <h2 className="text-sm font-semibold text-ink">Archive at a glance</h2>
@@ -200,6 +209,10 @@ export function Dashboard() {
             <Stat label="Indexed media" value={formatBytes(statistics?.media_size ?? 0)} hint="video files only" />
           </div>
         </section>
+
+        <details open={maintenanceOpen} onToggle={(event) => setMaintenanceOpen(event.currentTarget.open)} className="group mb-4 rounded-[var(--radius-media)] border border-line bg-surface">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4"><span><span className="block text-sm font-semibold text-ink">Maintenance & settings</span><span className="mt-0.5 block text-xs font-normal text-ink-dim">Indexing, performance, inventory, media-server files, integrity, and run history</span></span><CaretDown size={16} className="shrink-0 text-ink-faint transition group-open:rotate-180" /></summary>
+          <div className="border-t border-line p-4">
 
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
           <h2 className="text-sm font-semibold text-ink">Library indexing</h2>
@@ -308,6 +321,8 @@ export function Dashboard() {
           <p className="mt-1 text-sm text-ink-dim">Stored locally so you can see what finished after the live activity log has cleared.</p>
           {runHistory.length ? <ul className="mt-3 divide-y divide-line text-sm">{runHistory.slice(0, 8).map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><span className="capitalize text-ink">{run.kind}</span><span className="text-ink-dim">{run.outcome ?? "running"} · {run.counts.done ?? 0} ready · {run.counts.failed ?? 0} failed</span><time className="text-xs text-ink-faint" dateTime={run.started_at}>{new Date(run.started_at).toLocaleString()}</time></li>)}</ul> : <p className="mt-3 text-sm text-ink-faint">No completed archive runs yet.</p>}
         </section>
+          </div>
+        </details>
 
         {/* Controls */}
         <section className="mb-4 flex flex-wrap items-center gap-2">

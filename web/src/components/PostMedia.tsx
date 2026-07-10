@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CaretLeft, CaretRight } from "@phosphor-icons/react";
+import { CaretLeft, CaretRight, LinkBreak } from "@phosphor-icons/react";
 import type { Item } from "../lib/types";
 import { cx } from "./ui";
 import { usePlayback } from "./playback";
@@ -14,7 +14,12 @@ export function PostMedia({ item, active, preload = false }: { item: Item; activ
   if (!active && !preload) return <MediaPlaceholder />;
   if (item.video_url) return <VideoMedia src={item.video_url} active={active} muted={muted} paused={paused} preload={preload} />;
   if (item.images.length) return <SlideMedia images={item.images} audio={item.audio} active={active} muted={muted} paused={paused} />;
+  if (item.status === "expired") return <UnavailableOriginal />;
   return <div className="flex h-full w-full items-center justify-center text-sm text-ink-faint">no media yet</div>;
+}
+
+function UnavailableOriginal() {
+  return <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-black px-8 text-center text-white/60"><LinkBreak size={36} weight="light" /><div><p className="text-sm font-medium text-white/80">Original post unavailable</p><p className="mt-1 max-w-xs text-xs leading-relaxed">TikTok no longer serves this link. Its place in your archive is preserved and Sync will not keep retrying it.</p></div></div>;
 }
 
 function MediaPlaceholder() {

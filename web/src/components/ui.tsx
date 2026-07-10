@@ -1,3 +1,4 @@
+import { useId } from "react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import type { Status } from "../lib/types";
 
@@ -43,17 +44,28 @@ const STATUS_COLOR: Record<Status, string> = {
   skipped: "text-ink-faint",
 };
 
+const STATUS_LABEL: Partial<Record<Status, string>> = { done: "ready", expired: "unavailable" };
+
 export function StatusBadge({ status }: { status: Status }) {
   return (
     <span className={cx("inline-flex items-center gap-1.5 text-xs font-medium", STATUS_COLOR[status])}>
       <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
-      {status}
+      {STATUS_LABEL[status] ?? status}
     </span>
   );
 }
 
 export function Skeleton({ className }: { className?: string }) {
   return <div className={cx("animate-pulse rounded-[var(--radius-control)] bg-elevated", className)} />;
+}
+
+export function HelpLabel({ children, help }: { children: ReactNode; help: string }) {
+  const id = useId();
+  return <span className="group/help relative inline-flex w-fit items-center gap-1" tabIndex={0} aria-describedby={id}>
+    <span className="border-b border-dotted border-ink-faint/60">{children}</span>
+    <span aria-hidden="true" className="text-[10px] text-ink-faint">?</span>
+    <span id={id} role="tooltip" className="pointer-events-none invisible absolute bottom-full left-0 z-50 mb-2 w-64 rounded-[var(--radius-control)] border border-line bg-elevated px-3 py-2 text-left text-xs font-normal leading-relaxed text-ink opacity-0 shadow-xl transition group-hover/help:visible group-hover/help:opacity-100 group-focus/help:visible group-focus/help:opacity-100">{help}</span>
+  </span>;
 }
 
 export function EmptyState({ icon, title, hint }: { icon?: ReactNode; title: string; hint?: ReactNode }) {

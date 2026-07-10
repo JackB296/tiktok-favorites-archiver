@@ -76,6 +76,20 @@ def test_video_download_failure_is_retryable():
         assert store.get_item(conn, 1)["status"] == "failed"
 
 
+def test_expired_links_remain_as_archive_markers_and_are_not_retried():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "gone", status="expired")
+
+    def should_not_resolve(_link):
+        raise AssertionError("expired favorites must not be retried automatically")
+
+    deps = sync.Deps(should_not_resolve, lambda *_args: True, lambda *_args: True, lambda *_args: None, "/default.mp3")
+    with tempfile.TemporaryDirectory() as dl:
+        _run_sync(conn, dl, deps=deps, concurrency=1)
+
+    assert store.get_item(conn, 1)["status"] == "expired"
+
+
 def test_slideshow_image_download_failure_keeps_its_specific_error():
     result = cobalt.Result("slideshow", None, ["http://x/1.jpg"], None, None, "picker")
     deps = _fake_deps({"s": result}, download_ok=False)

@@ -7,6 +7,7 @@ import { PostMedia } from "../components/PostMedia";
 import { PlaybackSession, usePlayback } from "../components/playback";
 import { EmptyState, Skeleton } from "../components/ui";
 import { viewerShortcut } from "../lib/viewerShortcuts";
+import { isFeedItem } from "../lib/feedItems";
 
 const KEEP_BEHIND = 5;
 const PRELOAD_AHEAD = 2;
@@ -37,7 +38,7 @@ export function Viewer() {
     let alive = true;
     const openLatest = () => api.itemPage({ limit: 50, order: "latest" }).then((page) => {
       if (!alive) return;
-      const playable = page.items.filter((i) => i.video_url || i.images.length);
+      const playable = page.items.filter(isFeedItem);
       setItems(playable);
       setQueueReadyTotal(0);
       setNextCursor(page.next_cursor);
@@ -48,7 +49,7 @@ export function Viewer() {
       api.itemSelection(requestedQueueIds)
         .then((selected) => {
           if (!alive) return;
-          const playable = selected.filter((item) => item.video_url || item.images.length);
+          const playable = selected.filter(isFeedItem);
           setItems(playable);
           setQueueReadyTotal(playable.length);
           setActiveId(playable[0]?.id ?? null);
@@ -61,7 +62,7 @@ export function Viewer() {
       api.itemWindow(requestedItemId)
         .then((page) => {
           if (!alive) return;
-          const playable = page.items.filter((i) => i.video_url || i.images.length);
+          const playable = page.items.filter(isFeedItem);
           if (!playable.some((item) => item.id === requestedItemId)) return openLatest();
           setItems(playable);
           setActiveId(requestedItemId);
@@ -96,7 +97,7 @@ export function Viewer() {
     try {
       const selected = await api.itemSelection(ids);
       if (generation !== randomGeneration.current) return;
-      const playable = selected.filter((item) => item.video_url || item.images.length);
+      const playable = selected.filter(isFeedItem);
       if (replace) {
         setItems(playable);
         setActiveId(playable[0]?.id ?? null);
@@ -140,7 +141,7 @@ export function Viewer() {
     setLoadingMore(true);
     api.itemPage({ limit: 50, cursor: nextCursor, order: "latest" })
       .then((page) => {
-        setItems((current) => [...(current ?? []), ...page.items]);
+        setItems((current) => [...(current ?? []), ...page.items.filter(isFeedItem)]);
         setNextCursor(page.next_cursor);
       })
       .finally(() => setLoadingMore(false));
@@ -173,7 +174,7 @@ export function Viewer() {
     randomGeneration.current += 1;
     setRandomMode(false);
     setRandomTotal(0);
-    setItems(page.items);
+    setItems(page.items.filter(isFeedItem));
     setActiveId(resumeId.current);
     setNextCursor(page.items[page.items.length - 1]?.id ?? null);
     requestAnimationFrame(() => containerRef.current?.scrollTo({ top: 0 }));
@@ -213,7 +214,7 @@ export function Viewer() {
     setRandomTotal(0);
     const page = await api.itemPage({ limit: 50, order: "latest" }).catch(() => null);
     if (!page) return;
-    const playable = page.items.filter((item) => item.video_url || item.images.length);
+    const playable = page.items.filter(isFeedItem);
     setItems(playable);
     setNextCursor(page.next_cursor);
     setActiveId(playable[0]?.id ?? null);

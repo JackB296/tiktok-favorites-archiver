@@ -2,7 +2,14 @@
 FROM node:20-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+# npm can omit Rollup's platform-native optional package when the lockfile was
+# produced on another OS. Install the matching Alpine binary after the locked
+# dependency set so Vite builds on both Apple Silicon and x86 Docker hosts.
+RUN npm ci \
+    && case "$(uname -m)" in \
+         aarch64) npm install --no-save --ignore-scripts @rollup/rollup-linux-arm64-musl@4.62.2 lightningcss-linux-arm64-musl@1.32.0 @tailwindcss/oxide-linux-arm64-musl@4.3.2 ;; \
+         x86_64) npm install --no-save --ignore-scripts @rollup/rollup-linux-x64-musl@4.62.2 lightningcss-linux-x64-musl@1.32.0 @tailwindcss/oxide-linux-x64-musl@4.3.2 ;; \
+       esac
 COPY web/ ./
 RUN npm run build
 
