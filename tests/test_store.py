@@ -157,6 +157,14 @@ def test_window_items_centers_a_favorite_with_older_neighbors():
     assert [row["id"] for row in rows] == [5, 4, 3]
 
 
+def test_playable_item_ids_return_finished_media_only():
+    conn = _db()
+    store.insert_item(conn, 1, "a", status="done")
+    store.insert_item(conn, 2, "b", status="pending")
+
+    assert store.playable_item_ids(conn) == [1]
+
+
 def test_library_index_settings_default_to_high_enabled():
     conn = _db()
 

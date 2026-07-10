@@ -296,6 +296,10 @@ def window_items(conn, item_id, limit=50):
     ).fetchall()
 
 
+def playable_item_ids(conn):
+    return [row["id"] for row in conn.execute("SELECT id FROM item WHERE status = 'done' ORDER BY id").fetchall()]
+
+
 def counts_by_status(conn):
     rows = conn.execute("SELECT status, COUNT(*) AS c FROM item GROUP BY status").fetchall()
     return {r["status"]: r["c"] for r in rows}

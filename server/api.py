@@ -87,6 +87,28 @@ def page_items(
         conn.close()
 
 
+@router.get("/items/ids")
+def item_ids(request: Request):
+    conn = _open(request)
+    try:
+        return store.playable_item_ids(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/items/selection")
+async def item_selection(request: Request):
+    body = await request.json()
+    item_ids = body.get("ids", [])
+    if not isinstance(item_ids, list) or len(item_ids) > 100:
+        raise HTTPException(status_code=400, detail="ids must contain at most 100 item IDs")
+    conn = _open(request)
+    try:
+        return _archive_items(request, conn).selected([int(item_id) for item_id in item_ids])
+    finally:
+        conn.close()
+
+
 @router.get("/items/{n}")
 def get_item(request: Request, n: int):
     conn = _open(request)

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { SpeakerSimpleHigh, SpeakerSimpleX, ArrowSquareOut, FilmReel } from "@phosphor-icons/react";
+import { SpeakerSimpleHigh, SpeakerSimpleX, ArrowSquareOut, FilmReel, Shuffle } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
 import { PostMedia } from "../components/PostMedia";
@@ -70,6 +70,19 @@ export function Viewer() {
     setNextCursor(page.items[page.items.length - 1]?.id ?? null);
   }
 
+  async function startRandom() {
+    const ids = await api.itemIds().catch(() => []);
+    for (let i = ids.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+    }
+    const randomItems = await api.itemSelection(ids.slice(0, 100)).catch(() => []);
+    if (!randomItems.length) return;
+    setItems(randomItems);
+    setActiveId(randomItems[0].id);
+    setNextCursor(null);
+  }
+
   if (!items) {
     return (
       <div className="mx-auto max-w-md p-4">
@@ -89,18 +102,19 @@ export function Viewer() {
 
   return (
     <PlaybackSession initiallyMuted>
-      <ViewerFeed items={items} activeId={activeId} containerRef={containerRef} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} />
+      <ViewerFeed items={items} activeId={activeId} containerRef={containerRef} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} />
     </PlaybackSession>
   );
 }
 
-function ViewerFeed({ items, activeId, containerRef, onGoToLastWatched }: { items: Item[]; activeId: number | null; containerRef: React.RefObject<HTMLDivElement>; onGoToLastWatched?: () => void }) {
+function ViewerFeed({ items, activeId, containerRef, onGoToLastWatched, onRandom }: { items: Item[]; activeId: number | null; containerRef: React.RefObject<HTMLDivElement>; onGoToLastWatched?: () => void; onRandom: () => void }) {
   const { muted, toggleMuted } = usePlayback();
   const Speaker = muted ? SpeakerSimpleX : SpeakerSimpleHigh;
 
   return (
     <div ref={containerRef} className="h-full snap-y snap-mandatory overflow-y-scroll bg-black">
       {onGoToLastWatched && <button onClick={onGoToLastWatched} className="absolute left-4 top-4 z-10 rounded bg-black/40 px-3 py-2 text-xs text-white backdrop-blur-sm">Go to last watched</button>}
+      <button onClick={onRandom} aria-label="Start a new random order" className="absolute left-4 top-14 z-10 rounded bg-black/40 p-2 text-white backdrop-blur-sm"><Shuffle size={18} /></button>
       {items.map((item) => (
         <section
           key={item.id}

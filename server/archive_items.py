@@ -42,6 +42,10 @@ class ArchiveItems:
     def window(self, item_id, limit=50):
         return {"items": [self._public(row) for row in store.window_items(self._conn, item_id, limit)]}
 
+    def selected(self, item_ids):
+        rows = [store.get_item(self._conn, item_id) for item_id in item_ids]
+        return [self._public(row) for row in rows if row is not None]
+
     def _public(self, row):
         item_id = row["id"]
         data = {
