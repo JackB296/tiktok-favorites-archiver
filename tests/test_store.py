@@ -147,6 +147,16 @@ def test_page_items_returns_latest_first_with_a_cursor():
     assert [row["id"] for row in second] == [3, 2]
 
 
+def test_window_items_centers_a_favorite_with_older_neighbors():
+    conn = _db()
+    for item_id in range(1, 8):
+        store.insert_item(conn, item_id, f"link{item_id}", status="done")
+
+    rows = store.window_items(conn, 5, limit=3)
+
+    assert [row["id"] for row in rows] == [5, 4, 3]
+
+
 def test_library_index_settings_default_to_high_enabled():
     conn = _db()
 

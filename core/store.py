@@ -288,6 +288,14 @@ def page_items(conn, query=None, kinds=None, statuses=None, limit=50, cursor=Non
     return conn.execute(sql, params).fetchall()
 
 
+def window_items(conn, item_id, limit=50):
+    """Return the selected Favorite then its older archive neighbors."""
+    return conn.execute(
+        "SELECT * FROM item WHERE id <= ? ORDER BY id DESC LIMIT ?",
+        (item_id, max(1, min(int(limit), 100))),
+    ).fetchall()
+
+
 def counts_by_status(conn):
     rows = conn.execute("SELECT status, COUNT(*) AS c FROM item GROUP BY status").fetchall()
     return {r["status"]: r["c"] for r in rows}

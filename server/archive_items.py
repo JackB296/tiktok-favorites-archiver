@@ -39,6 +39,9 @@ class ArchiveItems:
         items = [self._public(row) for row in rows]
         return {"items": items, "next_cursor": items[-1]["id"] if len(items) == limit else None}
 
+    def window(self, item_id, limit=50):
+        return {"items": [self._public(row) for row in store.window_items(self._conn, item_id, limit)]}
+
     def _public(self, row):
         item_id = row["id"]
         data = {

@@ -99,6 +99,15 @@ def get_item(request: Request, n: int):
         conn.close()
 
 
+@router.get("/items/{n}/window")
+def item_window(request: Request, n: int, limit: int = 50):
+    conn = _open(request)
+    try:
+        return _archive_items(request, conn).window(n, limit)
+    finally:
+        conn.close()
+
+
 @router.post("/import")
 async def import_export(request: Request, file: UploadFile = File(...)):
     payload = await file.read()

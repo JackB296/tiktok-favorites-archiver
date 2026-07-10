@@ -11,6 +11,7 @@ export function Viewer() {
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [activeId, setActiveId] = useState<number | null>(null);
+  const resumeId = useRef<number | null>(Number(localStorage.getItem("last-watched-favorite")) || null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -56,6 +57,19 @@ export function Viewer() {
       .finally(() => setLoadingMore(false));
   }, [activeId, items, loadingMore, nextCursor]);
 
+  useEffect(() => {
+    if (activeId != null) localStorage.setItem("last-watched-favorite", String(activeId));
+  }, [activeId]);
+
+  async function goToLastWatched() {
+    if (resumeId.current == null) return;
+    const page = await api.itemWindow(resumeId.current).catch(() => null);
+    if (!page?.items.length) return;
+    setItems(page.items);
+    setActiveId(resumeId.current);
+    setNextCursor(page.items[page.items.length - 1]?.id ?? null);
+  }
+
   if (!items) {
     return (
       <div className="mx-auto max-w-md p-4">
@@ -75,17 +89,18 @@ export function Viewer() {
 
   return (
     <PlaybackSession initiallyMuted>
-      <ViewerFeed items={items} activeId={activeId} containerRef={containerRef} />
+      <ViewerFeed items={items} activeId={activeId} containerRef={containerRef} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} />
     </PlaybackSession>
   );
 }
 
-function ViewerFeed({ items, activeId, containerRef }: { items: Item[]; activeId: number | null; containerRef: React.RefObject<HTMLDivElement> }) {
+function ViewerFeed({ items, activeId, containerRef, onGoToLastWatched }: { items: Item[]; activeId: number | null; containerRef: React.RefObject<HTMLDivElement>; onGoToLastWatched?: () => void }) {
   const { muted, toggleMuted } = usePlayback();
   const Speaker = muted ? SpeakerSimpleX : SpeakerSimpleHigh;
 
   return (
     <div ref={containerRef} className="h-full snap-y snap-mandatory overflow-y-scroll bg-black">
+      {onGoToLastWatched && <button onClick={onGoToLastWatched} className="absolute left-4 top-4 z-10 rounded bg-black/40 px-3 py-2 text-xs text-white backdrop-blur-sm">Go to last watched</button>}
       {items.map((item) => (
         <section
           key={item.id}
