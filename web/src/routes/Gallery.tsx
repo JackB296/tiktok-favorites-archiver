@@ -15,6 +15,7 @@ import {
 import { api } from "../lib/api";
 import type { GalleryPreset, GalleryPresetFilters, Item } from "../lib/types";
 import { EmptyState, Skeleton, cx } from "../components/ui";
+import { VirtualGalleryGrid } from "../components/VirtualGalleryGrid";
 
 const FILTERS = [
   { key: "", label: "All" },
@@ -48,6 +49,7 @@ function filtersToSearchParams(filters: GalleryPresetFilters) {
 
 export function Gallery() {
   const navigate = useNavigate();
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const fromUrl = (name: string) => searchParams.get(name) ?? "";
   const [search, setSearch] = useState(() => fromUrl("q"));
@@ -238,7 +240,7 @@ export function Gallery() {
   addFilter(orientation, orientation, () => setOrientation("")); addFilter(assets, assets === "with" ? "Has raw assets" : "No raw assets", () => setAssets("")); addFilter(indexState, `Index: ${indexState}`, () => setIndexState("")); addFilter(include, `Include: ${include}`, () => setInclude("")); addFilter(exclude, `Exclude: ${exclude}`, () => setExclude(""));
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div ref={scrollRef} className="h-full overflow-y-auto">
     <div className="mx-auto max-w-[1400px] px-4 py-6">
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full sm:max-w-sm">
@@ -354,11 +356,12 @@ export function Gallery() {
         />
       ) : (
         <>
-          <Grid density={density}>
-            {items.map((it) => (
-              <Thumb key={it.id} item={it} onClick={() => navigate(`/?item=${it.id}`)} />
-            ))}
-          </Grid>
+          <VirtualGalleryGrid
+            items={items}
+            density={density}
+            scrollRef={scrollRef}
+            renderItem={(it) => <Thumb key={it.id} item={it} onClick={() => navigate(`/?item=${it.id}`)} />}
+          />
           {nextCursor != null && (
             <div className="mt-6 flex justify-center">
               <button
