@@ -11,7 +11,7 @@ runner — no requests/moviepy needed.
 import queue
 import threading
 
-from core import store, sync
+from core import runs, store, sync
 
 
 class Broadcaster:
@@ -65,7 +65,13 @@ class JobManager:
             def run():
                 conn = self._conn()
                 try:
-                    runner(conn, self.download_dir, progress=self._broadcaster.publish)
+                    runs.execute(
+                        conn,
+                        kind,
+                        runner,
+                        self.download_dir,
+                        progress=self._broadcaster.publish,
+                    )
                 except Exception as e:  # surface, don't crash the thread silently
                     self._broadcaster.publish({"event": "error", "error": str(e)})
                 finally:

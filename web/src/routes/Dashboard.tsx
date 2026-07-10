@@ -21,6 +21,7 @@ export function Dashboard() {
   const [howto, setHowto] = useState<string | null>(null);
   const [howtoOpen, setHowtoOpen] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [library, setLibrary] = useState<{ index_enabled: number; thumbnail_width: 320 | 480 } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => api.status().then(setStatus).catch(() => {});
@@ -28,6 +29,7 @@ export function Dashboard() {
   useEffect(() => {
     refresh();
     api.health().then((h) => setCobaltOk(h.cobalt_reachable)).catch(() => setCobaltOk(false));
+    api.librarySettings().then(setLibrary).catch(() => {});
     const poll = window.setInterval(refresh, 2000);
     const off = api.events((e) => {
       setEvents((prev) => [e, ...prev].slice(0, 200));
@@ -53,6 +55,11 @@ export function Dashboard() {
     } catch (err) {
       setImportMsg(`Import failed: ${(err as Error).message}`);
     }
+  }
+
+  async function updateLibrary(settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480 }) {
+    const next = await api.updateLibrarySettings(settings).catch(() => null);
+    if (next) setLibrary(next);
   }
 
   async function act(a: "start" | "backfill" | "pause" | "continue" | "stop") {
@@ -104,6 +111,22 @@ export function Dashboard() {
             </pre>
           )}
           {importMsg && <p className="mt-3 text-sm text-ink-dim">{importMsg}</p>}
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <h2 className="text-sm font-semibold text-ink">Library indexing</h2>
+          <p className="mt-1 text-sm text-ink-dim">Creates thumbnails and records duration, dimensions, size, and media type during Sync so large Galleries stay fast.</p>
+          <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-ink">
+            <input type="checkbox" checked={library?.index_enabled === 1} onChange={(e) => updateLibrary({ index_enabled: e.target.checked })} />
+            <span><span className="font-medium">Build Gallery index</span><span className="mt-0.5 block text-ink-dim">Recommended. Turning this off saves CPU and thumbnail space, but removes stored thumbnails and media-property filters/sorts.</span></span>
+          </label>
+          <div className="mt-4">
+            <label className="block text-sm font-medium text-ink" htmlFor="thumbnail-quality">Thumbnail quality</label>
+            <select id="thumbnail-quality" disabled={library?.index_enabled !== 1} value={library?.thumbnail_width ?? 480} onChange={(e) => updateLibrary({ thumbnail_width: Number(e.target.value) as 320 | 480 })} className="mt-1 h-10 rounded-[var(--radius-control)] border border-line bg-elevated px-3 text-sm text-ink disabled:opacity-50">
+              <option value={480}>High — 480px WebP (about 275–825 MB / 11,000)</option>
+              <option value={320}>Standard — 320px WebP (about 165–550 MB / 11,000)</option>
+            </select>
+          </div>
         </section>
 
         {/* Controls */}

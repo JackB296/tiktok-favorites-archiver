@@ -106,20 +106,20 @@ If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATEL
 
 Exports expire. If links stop resolving partway through a run, request a fresh one.
 
-## Headless CLI
+## Headless archive command
 
 <details>
-<summary>Run the downloader without the web app</summary>
+<summary>Run the Archive without the web app</summary>
 
-The original command-line downloader still ships in the repo. It needs its own Cobalt instance (see Cobalt's [run-an-instance guide](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md)) and Python 3.9+ with FFmpeg on your `PATH`.
+The headless Archive command needs its own Cobalt instance (see Cobalt's [run-an-instance guide](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md)) and Python 3.9+ with FFmpeg on your `PATH`.
 
 ```bash
 python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-python tiktok.py --data-file user_data_tiktok.json
+python -m core sync --data-file user_data_tiktok.json
 ```
 
-Flags: `--cobalt-url`, `--data-file`, `--download-dir`, `--retry-delay`. Run `python tiktok.py --help` for the defaults.
+Flags: `--cobalt-url`, `--data-file`, `--download-dir`, `--db`, `--concurrency`. Run `python -m core sync --help` for the defaults.
 
 </details>
 

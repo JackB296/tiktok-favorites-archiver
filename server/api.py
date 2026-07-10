@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse
 
 from core import config, store, importer, cobalt
-from server import serializers
+from server.archive_items import ArchiveItems
 
 router = APIRouter(prefix="/api")
 
@@ -34,6 +34,10 @@ def _download_dir(request: Request):
     return request.app.state.download_dir
 
 
+def _archive_items(request: Request, conn):
+    return ArchiveItems(conn, _download_dir(request))
+
+
 @router.get("/health")
 def health():
     return {"status": "ok", "cobalt_reachable": cobalt.check_cobalt(config.COBALT_API_URL)}
@@ -48,14 +52,37 @@ def howto():
 def list_items(request: Request, search: str = None, kind: str = None, status: str = None):
     conn = _open(request)
     try:
-        rows = store.search_items(
-            conn,
+        return _archive_items(request, conn).list(
             query=search,
             kinds=[kind] if kind else None,
             statuses=[status] if status else None,
         )
-        download_dir = _download_dir(request)
-        return [serializers.item_to_public(row, download_dir) for row in rows]
+    finally:
+        conn.close()
+
+
+@router.get("/items/page")
+def page_items(
+    request: Request,
+    search: str = None,
+    kind: str = None,
+    status: str = None,
+    limit: int = 50,
+    cursor: int = None,
+    order: str = "latest",
+):
+    if order not in ("latest", "archive"):
+        raise HTTPException(status_code=400, detail="unknown item order")
+    conn = _open(request)
+    try:
+        return _archive_items(request, conn).page(
+            query=search,
+            kinds=[kind] if kind else None,
+            statuses=[status] if status else None,
+            limit=limit,
+            cursor=cursor,
+            order=order,
+        )
     finally:
         conn.close()
 
@@ -64,10 +91,10 @@ def list_items(request: Request, search: str = None, kind: str = None, status: s
 def get_item(request: Request, n: int):
     conn = _open(request)
     try:
-        row = store.get_item(conn, n)
-        if row is None:
+        item = _archive_items(request, conn).get(n)
+        if item is None:
             raise HTTPException(status_code=404, detail="item not found")
-        return serializers.item_to_public(row, _download_dir(request))
+        return item
     finally:
         conn.close()
 
@@ -91,6 +118,32 @@ async def import_export(request: Request, file: UploadFile = File(...)):
 @router.get("/status")
 def status(request: Request):
     return request.app.state.jobs.status()
+
+
+@router.get("/library-settings")
+def library_settings(request: Request):
+    conn = _open(request)
+    try:
+        return dict(store.get_library_settings(conn))
+    finally:
+        conn.close()
+
+
+@router.put("/library-settings")
+async def update_library_settings(request: Request):
+    body = await request.json()
+    conn = _open(request)
+    try:
+        store.set_library_settings(
+            conn,
+            index_enabled=body.get("index_enabled"),
+            thumbnail_width=body.get("thumbnail_width"),
+        )
+        return dict(store.get_library_settings(conn))
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    finally:
+        conn.close()
 
 
 @router.post("/sync/{action}")

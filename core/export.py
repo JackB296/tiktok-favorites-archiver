@@ -1,4 +1,4 @@
-"""Parse the TikTok data export and apply the resume bookmark (stdlib only)."""
+"""Parse a TikTok data export into Favorites (stdlib only)."""
 import json
 import re
 import logging
@@ -32,39 +32,5 @@ def load_all_favorites(file_path):
 
 
 def load_all_links(file_path):
-    """Every favorited link in processing order (drops the dates).
-
-    ``read_video_links`` layers the resume bookmark on top; the manifest backfill
-    uses it to map file N -> link N.
-    """
+    """Every favorited link in processing order (drops the dates)."""
     return [link for link, _favorited_at in load_all_favorites(file_path)]
-
-
-def read_last_downloaded_link(file_path):
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            last_link = f.read().strip()
-    except FileNotFoundError:
-        last_link = None
-    return last_link
-
-
-def write_last_downloaded_link(file_path, last_link):
-    try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(last_link)
-    except Exception as e:
-        logging.error(f"Error writing last downloaded link: {e}")
-
-
-def read_video_links(file_path):
-    modified_lines = load_all_links(file_path)
-
-    last_downloaded_link = read_last_downloaded_link(config.LAST_DOWNLOADED_LINK_FILE)
-    if last_downloaded_link:
-        try:
-            last_link_index = modified_lines.index(last_downloaded_link)
-            return modified_lines[last_link_index + 1:]
-        except ValueError:
-            return modified_lines
-    return modified_lines

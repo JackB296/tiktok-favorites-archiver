@@ -1,4 +1,4 @@
-"""Tests for server.serializers — item -> public JSON with media URLs (stdlib)."""
+"""Tests for the Archive-item projection module (stdlib only)."""
 import os
 import sys
 import tempfile
@@ -6,7 +6,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import store
-from server import serializers
+from server.archive_items import ArchiveItems
 
 
 def test_video_item_exposes_video_url():
@@ -14,7 +14,7 @@ def test_video_item_exposes_video_url():
     store.insert_item(conn, 1, "https://tiktok.com/a", kind="video", status="done")
     with tempfile.TemporaryDirectory() as dl:
         open(os.path.join(dl, "1.mp4"), "w").close()
-        d = serializers.item_to_public(store.get_item(conn, 1), dl)
+        d = ArchiveItems(conn, dl).get(1)
         assert d["video_url"] == "/media/1.mp4"
         assert d["images"] == [] and d["audio"] is None
         assert d["has_assets"] is False
@@ -29,7 +29,7 @@ def test_slideshow_item_lists_carousel_assets():
         os.makedirs(os.path.join(dl, "2"))
         for name in ("01.jpg", "02.jpg", "audio.mp3"):
             open(os.path.join(dl, "2", name), "w").close()
-        d = serializers.item_to_public(store.get_item(conn, 2), dl)
+        d = ArchiveItems(conn, dl).get(2)
         assert d["video_url"] == "/media/2.mp4"
         assert d["images"] == ["/media/2/01.jpg", "/media/2/02.jpg"]
         assert d["audio"] == "/media/2/audio.mp3"
@@ -40,8 +40,31 @@ def test_missing_media_yields_nulls():
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 3, "https://tiktok.com/c", kind="unknown", status="pending")
     with tempfile.TemporaryDirectory() as dl:
-        d = serializers.item_to_public(store.get_item(conn, 3), dl)
+        d = ArchiveItems(conn, dl).get(3)
         assert d["video_url"] is None and d["images"] == []
+
+
+def test_list_applies_search_and_projects_public_items():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://tiktok.com/cats")
+    store.set_metadata(conn, 1, "cats", "alice")
+
+    with tempfile.TemporaryDirectory() as dl:
+        data = ArchiveItems(conn, dl).list(query="cats")
+
+    assert [item["id"] for item in data] == [1]
+
+
+def test_page_returns_latest_items_and_a_cursor():
+    conn = store.init_db(store.connect(":memory:"))
+    for item_id in range(1, 4):
+        store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
+
+    with tempfile.TemporaryDirectory() as dl:
+        page = ArchiveItems(conn, dl).page(limit=2, order="latest")
+
+    assert [item["id"] for item in page["items"]] == [3, 2]
+    assert page["next_cursor"] == 2
 
 
 if __name__ == "__main__":

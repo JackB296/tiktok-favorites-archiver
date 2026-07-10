@@ -3,20 +3,23 @@ import { SpeakerSimpleHigh, SpeakerSimpleX, ArrowSquareOut, FilmReel } from "@ph
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
 import { PostMedia } from "../components/PostMedia";
+import { PlaybackSession, usePlayback } from "../components/playback";
 import { EmptyState, Skeleton } from "../components/ui";
 
 export function Viewer() {
   const [items, setItems] = useState<Item[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [activeId, setActiveId] = useState<number | null>(null);
-  const [muted, setMuted] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api
-      .items()
-      .then((list) => {
-        const playable = list.filter((i) => i.video_url || i.images.length);
+      .itemPage({ limit: 50, order: "latest" })
+      .then((page) => {
+        const playable = page.items.filter((i) => i.video_url || i.images.length);
         setItems(playable);
+        setNextCursor(page.next_cursor);
         if (playable[0]) setActiveId(playable[0].id);
       })
       .catch(() => setItems([]));
@@ -41,6 +44,18 @@ export function Viewer() {
     return () => io.disconnect();
   }, [items]);
 
+  useEffect(() => {
+    if (!items?.length || activeId == null || nextCursor == null || loadingMore) return;
+    if (items.findIndex((item) => item.id === activeId) < items.length - 3) return;
+    setLoadingMore(true);
+    api.itemPage({ limit: 50, cursor: nextCursor, order: "latest" })
+      .then((page) => {
+        setItems((current) => [...(current ?? []), ...page.items]);
+        setNextCursor(page.next_cursor);
+      })
+      .finally(() => setLoadingMore(false));
+  }, [activeId, items, loadingMore, nextCursor]);
+
   if (!items) {
     return (
       <div className="mx-auto max-w-md p-4">
@@ -58,6 +73,15 @@ export function Viewer() {
     );
   }
 
+  return (
+    <PlaybackSession initiallyMuted>
+      <ViewerFeed items={items} activeId={activeId} containerRef={containerRef} />
+    </PlaybackSession>
+  );
+}
+
+function ViewerFeed({ items, activeId, containerRef }: { items: Item[]; activeId: number | null; containerRef: React.RefObject<HTMLDivElement> }) {
+  const { muted, toggleMuted } = usePlayback();
   const Speaker = muted ? SpeakerSimpleX : SpeakerSimpleHigh;
 
   return (
@@ -68,10 +92,10 @@ export function Viewer() {
           data-id={item.id}
           className="relative flex h-full snap-start items-center justify-center"
         >
-          <PostMedia item={item} active={item.id === activeId} muted={muted} />
+          <PostMedia item={item} active={item.id === activeId} />
 
           <button
-            onClick={() => setMuted((m) => !m)}
+            onClick={toggleMuted}
             aria-label={muted ? "Unmute" : "Mute"}
             className="absolute right-4 top-4 rounded-full bg-black/40 p-2.5 text-white backdrop-blur-sm transition hover:bg-black/60 active:translate-y-px"
           >

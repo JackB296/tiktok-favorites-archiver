@@ -1,4 +1,4 @@
-"""Tests for core.export — export parsing + resume bookmark (stdlib only).
+"""Tests for core.export — export parsing (stdlib only).
 
 Runnable two ways: `python3 -m pytest tests/test_export.py` or, when pytest
 isn't installed, `python3 tests/test_export.py` (self-contained runner below).
@@ -10,7 +10,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import config, export
+from core import export
 
 
 def _make_export(path, links):
@@ -40,23 +40,6 @@ def test_load_all_links_skips_items_without_link():
             json.dump(data, f)
         assert export.load_all_links(p) == ["https://tiktok.com/x"]
 
-
-def test_read_video_links_resume():
-    old = config.LAST_DOWNLOADED_LINK_FILE
-    with tempfile.TemporaryDirectory() as d:
-        p = os.path.join(d, "e.json")
-        bm = os.path.join(d, "last.txt")
-        _make_export(p, ["L5", "L4", "L3", "L2", "L1"])  # reversed -> L1..L5
-        config.LAST_DOWNLOADED_LINK_FILE = bm
-        try:
-            # A fresh read must NOT write the bookmark (the resume-bug regression).
-            assert export.read_video_links(p) == ["L1", "L2", "L3", "L4", "L5"]
-            assert not os.path.exists(bm)
-            # After finishing L2, resume continues from L3.
-            export.write_last_downloaded_link(bm, "L2")
-            assert export.read_video_links(p) == ["L3", "L4", "L5"]
-        finally:
-            config.LAST_DOWNLOADED_LINK_FILE = old
 
 
 if __name__ == "__main__":

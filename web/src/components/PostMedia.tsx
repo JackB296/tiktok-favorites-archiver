@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { CaretLeft, CaretRight } from "@phosphor-icons/react";
 import type { Item } from "../lib/types";
 import { cx } from "./ui";
+import { usePlayback } from "./playback";
 
 /**
  * Renders a post's media, letterboxed on black (matching the Plex/slideshow look):
  * videos autoplay while `active`; slideshows auto-advance (2.5s) with their audio,
  * plus manual prev/next. Nothing plays unless `active`.
  */
-export function PostMedia({ item, active, muted }: { item: Item; active: boolean; muted: boolean }) {
+export function PostMedia({ item, active }: { item: Item; active: boolean }) {
+  const { muted } = usePlayback();
   if (item.video_url) return <VideoMedia src={item.video_url} active={active} muted={muted} />;
   if (item.images.length) return <SlideMedia images={item.images} audio={item.audio} active={active} muted={muted} />;
   return <div className="flex h-full w-full items-center justify-center text-sm text-ink-faint">no media yet</div>;

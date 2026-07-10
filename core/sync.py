@@ -12,14 +12,12 @@ orchestration logic are unit-testable with a fake ``Deps``.
 """
 import os
 import time
-import shutil
 import logging
-import tempfile
 import threading
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 
-from core import config, store
+from core import config, indexer as archive_indexer, media, runs, store
 
 # Injectable work backends (real ones wired in build_default_deps).
 Deps = namedtuple("Deps", "resolve download_file build_slideshow save_assets default_audio")
@@ -76,31 +74,19 @@ def process_item(deps, download_dir, item):
         return {"status": "failed", "kind": "video", "error": "video download failed"}
 
     if kind == "slideshow":
-        images = result.images or []
-        if not images:
+        if not result.images:
             return {"status": "failed", "kind": "slideshow", "error": "no images in response"}
-        work = tempfile.mkdtemp(prefix="slides_")
-        try:
-            local = []
-            for idx, url in enumerate(images):
-                path = os.path.join(work, f"slide_{idx}.jpg")
-                if deps.download_file(url, path):
-                    local.append(path)
-            if not local:
-                return {"status": "failed", "kind": "slideshow", "error": "all images failed"}
-            if result.audio:
-                audio_tmp = os.path.join(work, "audio.mp3")
-                audio_path = audio_tmp if deps.download_file(result.audio, audio_tmp) else deps.default_audio
-            else:
-                audio_path = deps.default_audio
-            # Save the RAW images (+audio) for the web carousel before any padding.
-            deps.save_assets(download_dir, n, local, audio_path)
+
+        def encode(images, audio):
             out = os.path.join(download_dir, f"{n}.mp4")
-            if deps.build_slideshow(local, audio_path, out):
+            if deps.build_slideshow(images, audio, out):
                 return {"status": "done", "kind": "slideshow", "has_assets": 1}
             return {"status": "failed", "kind": "slideshow", "has_assets": 1, "error": "encode failed"}
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
+
+        outcome = media.recover_slideshow_assets(deps, download_dir, n, result, encode)
+        if outcome is None:
+            return {"status": "failed", "kind": "slideshow", "error": "all images failed"}
+        return outcome
 
     if kind == "error":       # Cobalt says the post is gone → don't retry
         return {"status": "expired", "kind": "unresolved", "error": _errstr(result.error)}
@@ -125,7 +111,8 @@ def build_default_deps(limiter=None):
 
 
 def run_sync(conn, download_dir, deps=None, concurrency=None, progress=None,
-             statuses=("pending", "failed"), wait=None):
+             statuses=("pending", "failed"), wait=None,
+             indexer=archive_indexer.index_pending_items, thumbnail_width=None):
     """Process all matching items. Honors run_state pause/continue/stop.
 
     Returns final counts-by-status. ``wait`` is the pause poll (injectable for tests).
@@ -144,8 +131,8 @@ def run_sync(conn, download_dir, deps=None, concurrency=None, progress=None,
 
     with db_lock:
         rs = store.get_run_state(conn)
+        library = store.get_library_settings(conn)
         eff_concurrency = int(concurrency or (rs["concurrency"] if rs else config.CONCURRENCY) or config.CONCURRENCY)
-        store.set_run_state(conn, state="running", phase="sync")
         items = store.items_by_status(conn, list(statuses))
 
     def handle(item):
@@ -155,21 +142,22 @@ def run_sync(conn, download_dir, deps=None, concurrency=None, progress=None,
             return
         with db_lock:
             store.set_status(conn, item["id"], "downloading")
-        outcome = process_item(deps, download_dir, item)
+        try:
+            outcome = process_item(deps, download_dir, item)
+        except Exception as error:
+            logging.exception("Archive-media work failed for item %s", item["id"])
+            outcome = {"status": "failed", "kind": "unknown", "error": _errstr(error)}
         with db_lock:
-            store.set_status(conn, item["id"], outcome["status"], error=outcome.get("error"))
-            if outcome.get("kind"):
-                store.set_kind(conn, item["id"], outcome["kind"])
-            if outcome.get("has_assets"):
-                store.set_has_assets(conn, item["id"], True)
+            store.record_work_outcome(conn, item["id"], outcome)
         if progress:
             progress({"id": item["id"], **outcome})
 
     _drive(items, eff_concurrency, state, wait, handle)
 
-    final = "stopped" if state() in _HALT else "idle"
+    if indexer is not None and library["index_enabled"] and state() not in _HALT:
+        indexer(conn, download_dir, thumbnail_width or library["thumbnail_width"])
+
     with db_lock:
-        store.set_run_state(conn, state=final, phase=None)
         return store.counts_by_status(conn)
 
 
@@ -180,27 +168,16 @@ def backfill_item(deps, download_dir, item):
     if kind == "video":
         return {"kind": "video", "has_assets": 0}
     if kind == "slideshow":
-        images = result.images or []
-        if not images:
+        outcome = media.recover_slideshow_assets(
+            deps,
+            download_dir,
+            item["id"],
+            result,
+            lambda _images, _audio: {"kind": "slideshow", "has_assets": 1},
+        )
+        if outcome is None:
             return {"kind": "slideshow", "has_assets": 0}
-        work = tempfile.mkdtemp(prefix="backfill_")
-        try:
-            local = []
-            for idx, url in enumerate(images):
-                path = os.path.join(work, f"slide_{idx}.jpg")
-                if deps.download_file(url, path):
-                    local.append(path)
-            if not local:
-                return {"kind": "slideshow", "has_assets": 0}
-            if result.audio:
-                audio_tmp = os.path.join(work, "audio.mp3")
-                audio_path = audio_tmp if deps.download_file(result.audio, audio_tmp) else deps.default_audio
-            else:
-                audio_path = deps.default_audio
-            deps.save_assets(download_dir, item["id"], local, audio_path)
-            return {"kind": "slideshow", "has_assets": 1}
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
+        return outcome
     if kind == "error":
         return {"kind": "unresolved", "has_assets": 0}
     return {"kind": "unknown", "has_assets": 0}
@@ -235,7 +212,6 @@ def run_backfill(conn, download_dir, deps=None, concurrency=None, progress=None,
     with db_lock:
         rs = store.get_run_state(conn)
         eff_concurrency = int(concurrency or (rs["concurrency"] if rs else config.CONCURRENCY) or config.CONCURRENCY)
-        store.set_run_state(conn, state="running", phase="backfill")
         items = items_needing_backfill(conn)
 
     def handle(item):
@@ -245,17 +221,13 @@ def run_backfill(conn, download_dir, deps=None, concurrency=None, progress=None,
             return
         outcome = backfill_item(deps, download_dir, item)
         with db_lock:
-            if outcome.get("kind"):
-                store.set_kind(conn, item["id"], outcome["kind"])
-            store.set_has_assets(conn, item["id"], bool(outcome.get("has_assets")))
+            store.record_asset_recovery(conn, item["id"], outcome)
         if progress:
             progress({"id": item["id"], **outcome})
 
     _drive(items, eff_concurrency, state, wait, handle)
 
-    final = "stopped" if state() in _HALT else "idle"
     with db_lock:
-        store.set_run_state(conn, state=final, phase=None)
         return {"with_assets": sum(1 for r in store.all_items(conn) if r["has_assets"] == 1)}
 
 
@@ -287,7 +259,14 @@ def run_cli(argv=None):
     def progress(event):
         logging.info(f"[{event['id']}] {event['status']} ({event.get('kind')})")
 
-    counts = run_sync(conn, config.DOWNLOAD_DIR, concurrency=args.concurrency, progress=progress)
+    counts = runs.execute(
+        conn,
+        "sync",
+        run_sync,
+        config.DOWNLOAD_DIR,
+        concurrency=args.concurrency,
+        progress=progress,
+    )
     logging.info(f"Sync complete: {counts}")
 
 
@@ -321,5 +300,12 @@ def run_backfill_cli(argv=None):
     def progress(event):
         logging.info(f"[{event['id']}] backfill: kind={event.get('kind')} assets={event.get('has_assets')}")
 
-    result = run_backfill(conn, config.DOWNLOAD_DIR, concurrency=args.concurrency, progress=progress)
+    result = runs.execute(
+        conn,
+        "backfill",
+        run_backfill,
+        config.DOWNLOAD_DIR,
+        concurrency=args.concurrency,
+        progress=progress,
+    )
     logging.info(f"Backfill complete: {result}")

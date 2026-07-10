@@ -95,6 +95,25 @@ def test_unknown_runner_returns_false():
         assert jm.start("nope") is False
 
 
+def test_runner_failure_is_persisted_and_broadcast():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+
+        def failing_runner(*_args, **_kwargs):
+            raise RuntimeError("resolver crashed")
+
+        jm = jobs.JobManager(dbp, d, runners={"sync": failing_runner})
+        q = jm.subscribe()
+        assert jm.start("sync") is True
+
+        events = _drain_until_complete(q)
+        assert events[0] == {"event": "error", "error": "resolver crashed"}
+        assert events[-1] == {"event": "complete"}
+        assert jm.status()["state"] == "failed"
+        assert jm.status()["phase"] == "sync"
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

@@ -58,6 +58,52 @@ def test_status_kind_assets_metadata_transitions():
     assert store.get_item(conn, 1)["error"] == "boom"
 
 
+def test_record_work_outcome_updates_lifecycle_fields_together():
+    conn = _db()
+    store.insert_item(conn, 1, "a")
+
+    store.record_work_outcome(
+        conn,
+        1,
+        {"status": "done", "kind": "slideshow", "has_assets": 1},
+    )
+
+    row = store.get_item(conn, 1)
+    assert row["status"] == "done"
+    assert row["kind"] == "slideshow"
+    assert row["has_assets"] == 1
+    assert row["error"] is None
+
+
+def test_record_asset_recovery_keeps_download_status():
+    conn = _db()
+    store.insert_item(conn, 1, "a", status="done")
+
+    store.record_asset_recovery(conn, 1, {"kind": "slideshow", "has_assets": 1})
+
+    row = store.get_item(conn, 1)
+    assert row["status"] == "done"
+    assert row["kind"] == "slideshow"
+    assert row["has_assets"] == 1
+
+
+def test_media_index_is_persisted_and_queryable():
+    conn = _db()
+    store.insert_item(conn, 1, "a", status="done")
+
+    store.record_media_index(
+        conn,
+        1,
+        {"duration_s": 42.5, "width": 1080, "height": 1920, "codec": "h264", "file_size": 123, "thumbnail_path": ".archive/thumbnails/1.webp"},
+        fingerprint="123:1000",
+    )
+
+    row = store.get_item(conn, 1)
+    assert row["duration_s"] == 42.5
+    assert row["thumbnail_path"] == ".archive/thumbnails/1.webp"
+    assert [item["id"] for item in store.items_needing_index(conn)] == []
+
+
 def test_items_by_status_ordered():
     conn = _db()
     for n in (3, 1, 2):
@@ -87,6 +133,27 @@ def test_search_items():
     assert [r["id"] for r in store.search_items(conn, kinds=["slideshow"])] == [2]
     assert [r["id"] for r in store.search_items(conn, statuses=["done"])] == [1]
     assert [r["id"] for r in store.search_items(conn)] == [1, 2]                     # no filter
+
+
+def test_page_items_returns_latest_first_with_a_cursor():
+    conn = _db()
+    for item_id in range(1, 6):
+        store.insert_item(conn, item_id, f"link{item_id}", status="done")
+
+    first = store.page_items(conn, limit=2, order="latest")
+    second = store.page_items(conn, limit=2, order="latest", cursor=first[-1]["id"])
+
+    assert [row["id"] for row in first] == [5, 4]
+    assert [row["id"] for row in second] == [3, 2]
+
+
+def test_library_index_settings_default_to_high_enabled():
+    conn = _db()
+
+    settings = store.get_library_settings(conn)
+
+    assert settings["index_enabled"] == 1
+    assert settings["thumbnail_width"] == 480
 
 
 if __name__ == "__main__":

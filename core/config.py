@@ -14,15 +14,11 @@ HEADERS = {
     "Accept": "application/json",
     "Content-Type": "application/json",
 }
-RETRY_DELAY = 0.5  # Seconds between each download attempt
 DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR", "downloads")  # Directory to download videos
-IMG_DIR = "img_dir"  # Temporary directory for creating slideshows
-LAST_DOWNLOADED_LINK_FILE = "last_downloaded_link.txt"  # resume bookmark (last completed link)
 VIDEO_LINKS_FILE = "user_data_tiktok.json"  # TikTok data export
 MANIFEST_FILE = "manifest.csv"  # provenance sidecar (lives inside DOWNLOAD_DIR)
 DB_FILE = os.environ.get("DB_FILE", os.path.join("data", "archive.db"))  # SQLite state store
 DURATION_PER_IMAGE = 2.5  # Seconds each slide is shown in a slideshow
-TARGET_SIZE = (1280, 720)  # Legacy slideshow frame size (superseded by the new encoder)
 DEFAULT_AUDIO = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, "default.mp3")
 )  # bundled fallback audio (repo root)

@@ -8,7 +8,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import store, sync, cobalt
+from core import cobalt, runs, store, sync
 
 
 def _fake_deps(results, download_ok=True, encode_ok=True):
@@ -39,6 +39,11 @@ def _seed(conn, links):
         store.upsert_link(conn, link)
 
 
+def _run_sync(conn, download_dir, **kwargs):
+    kwargs.setdefault("indexer", lambda *_args: {"indexed": 0, "failed": 0})
+    return runs.execute(conn, "sync", sync.run_sync, download_dir, **kwargs)
+
+
 def test_full_drain_status_mapping():
     conn = store.init_db(store.connect(":memory:"))
     results = {
@@ -50,7 +55,7 @@ def test_full_drain_status_mapping():
     }
     _seed(conn, ["v", "s", "e", "u", "t"])  # ids 1..5
     with tempfile.TemporaryDirectory() as dl:
-        counts = sync.run_sync(conn, dl, deps=_fake_deps(results), concurrency=1)
+        counts = _run_sync(conn, dl, deps=_fake_deps(results), concurrency=1)
         assert store.get_item(conn, 1)["status"] == "done"      # video
         assert store.get_item(conn, 2)["status"] == "done"      # slideshow
         assert store.get_item(conn, 2)["has_assets"] == 1
@@ -67,8 +72,54 @@ def test_video_download_failure_is_retryable():
     _seed(conn, ["v"])
     results = {"v": cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel")}
     with tempfile.TemporaryDirectory() as dl:
-        sync.run_sync(conn, dl, deps=_fake_deps(results, download_ok=False), concurrency=1)
+        _run_sync(conn, dl, deps=_fake_deps(results, download_ok=False), concurrency=1)
         assert store.get_item(conn, 1)["status"] == "failed"
+
+
+def test_slideshow_image_download_failure_keeps_its_specific_error():
+    result = cobalt.Result("slideshow", None, ["http://x/1.jpg"], None, None, "picker")
+    deps = _fake_deps({"s": result}, download_ok=False)
+
+    with tempfile.TemporaryDirectory() as dl:
+        outcome = sync.process_item(deps, dl, {"id": 1, "link": "s"})
+
+    assert outcome["error"] == "all images failed"
+
+
+def test_unexpected_item_error_is_recorded_as_retryable_failure():
+    conn = store.init_db(store.connect(":memory:"))
+    _seed(conn, ["broken"])
+
+    def fail_to_resolve(_link):
+        raise RuntimeError("resolver crashed")
+
+    deps = sync.Deps(fail_to_resolve, lambda *_args: True, lambda *_args: True, lambda *_args: None, "/default.mp3")
+    with tempfile.TemporaryDirectory() as dl:
+        _run_sync(conn, dl, deps=deps, concurrency=1)
+
+    item = store.get_item(conn, 1)
+    assert item["status"] == "failed"
+    assert item["error"] == "resolver crashed"
+    assert store.get_run_state(conn)["state"] == "idle"
+
+
+def test_sync_indexes_finished_media_by_default():
+    conn = store.init_db(store.connect(":memory:"))
+    _seed(conn, ["v"])
+    result = cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel")
+    calls = []
+
+    with tempfile.TemporaryDirectory() as dl:
+        _run_sync(
+            conn,
+            dl,
+            deps=_fake_deps({"v": result}),
+            concurrency=1,
+            indexer=lambda _conn, directory, thumbnail_width: calls.append((directory, thumbnail_width)),
+        )
+
+    assert len(calls) == 1
+    assert calls[0][1] == 480
 
 
 def test_stop_halts_remaining_items():
@@ -81,7 +132,7 @@ def test_stop_halts_remaining_items():
         store.set_run_state(conn, state="stopping")
 
     with tempfile.TemporaryDirectory() as dl:
-        sync.run_sync(conn, dl, deps=_fake_deps(results), concurrency=1, progress=progress)
+        _run_sync(conn, dl, deps=_fake_deps(results), concurrency=1, progress=progress)
     assert store.get_item(conn, 1)["status"] == "done"
     assert store.get_item(conn, 2)["status"] == "pending"   # never started
     assert store.get_item(conn, 3)["status"] == "pending"
@@ -107,7 +158,7 @@ def test_pause_then_continue():
         store.set_run_state(conn, state="running")
 
     with tempfile.TemporaryDirectory() as dl:
-        sync.run_sync(conn, dl, deps=_fake_deps(results), concurrency=1, progress=progress, wait=wait)
+        _run_sync(conn, dl, deps=_fake_deps(results), concurrency=1, progress=progress, wait=wait)
     assert calls["waits"] >= 1                      # the pause gate was observed, then released
     assert store.get_item(conn, 1)["status"] == "done"
     assert store.get_item(conn, 2)["status"] == "done"

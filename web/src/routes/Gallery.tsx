@@ -11,6 +11,7 @@ import {
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
 import { PostMedia } from "../components/PostMedia";
+import { PlaybackSession, usePlayback } from "../components/playback";
 import { EmptyState, Skeleton, cx } from "../components/ui";
 
 const FILTERS = [
@@ -23,14 +24,20 @@ export function Gallery() {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState("");
   const [items, setItems] = useState<Item[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<Item | null>(null);
 
   useEffect(() => {
     let alive = true;
     const t = window.setTimeout(() => {
       api
-        .items({ search, kind })
-        .then((list) => alive && setItems(list))
+        .itemPage({ search, kind, limit: 50, order: "latest" })
+        .then((page) => {
+          if (!alive) return;
+          setItems(page.items);
+          setNextCursor(page.next_cursor);
+        })
         .catch(() => alive && setItems([]));
     }, 200); // debounce typing
     return () => {
@@ -38,6 +45,18 @@ export function Gallery() {
       window.clearTimeout(t);
     };
   }, [search, kind]);
+
+  async function loadMore() {
+    if (nextCursor == null || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await api.itemPage({ search, kind, limit: 50, cursor: nextCursor, order: "latest" });
+      setItems((current) => [...(current ?? []), ...page.items]);
+      setNextCursor(page.next_cursor);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -81,11 +100,24 @@ export function Gallery() {
           hint="Try a different search, or import your export and run a sync."
         />
       ) : (
-        <Grid>
-          {items.map((it) => (
-            <Thumb key={it.id} item={it} onClick={() => setSelected(it)} />
-          ))}
-        </Grid>
+        <>
+          <Grid>
+            {items.map((it) => (
+              <Thumb key={it.id} item={it} onClick={() => setSelected(it)} />
+            ))}
+          </Grid>
+          {nextCursor != null && (
+            <div className="mt-6 flex justify-center">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="rounded-[var(--radius-control)] border border-line px-4 py-2 text-sm text-ink-dim transition hover:text-ink disabled:opacity-50"
+              >
+                {loadingMore ? "Loading…" : "Load more"}
+              </button>
+            </div>
+          )}
+        </>
       )}
 
       {selected && <Lightbox item={selected} onClose={() => setSelected(null)} />}
@@ -104,19 +136,18 @@ function Thumb({ item, onClick }: { item: Item; onClick: () => void }) {
       onClick={onClick}
       className="group relative aspect-[9/16] overflow-hidden rounded-[var(--radius-media)] bg-black text-left"
     >
-      {item.images[0] ? (
+      {item.thumbnail_url ? (
         <img
-          src={item.images[0]}
+          src={item.thumbnail_url}
           alt=""
           loading="lazy"
           className="h-full w-full object-cover opacity-90 transition group-hover:opacity-100"
         />
-      ) : item.video_url ? (
-        <video
-          src={item.video_url}
-          muted
-          playsInline
-          preload="metadata"
+      ) : item.images[0] ? (
+        <img
+          src={item.images[0]}
+          alt=""
+          loading="lazy"
           className="h-full w-full object-cover opacity-90 transition group-hover:opacity-100"
         />
       ) : (
@@ -138,7 +169,15 @@ function Thumb({ item, onClick }: { item: Item; onClick: () => void }) {
 }
 
 function Lightbox({ item, onClose }: { item: Item; onClose: () => void }) {
-  const [muted, setMuted] = useState(false);
+  return (
+    <PlaybackSession initiallyMuted={false}>
+      <LightboxContent item={item} onClose={onClose} />
+    </PlaybackSession>
+  );
+}
+
+function LightboxContent({ item, onClose }: { item: Item; onClose: () => void }) {
+  const { muted, toggleMuted } = usePlayback();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -160,9 +199,9 @@ function Lightbox({ item, onClose }: { item: Item; onClose: () => void }) {
         className="relative flex h-full max-h-[90dvh] w-full max-w-md items-center justify-center"
         onClick={(e) => e.stopPropagation()}
       >
-        <PostMedia item={item} active muted={muted} />
+        <PostMedia item={item} active />
         <button
-          onClick={() => setMuted((m) => !m)}
+          onClick={toggleMuted}
           aria-label={muted ? "Unmute" : "Mute"}
           className="absolute right-3 top-3 rounded-full bg-black/40 p-2 text-white backdrop-blur-sm transition hover:bg-black/60"
         >

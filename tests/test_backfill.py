@@ -5,7 +5,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import store, sync, cobalt
+from core import cobalt, runs, store, sync
 
 
 def _fake_deps(results):
@@ -49,11 +49,15 @@ def _seed(conn):
     store.set_has_assets(conn, 5, True)
 
 
+def _run_backfill(conn, download_dir, **kwargs):
+    return runs.execute(conn, "backfill", sync.run_backfill, download_dir, **kwargs)
+
+
 def test_backfill_recovers_slideshow_assets_and_classifies():
     conn = store.init_db(store.connect(":memory:"))
     _seed(conn)
     with tempfile.TemporaryDirectory() as dl:
-        result = sync.run_backfill(conn, dl, deps=_fake_deps(_results()), concurrency=1)
+        result = _run_backfill(conn, dl, deps=_fake_deps(_results()), concurrency=1)
         assert store.get_item(conn, 1)["kind"] == "video" and store.get_item(conn, 1)["has_assets"] == 0
         assert store.get_item(conn, 2)["kind"] == "slideshow" and store.get_item(conn, 2)["has_assets"] == 1
         assert sorted(os.listdir(os.path.join(dl, "2"))) == ["01.jpg", "02.jpg", "audio.mp3"]
@@ -68,7 +72,7 @@ def test_backfill_is_resumable():
     conn = store.init_db(store.connect(":memory:"))
     _seed(conn)
     with tempfile.TemporaryDirectory() as dl:
-        sync.run_backfill(conn, dl, deps=_fake_deps(_results()), concurrency=1)
+        _run_backfill(conn, dl, deps=_fake_deps(_results()), concurrency=1)
         # After a run, only the dead link still needs backfill (video classified,
         # slideshow has assets, local:// skipped, id5 already had assets).
         assert [r["id"] for r in sync.items_needing_backfill(conn)] == [3]
