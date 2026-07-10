@@ -279,6 +279,33 @@ def test_page_items_filters_media_codec_and_resolution_bounds():
     assert [row["id"] for row in rows] == [1]
 
 
+def test_page_items_filters_raw_assets_and_index_health():
+    conn = _db()
+    for item_id in range(1, 4):
+        store.insert_item(conn, item_id, f"link{item_id}", status="done")
+    store.set_has_assets(conn, 1, True)
+    store.record_media_index(conn, 1, {"thumbnail_path": "x", "duration_s": 1, "width": 1, "height": 1, "codec": "h264", "file_size": 1}, "x")
+    store.record_media_index_error(conn, 3, "ffprobe failed")
+
+    assert [row["id"] for row in store.page_items(conn, has_assets=True)] == [1]
+    assert [row["id"] for row in store.page_items(conn, index_state="missing")] == [2]
+    assert [row["id"] for row in store.page_items(conn, index_state="failed")] == [3]
+
+
+def test_library_statistics_summarize_indexed_archive_media():
+    conn = _db()
+    store.insert_item(conn, 1, "one", kind="video", status="done")
+    store.insert_item(conn, 2, "two", kind="slideshow", status="done")
+    store.insert_item(conn, 3, "three", kind="video", status="pending")
+    store.record_media_index(conn, 1, {"thumbnail_path": "one", "duration_s": 60, "width": 1, "height": 1, "codec": "h264", "file_size": 100}, "one")
+    store.record_media_index(conn, 2, {"thumbnail_path": "two", "duration_s": 90, "width": 1, "height": 1, "codec": "h264", "file_size": 200}, "two")
+
+    assert store.library_statistics(conn) == {
+        "favorites": 3, "ready": 2, "videos": 2, "slideshows": 1,
+        "indexed": 2, "duration_s": 150.0, "media_size": 300,
+    }
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

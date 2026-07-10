@@ -32,7 +32,7 @@ function filtersToSearchParams(filters: GalleryPresetFilters) {
     min_size: filters.minSize, max_size: filters.maxSize,
     min_width: filters.minWidth, max_width: filters.maxWidth,
     min_height: filters.minHeight, max_height: filters.maxHeight, codec: filters.codec,
-    from: filters.dateFrom, to: filters.dateTo, orientation: filters.orientation,
+    from: filters.dateFrom, to: filters.dateTo, orientation: filters.orientation, assets: filters.assets, index: filters.indexState,
     include: filters.include, exclude: filters.exclude,
   };
   Object.entries(values).forEach(([key, value]) => { if (value && !(key === "sort" && value === "latest")) params.set(key, value); });
@@ -63,6 +63,8 @@ export function Gallery() {
   const [dateFrom, setDateFrom] = useState(() => fromUrl("from"));
   const [dateTo, setDateTo] = useState(() => fromUrl("to"));
   const [orientation, setOrientation] = useState(() => fromUrl("orientation"));
+  const [assets, setAssets] = useState(() => fromUrl("assets"));
+  const [indexState, setIndexState] = useState(() => fromUrl("index"));
   const [include, setInclude] = useState(() => fromUrl("include"));
   const [exclude, setExclude] = useState(() => fromUrl("exclude"));
   const [presets, setPresets] = useState<GalleryPreset[]>([]);
@@ -85,6 +87,8 @@ export function Gallery() {
     date_from: dateFrom || undefined,
     date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
     orientation: orientation || undefined,
+    assets: (assets === "with" || assets === "without" ? assets : undefined) as "with" | "without" | undefined,
+    index_state: (indexState === "indexed" || indexState === "missing" || indexState === "failed" ? indexState : undefined) as "indexed" | "missing" | "failed" | undefined,
     include, exclude,
   };
 
@@ -104,19 +108,19 @@ export function Gallery() {
       alive = false;
       window.clearTimeout(t);
     };
-  }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, codec, dateFrom, dateTo, orientation, include, exclude]);
+  }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, codec, dateFrom, dateTo, orientation, assets, indexState, include, exclude]);
 
   useEffect(() => {
     api.galleryPresets().then(setPresets).catch(() => setPresetMessage("Could not load saved filters."));
   }, []);
 
   function currentFilters(): GalleryPresetFilters {
-    return { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, codec, dateFrom, dateTo, orientation, include, exclude };
+    return { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, codec, dateFrom, dateTo, orientation, assets, indexState, include, exclude };
   }
 
   useEffect(() => {
     setSearchParams(filtersToSearchParams(currentFilters()), { replace: true });
-  }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, codec, dateFrom, dateTo, orientation, include, exclude, setSearchParams]);
+  }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, codec, dateFrom, dateTo, orientation, assets, indexState, include, exclude, setSearchParams]);
 
   function applyPreset(filters: GalleryPresetFilters) {
     setSearch(filters.search ?? "");
@@ -135,6 +139,8 @@ export function Gallery() {
     setDateFrom(filters.dateFrom ?? "");
     setDateTo(filters.dateTo ?? "");
     setOrientation(filters.orientation ?? "");
+    setAssets(filters.assets ?? "");
+    setIndexState(filters.indexState ?? "");
     setInclude(filters.include ?? "");
     setExclude(filters.exclude ?? "");
   }
@@ -195,7 +201,7 @@ export function Gallery() {
     setSearch(""); setKind(""); setStatus(""); setOrder("latest");
     setMinDuration(""); setMaxDuration(""); setMinSize(""); setMaxSize("");
     setMinWidth(""); setMaxWidth(""); setMinHeight(""); setMaxHeight(""); setCodec("");
-    setDateFrom(""); setDateTo(""); setOrientation(""); setInclude(""); setExclude("");
+    setDateFrom(""); setDateTo(""); setOrientation(""); setAssets(""); setIndexState(""); setInclude(""); setExclude("");
     setSelectedPresetId("");
   }
 
@@ -210,7 +216,7 @@ export function Gallery() {
   addFilter(minWidth, `width ≥ ${minWidth}`, () => setMinWidth("")); addFilter(maxWidth, `width ≤ ${maxWidth}`, () => setMaxWidth(""));
   addFilter(minHeight, `height ≥ ${minHeight}`, () => setMinHeight("")); addFilter(maxHeight, `height ≤ ${maxHeight}`, () => setMaxHeight(""));
   addFilter(codec, `Codec: ${codec}`, () => setCodec("")); addFilter(dateFrom, `After: ${dateFrom}`, () => setDateFrom("")); addFilter(dateTo, `Before: ${dateTo}`, () => setDateTo(""));
-  addFilter(orientation, orientation, () => setOrientation("")); addFilter(include, `Include: ${include}`, () => setInclude("")); addFilter(exclude, `Exclude: ${exclude}`, () => setExclude(""));
+  addFilter(orientation, orientation, () => setOrientation("")); addFilter(assets, assets === "with" ? "Has raw assets" : "No raw assets", () => setAssets("")); addFilter(indexState, `Index: ${indexState}`, () => setIndexState("")); addFilter(include, `Include: ${include}`, () => setInclude("")); addFilter(exclude, `Exclude: ${exclude}`, () => setExclude(""));
 
   return (
     <div className="h-full overflow-y-auto">
@@ -271,6 +277,12 @@ export function Gallery() {
         </label>
         <label className="text-xs text-ink-dim">Orientation
           <select value={orientation} onChange={(e) => setOrientation(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any orientation</option><option value="portrait">Portrait</option><option value="landscape">Landscape</option><option value="square">Square</option></select>
+        </label>
+        <label className="text-xs text-ink-dim">Raw slideshow assets
+          <select value={assets} onChange={(e) => setAssets(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any asset state</option><option value="with">Has original assets</option><option value="without">No original assets</option></select>
+        </label>
+        <label className="text-xs text-ink-dim">Gallery index health
+          <select value={indexState} onChange={(e) => setIndexState(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any index state</option><option value="indexed">Indexed</option><option value="missing">Not indexed</option><option value="failed">Index failed</option></select>
         </label>
         <label className="text-xs text-ink-dim">Minimum duration (seconds)
           <input value={minDuration} onChange={(e) => setMinDuration(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
@@ -350,10 +362,26 @@ function Grid({ children, density }: { children: ReactNode; density: GalleryDens
   return <div className={cx("grid", density === "compact" ? "grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10" : "grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5")}>{children}</div>;
 }
 
+function formatDuration(seconds: number | null) {
+  if (seconds == null) return null;
+  const total = Math.round(seconds);
+  const minutes = Math.floor(total / 60);
+  return minutes ? `${minutes}:${String(total % 60).padStart(2, "0")}` : `${total}s`;
+}
+
+function formatSize(bytes: number | null) {
+  if (bytes == null) return null;
+  return bytes >= 1_000_000_000 ? `${(bytes / 1_000_000_000).toFixed(1)} GB` : `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
 function Thumb({ item, onClick }: { item: Item; onClick: () => void }) {
+  const duration = formatDuration(item.duration_s);
+  const resolution = item.media_width && item.media_height ? `${item.media_width}×${item.media_height}` : null;
+  const size = formatSize(item.media_size);
   return (
     <button
       onClick={onClick}
+      aria-label={`Play favorite #${item.id}${item.caption ? `: ${item.caption}` : ""}`}
       className="group relative aspect-[9/16] overflow-hidden rounded-[var(--radius-media)] bg-black text-left"
     >
       {item.thumbnail_url ? (
@@ -377,12 +405,14 @@ function Thumb({ item, onClick }: { item: Item; onClick: () => void }) {
       <span className="tabular absolute left-2 top-2 rounded bg-black/50 px-1.5 py-0.5 text-[10px] text-white/80">
         #{item.id}
       </span>
-      <span className="absolute right-2 top-2 rounded-full bg-black/40 p-1 text-white opacity-0 transition group-hover:opacity-100">
-        <Play size={12} weight="fill" />
-      </span>
+      <div className="absolute right-2 top-2 flex max-w-[65%] flex-col items-end gap-1 text-[10px] text-white/85">
+        {(duration || resolution) && <span className="rounded bg-black/50 px-1.5 py-0.5">{[duration, resolution].filter(Boolean).join(" · ")}</span>}
+        <span className="rounded-full bg-black/40 p-1 opacity-0 transition group-hover:opacity-100"><Play size={12} weight="fill" /></span>
+      </div>
       <div className="absolute inset-x-0 bottom-0 p-2.5">
         {item.author && <p className="truncate text-xs font-medium text-white">{item.author}</p>}
         {item.caption && <p className="truncate text-[11px] text-white/70">{item.caption}</p>}
+        {(item.media_codec || size) && <p className="mt-0.5 truncate text-[10px] text-white/55 opacity-0 transition group-hover:opacity-100">{[item.media_codec, size].filter(Boolean).join(" · ")}</p>}
       </div>
     </button>
   );

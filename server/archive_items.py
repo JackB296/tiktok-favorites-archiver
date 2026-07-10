@@ -26,7 +26,7 @@ class ArchiveItems:
         row = store.get_item(self._conn, item_id)
         return None if row is None else self._public(row)
 
-    def page(self, query=None, kinds=None, statuses=None, limit=50, cursor=None, order="latest", min_duration=None, max_duration=None, min_size=None, max_size=None, min_width=None, max_width=None, min_height=None, max_height=None, codecs=None, date_from=None, date_to=None, orientations=None, include=None, exclude=None):
+    def page(self, query=None, kinds=None, statuses=None, limit=50, cursor=None, order="latest", min_duration=None, max_duration=None, min_size=None, max_size=None, min_width=None, max_width=None, min_height=None, max_height=None, codecs=None, date_from=None, date_to=None, orientations=None, has_assets=None, index_state=None, include=None, exclude=None):
         rows = store.page_items(
             self._conn,
             query=query,
@@ -47,6 +47,8 @@ class ArchiveItems:
             date_from=date_from,
             date_to=date_to,
             orientations=orientations,
+            has_assets=has_assets,
+            index_state=index_state,
             include=include,
             exclude=exclude,
         )
@@ -71,6 +73,11 @@ class ArchiveItems:
             "status": row["status"],
             "favorited_at": row["favorited_at"],
             "has_assets": bool(row["has_assets"]),
+            "duration_s": row["duration_s"],
+            "media_width": row["media_width"],
+            "media_height": row["media_height"],
+            "media_codec": row["media_codec"],
+            "media_size": row["media_size"],
             "video_url": None,
             "images": [],
             "audio": None,

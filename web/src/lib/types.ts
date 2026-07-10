@@ -20,6 +20,11 @@ export interface Item {
   status: Status;
   favorited_at: string | null;
   has_assets: boolean;
+  duration_s: number | null;
+  media_width: number | null;
+  media_height: number | null;
+  media_codec: string | null;
+  media_size: number | null;
   video_url: string | null;
   images: string[];
   audio: string | null;
@@ -64,6 +69,16 @@ export interface LibrarySettings {
   index: { total: number; indexed: number; pending: number; failed: number };
 }
 
+export interface LibraryStatistics {
+  favorites: number;
+  ready: number;
+  videos: number;
+  slideshows: number;
+  indexed: number;
+  duration_s: number;
+  media_size: number;
+}
+
 export interface GalleryPresetFilters {
   search?: string;
   kind?: string;
@@ -81,6 +96,8 @@ export interface GalleryPresetFilters {
   dateFrom?: string;
   dateTo?: string;
   orientation?: string;
+  assets?: string;
+  indexState?: string;
   include?: string;
   exclude?: string;
 }

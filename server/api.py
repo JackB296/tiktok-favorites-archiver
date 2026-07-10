@@ -48,7 +48,7 @@ def _library_settings(conn):
 _GALLERY_PRESET_FIELDS = {
     "search", "kind", "status", "order", "minDuration", "maxDuration",
     "minSize", "maxSize", "minWidth", "maxWidth", "minHeight", "maxHeight", "codec",
-    "dateFrom", "dateTo", "orientation", "include", "exclude",
+    "dateFrom", "dateTo", "orientation", "assets", "indexState", "include", "exclude",
 }
 
 
@@ -144,11 +144,17 @@ def page_items(
     date_from: str = None,
     date_to: str = None,
     orientation: str = None,
+    assets: str = None,
+    index_state: str = None,
     include: str = None,
     exclude: str = None,
 ):
     if order not in ("latest", "archive", "size_desc", "duration_desc", "duration_asc", "favorite_date_desc", "favorite_date_asc"):
         raise HTTPException(status_code=400, detail="unknown item order")
+    if assets not in (None, "with", "without"):
+        raise HTTPException(status_code=400, detail="unknown assets filter")
+    if index_state not in (None, "indexed", "missing", "failed"):
+        raise HTTPException(status_code=400, detail="unknown index state")
     conn = _open(request)
     try:
         return _archive_items(request, conn).page(
@@ -170,6 +176,8 @@ def page_items(
             date_from=date_from,
             date_to=date_to,
             orientations=[term.strip() for term in (orientation or "").split(",") if term.strip()],
+            has_assets={"with": True, "without": False}.get(assets),
+            index_state=index_state,
             include=[term.strip() for term in (include or "").split(",") if term.strip()],
             exclude=[term.strip() for term in (exclude or "").split(",") if term.strip()],
         )
@@ -246,6 +254,15 @@ def library_settings(request: Request):
     conn = _open(request)
     try:
         return _library_settings(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/library-stats")
+def library_stats(request: Request):
+    conn = _open(request)
+    try:
+        return store.library_statistics(conn)
     finally:
         conn.close()
 

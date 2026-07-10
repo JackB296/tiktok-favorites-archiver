@@ -67,6 +67,21 @@ def test_page_returns_latest_items_and_a_cursor():
     assert page["next_cursor"] == 2
 
 
+def test_item_projects_indexed_media_facts():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://tiktok.com/1", kind="video", status="done")
+    store.record_media_index(conn, 1, {"thumbnail_path": "x", "duration_s": 83.5, "width": 1080, "height": 1920, "codec": "h264", "file_size": 12_500_000}, "x")
+
+    with tempfile.TemporaryDirectory() as dl:
+        item = ArchiveItems(conn, dl).get(1)
+
+    assert item["duration_s"] == 83.5
+    assert item["media_width"] == 1080
+    assert item["media_height"] == 1920
+    assert item["media_codec"] == "h264"
+    assert item["media_size"] == 12_500_000
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

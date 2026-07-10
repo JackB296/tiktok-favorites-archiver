@@ -340,6 +340,8 @@ def page_items(
     date_from=None,
     date_to=None,
     orientations=None,
+    has_assets=None,
+    index_state=None,
     include=None,
     exclude=None,
 ):
@@ -388,6 +390,16 @@ def page_items(
         selected = [orientation_sql[name] for name in orientations if name in orientation_sql]
         if selected:
             clauses.append("(" + " OR ".join(selected) + ")")
+    if has_assets is not None:
+        clauses.append("has_assets = ?")
+        params.append(1 if has_assets else 0)
+    index_filters = {
+        "indexed": "thumbnail_path IS NOT NULL",
+        "missing": "thumbnail_path IS NULL AND index_error IS NULL",
+        "failed": "index_error IS NOT NULL",
+    }
+    if index_state in index_filters:
+        clauses.append(index_filters[index_state])
     for term in include or []:
         clauses.append("(caption LIKE ? OR author LIKE ?)")
         params += [f"%{term}%", f"%{term}%"]
@@ -488,6 +500,32 @@ def library_index_status(conn):
         """
     ).fetchone()
     return {name: int(row[name] or 0) for name in ("total", "indexed", "pending", "failed")}
+
+
+def library_statistics(conn):
+    """Return lightweight Archive totals for the Sync overview."""
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS favorites,
+            SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS ready,
+            SUM(CASE WHEN kind = 'video' THEN 1 ELSE 0 END) AS videos,
+            SUM(CASE WHEN kind = 'slideshow' THEN 1 ELSE 0 END) AS slideshows,
+            SUM(CASE WHEN thumbnail_path IS NOT NULL THEN 1 ELSE 0 END) AS indexed,
+            SUM(COALESCE(duration_s, 0)) AS duration_s,
+            SUM(COALESCE(media_size, 0)) AS media_size
+        FROM item
+        """
+    ).fetchone()
+    return {
+        "favorites": int(row["favorites"] or 0),
+        "ready": int(row["ready"] or 0),
+        "videos": int(row["videos"] or 0),
+        "slideshows": int(row["slideshows"] or 0),
+        "indexed": int(row["indexed"] or 0),
+        "duration_s": float(row["duration_s"] or 0),
+        "media_size": int(row["media_size"] or 0),
+    }
 
 
 def set_library_settings(conn, index_enabled=None, thumbnail_width=None):

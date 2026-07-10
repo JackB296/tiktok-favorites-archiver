@@ -9,10 +9,19 @@ import {
   Question,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
-import type { RunStatus, ProgressEvent, Status, LibrarySettings } from "../lib/types";
+import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics } from "../lib/types";
 import { Button, StatusBadge, cx } from "../components/ui";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "expired"];
+
+function formatBytes(bytes: number) {
+  return bytes >= 1_000_000_000 ? `${(bytes / 1_000_000_000).toFixed(1)} GB` : `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
+function formatDuration(seconds: number) {
+  const hours = seconds / 3600;
+  return hours >= 1 ? `${hours.toFixed(hours >= 10 ? 0 : 1)} hours` : `${Math.round(seconds / 60)} min`;
+}
 
 export function Dashboard() {
   const [status, setStatus] = useState<RunStatus | null>(null);
@@ -22,16 +31,19 @@ export function Dashboard() {
   const [howtoOpen, setHowtoOpen] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [library, setLibrary] = useState<LibrarySettings | null>(null);
+  const [statistics, setStatistics] = useState<LibraryStatistics | null>(null);
   const [indexProgress, setIndexProgress] = useState<ProgressEvent | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => api.status().then(setStatus).catch(() => {});
   const refreshLibrary = () => api.librarySettings().then(setLibrary).catch(() => {});
+  const refreshStatistics = () => api.libraryStats().then(setStatistics).catch(() => {});
 
   useEffect(() => {
     refresh();
     api.health().then((h) => setCobaltOk(h.cobalt_reachable)).catch(() => setCobaltOk(false));
     refreshLibrary();
+    refreshStatistics();
     const poll = window.setInterval(refresh, 2000);
     const off = api.events((e) => {
       setEvents((prev) => [e, ...prev].slice(0, 200));
@@ -39,6 +51,7 @@ export function Dashboard() {
       if (e.event === "complete") {
         refresh();
         refreshLibrary();
+        refreshStatistics();
       }
     });
     return () => {
@@ -117,6 +130,17 @@ export function Dashboard() {
             </pre>
           )}
           {importMsg && <p className="mt-3 text-sm text-ink-dim">{importMsg}</p>}
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <h2 className="text-sm font-semibold text-ink">Archive at a glance</h2>
+          <p className="mt-1 text-sm text-ink-dim">Totals use downloaded and indexed media already present in this archive.</p>
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat label="Favorites" value={statistics?.favorites ?? 0} hint={`${statistics?.ready ?? 0} ready`} />
+            <Stat label="Media mix" value={`${statistics?.videos ?? 0} videos`} hint={`${statistics?.slideshows ?? 0} slideshows`} />
+            <Stat label="Indexed runtime" value={formatDuration(statistics?.duration_s ?? 0)} hint={`${statistics?.indexed ?? 0} indexed`} />
+            <Stat label="Indexed media" value={formatBytes(statistics?.media_size ?? 0)} hint="video files only" />
+          </div>
         </section>
 
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
@@ -218,4 +242,8 @@ export function Dashboard() {
       </div>
     </div>
   );
+}
+
+function Stat({ label, value, hint }: { label: string; value: string | number; hint: string }) {
+  return <div className="rounded-[var(--radius-control)] border border-line bg-elevated px-3 py-3"><p className="text-xs text-ink-faint">{label}</p><p className="mt-1 truncate text-lg font-semibold text-ink">{value}</p><p className="mt-0.5 truncate text-xs text-ink-dim">{hint}</p></div>;
 }
