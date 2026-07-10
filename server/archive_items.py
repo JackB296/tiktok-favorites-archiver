@@ -26,7 +26,7 @@ class ArchiveItems:
         row = store.get_item(self._conn, item_id)
         return None if row is None else self._public(row)
 
-    def page(self, query=None, kinds=None, statuses=None, limit=50, cursor=None, order="latest", min_duration=None, max_duration=None, min_size=None, max_size=None, min_width=None, max_width=None, min_height=None, max_height=None, codecs=None, date_from=None, date_to=None, orientations=None, has_assets=None, index_state=None, include=None, exclude=None, seed=None):
+    def page(self, query=None, kinds=None, statuses=None, limit=50, cursor=None, order="latest", min_duration=None, max_duration=None, min_size=None, max_size=None, min_width=None, max_width=None, min_height=None, max_height=None, codecs=None, date_from=None, date_to=None, orientations=None, has_assets=None, index_state=None, include=None, exclude=None, min_attempts=None, max_attempts=None, recovery=False, seed=None):
         limit = max(1, min(int(limit), 100))  # match the store's clamp, or next_cursor lies
         rows = store.page_items(
             self._conn,
@@ -52,6 +52,9 @@ class ArchiveItems:
             index_state=index_state,
             include=include,
             exclude=exclude,
+            min_attempts=min_attempts,
+            max_attempts=max_attempts,
+            recovery=recovery,
             seed=seed,
         )
         items = [self._public(row) for row in rows]
@@ -73,6 +76,10 @@ class ArchiveItems:
             "author": row["author"],
             "kind": row["kind"],
             "status": row["status"],
+            "error": row["error"],
+            "attempt_count": row["attempt_count"],
+            "last_attempt_at": row["last_attempt_at"],
+            "archive_missing": bool(row["archive_missing"]),
             "favorited_at": row["favorited_at"],
             "has_assets": bool(row["has_assets"]),
             "duration_s": row["duration_s"],

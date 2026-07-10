@@ -13,7 +13,7 @@ from queue import Empty
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse
 
-from core import config, store, importer, cobalt, verify
+from core import config, store, importer, cobalt, verify, inventory
 from server.archive_items import ArchiveItems
 
 router = APIRouter(prefix="/api")
@@ -49,15 +49,62 @@ _GALLERY_PRESET_FIELDS = {
     "search", "kind", "status", "order", "minDuration", "maxDuration",
     "minSize", "maxSize", "minWidth", "maxWidth", "minHeight", "maxHeight", "codec",
     "dateFrom", "dateTo", "orientation", "assets", "indexState", "include", "exclude",
+    "minAttempts", "maxAttempts", "recovery",
 }
 
 
 def _gallery_preset_filters(value):
     if not isinstance(value, dict):
         raise ValueError("filters must be an object")
-    if any(key not in _GALLERY_PRESET_FIELDS or not isinstance(item, str) for key, item in value.items()):
+    if any(
+        key not in _GALLERY_PRESET_FIELDS
+        or (key == "recovery" and not isinstance(item, bool))
+        or (key != "recovery" and not isinstance(item, str))
+        for key, item in value.items()
+    ):
         raise ValueError("filters contain an unsupported value")
     return {key: item for key, item in value.items() if item}
+
+
+def _gallery_term_list(body):
+    if not isinstance(body, dict):
+        raise ValueError("list must be an object")
+    name = body.get("name")
+    mode = body.get("mode")
+    terms = body.get("terms")
+    if not isinstance(name, str) or not (name := name.strip()) or len(name) > 80:
+        raise ValueError("name must be between 1 and 80 characters")
+    if mode not in ("include", "exclude"):
+        raise ValueError("mode must be include or exclude")
+    if not isinstance(terms, list) or not 1 <= len(terms) <= 100:
+        raise ValueError("terms must contain 1 to 100 entries")
+    cleaned = []
+    for term in terms:
+        if not isinstance(term, str):
+            raise ValueError("each term must be 1 to 100 characters")
+        term = term.strip()
+        if not term or len(term) > 100:
+            raise ValueError("each term must be 1 to 100 characters")
+        if term not in cleaned:
+            cleaned.append(term)
+    return name, mode, cleaned
+
+
+def _playback_queue(body):
+    if not isinstance(body, dict):
+        raise ValueError("queue must be an object")
+    name = body.get("name")
+    item_ids = body.get("item_ids")
+    if not isinstance(name, str) or not (name := name.strip()) or len(name) > 80:
+        raise ValueError("name must be between 1 and 80 characters")
+    if (
+        not isinstance(item_ids, list)
+        or not 1 <= len(item_ids) <= 100
+        or len(set(item_ids)) != len(item_ids)
+        or any(type(item_id) is not int or item_id < 1 for item_id in item_ids)
+    ):
+        raise ValueError("item_ids must contain 1 to 100 unique positive integer IDs")
+    return name, item_ids
 
 
 @router.get("/health")
@@ -110,6 +157,78 @@ def delete_gallery_preset(request: Request, preset_id: int):
         conn.close()
 
 
+@router.get("/gallery-term-lists")
+def list_gallery_term_lists(request: Request):
+    conn = _open(request)
+    try:
+        return store.list_gallery_term_lists(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/gallery-term-lists")
+async def create_gallery_term_list(request: Request):
+    try:
+        name, mode, terms = _gallery_term_list(await request.json())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    conn = _open(request)
+    try:
+        list_id = store.save_gallery_term_list(conn, name, mode, terms)
+        return {"id": list_id, "name": name, "mode": mode, "terms": terms}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="a term list with that name already exists")
+    finally:
+        conn.close()
+
+
+@router.delete("/gallery-term-lists/{list_id}")
+def delete_gallery_term_list(request: Request, list_id: int):
+    conn = _open(request)
+    try:
+        if not store.delete_gallery_term_list(conn, list_id):
+            raise HTTPException(status_code=404, detail="term list not found")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.get("/playback-queues")
+def list_playback_queues(request: Request):
+    conn = _open(request)
+    try:
+        return store.list_playback_queues(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/playback-queues")
+async def create_playback_queue(request: Request):
+    try:
+        name, item_ids = _playback_queue(await request.json())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    conn = _open(request)
+    try:
+        queue_id = store.save_playback_queue(conn, name, item_ids)
+        return {"id": queue_id, "name": name, "item_ids": item_ids}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="a playback queue with that name already exists")
+    finally:
+        conn.close()
+
+
+@router.delete("/playback-queues/{queue_id}")
+def delete_playback_queue(request: Request, queue_id: int):
+    conn = _open(request)
+    try:
+        if not store.delete_playback_queue(conn, queue_id):
+            raise HTTPException(status_code=404, detail="playback queue not found")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
 @router.get("/items")
 def list_items(request: Request, search: str = None, kind: str = None, status: str = None):
     conn = _open(request)
@@ -148,9 +267,12 @@ def page_items(
     index_state: str = None,
     include: str = None,
     exclude: str = None,
+    min_attempts: int = None,
+    max_attempts: int = None,
+    recovery: bool = False,
     seed: int = None,
 ):
-    if order not in ("latest", "archive", "size_desc", "duration_desc", "duration_asc", "favorite_date_desc", "favorite_date_asc", "random"):
+    if order not in ("latest", "archive", "size_desc", "duration_desc", "duration_asc", "favorite_date_desc", "favorite_date_asc", "attempts_desc", "last_attempt_desc", "author_asc", "random"):
         raise HTTPException(status_code=400, detail="unknown item order")
     if order == "random" and seed is None:
         raise HTTPException(status_code=400, detail="random order requires a shuffle seed")
@@ -183,6 +305,9 @@ def page_items(
             index_state=index_state,
             include=[term.strip() for term in (include or "").split(",") if term.strip()],
             exclude=[term.strip() for term in (exclude or "").split(",") if term.strip()],
+            min_attempts=min_attempts,
+            max_attempts=max_attempts,
+            recovery=recovery,
             seed=seed,
         )
     finally:
@@ -207,6 +332,26 @@ async def item_selection(request: Request):
     conn = _open(request)
     try:
         return _archive_items(request, conn).selected([int(item_id) for item_id in item_ids])
+    finally:
+        conn.close()
+
+
+@router.post("/items/requeue")
+async def requeue_items(request: Request):
+    """Queue selected failed/missing favorites without disturbing healthy media."""
+    body = await request.json()
+    item_ids = body.get("ids") if isinstance(body, dict) else None
+    if (
+        not isinstance(item_ids, list)
+        or not 1 <= len(item_ids) <= 100
+        or any(type(item_id) is not int or item_id < 1 for item_id in item_ids)
+    ):
+        raise HTTPException(status_code=400, detail="ids must contain 1 to 100 positive integer item IDs")
+    if request.app.state.jobs.is_running():
+        raise HTTPException(status_code=409, detail="wait for the current run to finish")
+    conn = _open(request)
+    try:
+        return verify.requeue_selected(conn, _download_dir(request), item_ids)
     finally:
         conn.close()
 
@@ -268,6 +413,15 @@ def status(request: Request):
     return request.app.state.jobs.status()
 
 
+@router.get("/run-history")
+def run_history(request: Request, limit: int = 20):
+    conn = _open(request)
+    try:
+        return store.list_run_history(conn, limit)
+    finally:
+        conn.close()
+
+
 @router.get("/verify")
 def verify_archive(request: Request):
     conn = _open(request)
@@ -306,6 +460,23 @@ def library_stats(request: Request):
         conn.close()
 
 
+@router.get("/archive-inventory.csv")
+def archive_inventory(request: Request):
+    """Download the compact database inventory; media files stay on disk."""
+    def stream():
+        conn = _open(request)
+        try:
+            yield from inventory.csv_lines(store.all_items(conn))
+        finally:
+            conn.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=archive-inventory.csv"},
+    )
+
+
 @router.put("/library-settings")
 async def update_library_settings(request: Request):
     body = await request.json()
@@ -319,6 +490,29 @@ async def update_library_settings(request: Request):
         return _library_settings(conn)
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error))
+    finally:
+        conn.close()
+
+
+@router.get("/sync-settings")
+def sync_settings(request: Request):
+    conn = _open(request)
+    try:
+        return {"concurrency": store.get_run_state(conn)["concurrency"]}
+    finally:
+        conn.close()
+
+
+@router.put("/sync-settings")
+async def update_sync_settings(request: Request):
+    body = await request.json()
+    concurrency = body.get("concurrency") if isinstance(body, dict) else None
+    if type(concurrency) is not int or not 1 <= concurrency <= 16:
+        raise HTTPException(status_code=400, detail="concurrency must be an integer from 1 to 16")
+    conn = _open(request)
+    try:
+        store.set_run_state(conn, concurrency=concurrency)
+        return {"concurrency": concurrency}
     finally:
         conn.close()
 

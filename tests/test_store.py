@@ -58,6 +58,40 @@ def test_status_kind_assets_metadata_transitions():
     assert store.get_item(conn, 1)["error"] == "boom"
 
 
+def test_gallery_term_lists_round_trip_and_can_be_deleted():
+    conn = _db()
+    list_id = store.save_gallery_term_list(conn, "No FYP", "exclude", ["#fyp", "for you"])
+
+    assert store.list_gallery_term_lists(conn) == [
+        {"id": list_id, "name": "No FYP", "mode": "exclude", "terms": ["#fyp", "for you"]},
+    ]
+    assert store.delete_gallery_term_list(conn, list_id) is True
+    assert store.list_gallery_term_lists(conn) == []
+
+
+def test_playback_queues_round_trip_and_keep_selection_order():
+    conn = _db()
+    queue_id = store.save_playback_queue(conn, "Weekend games", [9, 3, 7])
+
+    assert store.list_playback_queues(conn) == [
+        {"id": queue_id, "name": "Weekend games", "item_ids": [9, 3, 7]},
+    ]
+    assert store.delete_playback_queue(conn, queue_id) is True
+    assert store.list_playback_queues(conn) == []
+
+
+def test_run_history_records_terminal_outcome_and_counts():
+    conn = _db()
+    run_id = store.start_run_history(conn, "sync")
+    store.finish_run_history(conn, run_id, "completed", {"done": 12, "failed": 1})
+
+    history = store.list_run_history(conn)
+    assert history[0]["kind"] == "sync"
+    assert history[0]["outcome"] == "completed"
+    assert history[0]["counts"] == {"done": 12, "failed": 1}
+    assert history[0]["finished_at"] is not None
+
+
 def test_record_work_outcome_updates_lifecycle_fields_together():
     conn = _db()
     store.insert_item(conn, 1, "a")
@@ -73,6 +107,49 @@ def test_record_work_outcome_updates_lifecycle_fields_together():
     assert row["kind"] == "slideshow"
     assert row["has_assets"] == 1
     assert row["error"] is None
+
+
+def test_work_outcomes_count_attempts_and_record_the_latest_attempt_time():
+    conn = _db()
+    store.insert_item(conn, 1, "a")
+    store.record_work_outcome(conn, 1, {"status": "failed", "kind": "unknown", "error": "timeout"})
+    first = store.get_item(conn, 1)
+    store.record_work_outcome(conn, 1, {"status": "done", "kind": "video"})
+    second = store.get_item(conn, 1)
+
+    assert first["attempt_count"] == 1 and first["last_attempt_at"]
+    assert second["attempt_count"] == 2
+    assert second["last_attempt_at"] >= first["last_attempt_at"]
+
+
+def test_page_items_filters_and_sorts_by_download_attempts():
+    conn = _db()
+    for item_id in (1, 2, 3):
+        store.insert_item(conn, item_id, f"link{item_id}")
+    for _ in range(3):
+        store.record_work_outcome(conn, 1, {"status": "failed", "kind": "unknown"})
+    for _ in range(2):
+        store.record_work_outcome(conn, 2, {"status": "failed", "kind": "unknown"})
+    rows = store.page_items(conn, min_attempts=2, order="attempts_desc")
+    assert [row["id"] for row in rows] == [1, 2]
+    untouched = store.page_items(conn, max_attempts=0)
+    assert [row["id"] for row in untouched] == [3]
+
+
+def test_page_items_sorts_by_creator_and_latest_download_attempt_with_cursors():
+    conn = _db()
+    for item_id in (1, 2, 3):
+        store.insert_item(conn, item_id, f"link{item_id}")
+    store.set_metadata(conn, 1, "", "Zoe")
+    store.set_metadata(conn, 2, "", "Ada")
+    conn.execute("UPDATE item SET last_attempt_at = ? WHERE id = ?", ("2025-01-01T10:00:00", 1))
+    conn.execute("UPDATE item SET last_attempt_at = ? WHERE id = ?", ("2025-01-02T10:00:00", 2))
+    conn.commit()
+
+    first_creator_page = store.page_items(conn, order="author_asc", limit=1)
+    assert [row["id"] for row in first_creator_page] == [2]
+    assert [row["id"] for row in store.page_items(conn, order="author_asc", cursor=2)] == [1]
+    assert [row["id"] for row in store.page_items(conn, order="last_attempt_desc")] == [2, 1]
 
 
 def test_record_asset_recovery_keeps_download_status():

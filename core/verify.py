@@ -38,6 +38,7 @@ def verify_archive(conn, download_dir):
         row["id"] for row in items
         if row["status"] == "done" and f"{row['id']}.mp4" not in movies
     )
+    store.record_archive_file_health(conn, missing)
     orphans = sorted(
         (name for name in movies if int(name.split(".")[0]) not in known_ids),
         key=lambda name: int(name.split(".")[0]),
@@ -71,3 +72,27 @@ def requeue_missing(conn, download_dir):
         store.set_status(conn, row["id"], "pending")
         requeued += 1
     return {"requeued": requeued}
+
+
+def requeue_selected(conn, download_dir, item_ids):
+    """Queue explicitly selected recoverable items for the next Sync.
+
+    A failed remote favorite is retryable. A finished remote favorite is only
+    retryable when its numbered video is actually gone. This intentionally
+    leaves healthy, in-progress, and synthetic local placeholders unchanged.
+    """
+    files = os.listdir(download_dir) if os.path.isdir(download_dir) else []
+    movies = _finished_movie_names(files)
+    rows = {row["id"]: row for row in store.all_items(conn)}
+    requested = list(dict.fromkeys(item_ids))
+    requeued = []
+    for item_id in requested:
+        row = rows.get(item_id)
+        if row is None or str(row["link"]).startswith("local://"):
+            continue
+        missing_done_file = row["status"] == "done" and f"{item_id}.mp4" not in movies
+        if row["status"] != "failed" and not missing_done_file:
+            continue
+        store.set_status(conn, item_id, "pending")
+        requeued.append(item_id)
+    return {"requeued": requeued, "skipped": len(requested) - len(requeued)}

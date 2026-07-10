@@ -38,3 +38,8 @@ export function visibleRows({
   const end = Math.min(count, Math.ceil((scrollTop + viewportHeight + overscan) / rowStride));
   return { start: Math.min(start, count), end, count };
 }
+
+/** Guard the bottom observer so paging stays cursor-bounded and single-flight. */
+export function canLoadNextPage(nextCursor: number | null, loading: boolean): nextCursor is number {
+  return nextCursor !== null && !loading;
+}

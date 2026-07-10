@@ -18,6 +18,10 @@ export interface Item {
   author: string | null;
   kind: Kind;
   status: Status;
+  error: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  archive_missing: boolean;
   favorited_at: string | null;
   has_assets: boolean;
   duration_s: number | null;
@@ -39,6 +43,7 @@ export interface ItemPage {
 export interface RunStatus {
   state: RunState;
   phase: string | null;
+  concurrency: number;
   running: boolean;
   counts: Partial<Record<Status, number>>;
 }
@@ -68,6 +73,10 @@ export interface LibrarySettings {
   index_enabled: number;
   thumbnail_width: 320 | 480;
   index: { total: number; indexed: number; pending: number; failed: number };
+}
+
+export interface SyncSettings {
+  concurrency: number;
 }
 
 export interface LibraryStatistics {
@@ -101,12 +110,28 @@ export interface GalleryPresetFilters {
   indexState?: string;
   include?: string;
   exclude?: string;
+  minAttempts?: string;
+  maxAttempts?: string;
+  recovery?: boolean;
 }
 
 export interface GalleryPreset {
   id: number;
   name: string;
   filters: GalleryPresetFilters;
+}
+
+export interface GalleryTermList {
+  id: number;
+  name: string;
+  mode: "include" | "exclude";
+  terms: string[];
+}
+
+export interface PlaybackQueue {
+  id: number;
+  name: string;
+  item_ids: number[];
 }
 
 export interface VerifySection {
@@ -121,4 +146,18 @@ export interface VerifyReport {
   orphans: VerifySection;
   leftovers: VerifySection;
   ok: boolean;
+}
+
+export interface RequeueResult {
+  requeued: number[];
+  skipped: number;
+}
+
+export interface RunHistoryEntry {
+  id: number;
+  kind: string;
+  outcome: "completed" | "stopped" | "failed" | null;
+  started_at: string;
+  finished_at: string | null;
+  counts: Partial<Record<Status, number>>;
 }

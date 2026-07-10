@@ -56,6 +56,39 @@ def test_requeue_resets_missing_done_items_but_skips_local_placeholders():
     assert store.get_item(conn, 3)["status"] == "done"
 
 
+def test_integrity_scan_marks_an_actionable_recovery_inbox():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/missing", status="done")
+    store.insert_item(conn, 2, "https://tiktok.com/present", status="done")
+    store.insert_item(conn, 3, "https://tiktok.com/failed", status="failed")
+    store.insert_item(conn, 4, "https://tiktok.com/new", status="pending")
+
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "2.mp4"), "w").close()
+        verify.verify_archive(conn, dl)
+
+    rows = store.page_items(conn, recovery=True)
+    assert [row["id"] for row in rows] == [4, 3, 1]
+
+
+def test_requeue_selected_only_repairs_failed_or_missing_remote_items():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/failed", status="failed")
+    store.insert_item(conn, 2, "https://tiktok.com/missing", status="done")
+    store.insert_item(conn, 3, "https://tiktok.com/present", status="done")
+    store.insert_item(conn, 4, "local://file/4", status="failed")
+    store.insert_item(conn, 5, "https://tiktok.com/pending", status="pending")
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "3.mp4"), "w").close()
+        result = verify.requeue_selected(conn, dl, [1, 2, 3, 4, 5, 999])
+    assert result == {"requeued": [1, 2], "skipped": 4}
+    assert store.get_item(conn, 1)["status"] == "pending"
+    assert store.get_item(conn, 2)["status"] == "pending"
+    assert store.get_item(conn, 3)["status"] == "done"
+    assert store.get_item(conn, 4)["status"] == "failed"
+    assert store.get_item(conn, 5)["status"] == "pending"
+
+
 def test_missing_download_dir_reports_everything_missing():
     conn = _db()
     store.insert_item(conn, 1, "a", status="done")

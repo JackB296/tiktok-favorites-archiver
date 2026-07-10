@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { SpeakerSimpleHigh, SpeakerSimpleX, ArrowSquareOut, FilmReel, Shuffle, Keyboard } from "@phosphor-icons/react";
+import { SpeakerSimpleHigh, SpeakerSimpleX, ArrowSquareOut, FilmReel, Shuffle, Keyboard, CornersOut } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
 import { PostMedia } from "../components/PostMedia";
 import { PlaybackSession, usePlayback } from "../components/playback";
 import { EmptyState, Skeleton } from "../components/ui";
+import { viewerShortcut } from "../lib/viewerShortcuts";
 
 const KEEP_BEHIND = 5;
 const PRELOAD_AHEAD = 2;
@@ -20,6 +21,7 @@ export function Viewer() {
   const [randomizing, setRandomizing] = useState(false);
   const [randomPosition, setRandomPosition] = useState<number | null>(null);
   const [randomTotal, setRandomTotal] = useState(0);
+  const [queueReadyTotal, setQueueReadyTotal] = useState(0);
   const resumeId = useRef<number | null>(Number(localStorage.getItem("last-watched-favorite")) || null);
   const containerRef = useRef<HTMLDivElement>(null);
   const randomQueue = useRef<number[]>([]);
@@ -28,6 +30,8 @@ export function Viewer() {
   const randomBatchGeneration = useRef<number | null>(null);
   const randomPositions = useRef(new Map<number, number>());
   const requestedItemId = Number(searchParams.get("item")) || null;
+  const requestedQueueIds = Array.from(new Set((searchParams.get("queue") ?? "").split(",").map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))).slice(0, 100);
+  const requestedQueueKey = requestedQueueIds.join(",");
 
   useEffect(() => {
     let alive = true;
@@ -35,11 +39,25 @@ export function Viewer() {
       if (!alive) return;
       const playable = page.items.filter((i) => i.video_url || i.images.length);
       setItems(playable);
+      setQueueReadyTotal(0);
       setNextCursor(page.next_cursor);
       if (playable[0]) setActiveId(playable[0].id);
     });
 
-    if (requestedItemId != null) {
+    if (requestedQueueIds.length) {
+      api.itemSelection(requestedQueueIds)
+        .then((selected) => {
+          if (!alive) return;
+          const playable = selected.filter((item) => item.video_url || item.images.length);
+          setItems(playable);
+          setQueueReadyTotal(playable.length);
+          setActiveId(playable[0]?.id ?? null);
+          setNextCursor(null); // a curated queue ends at its final selected item
+          setRandomMode(false);
+        })
+        .catch(() => alive && setItems([]));
+    } else if (requestedItemId != null) {
+      setQueueReadyTotal(0);
       api.itemWindow(requestedItemId)
         .then((page) => {
           if (!alive) return;
@@ -57,7 +75,7 @@ export function Viewer() {
     return () => {
       alive = false;
     };
-  }, [requestedItemId]);
+  }, [requestedItemId, requestedQueueKey]);
 
   /*
    * Gallery hands off with ?item=<id>. The selected item becomes the first
@@ -221,16 +239,35 @@ export function Viewer() {
 
   return (
     <PlaybackSession initiallyMuted>
-      <ViewerFeed items={items} activeId={activeId} containerRef={containerRef} onActiveChange={setActiveId} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} randomizing={randomizing} randomMode={randomMode} randomPosition={randomPosition} randomTotal={randomTotal} onOrdered={returnToOrderedFeed} />
+      <ViewerFeed items={items} activeId={activeId} containerRef={containerRef} onActiveChange={setActiveId} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} randomizing={randomizing} randomMode={randomMode} randomPosition={randomPosition} randomTotal={randomTotal} queueTotal={requestedQueueIds.length} queueReadyTotal={queueReadyTotal} onOrdered={returnToOrderedFeed} />
     </PlaybackSession>
   );
 }
 
-function ViewerFeed({ items, activeId, containerRef, onActiveChange, onGoToLastWatched, onRandom, randomizing, randomMode, randomPosition, randomTotal, onOrdered }: { items: Item[]; activeId: number | null; containerRef: React.RefObject<HTMLDivElement>; onActiveChange: (id: number) => void; onGoToLastWatched?: () => void; onRandom: () => void; randomizing: boolean; randomMode: boolean; randomPosition: number | null; randomTotal: number; onOrdered: () => void }) {
+function ViewerFeed({ items, activeId, containerRef, onActiveChange, onGoToLastWatched, onRandom, randomizing, randomMode, randomPosition, randomTotal, queueTotal, queueReadyTotal, onOrdered }: { items: Item[]; activeId: number | null; containerRef: React.RefObject<HTMLDivElement>; onActiveChange: (id: number) => void; onGoToLastWatched?: () => void; onRandom: () => void; randomizing: boolean; randomMode: boolean; randomPosition: number | null; randomTotal: number; queueTotal: number; queueReadyTotal: number; onOrdered: () => void }) {
   const { muted, toggleMuted, paused, togglePaused, setPaused } = usePlayback();
   const Speaker = muted ? SpeakerSimpleX : SpeakerSimpleHigh;
   const activeIndex = items.findIndex((item) => item.id === activeId);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  const toggleFullscreen = useCallback(async () => {
+    const target = containerRef.current;
+    if (!target) return;
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await target.requestFullscreen();
+    } catch {
+      // Fullscreen can be denied by browser policy; playback still works normally.
+    }
+  }, [containerRef]);
+
+  useEffect(() => {
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    document.addEventListener("fullscreenchange", updateFullscreen);
+    updateFullscreen();
+    return () => document.removeEventListener("fullscreenchange", updateFullscreen);
+  }, [containerRef]);
 
   useEffect(() => {
     setPaused(false);
@@ -239,19 +276,12 @@ function ViewerFeed({ items, activeId, containerRef, onActiveChange, onGoToLastW
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select, button, a, [contenteditable='true']")) return;
-      if (event.key === " " || event.code === "Space") {
-        if (!event.repeat) togglePaused();
-        event.preventDefault();
-        return;
-      }
-      if (event.key.toLowerCase() === "m") {
-        if (!event.repeat) toggleMuted();
-        event.preventDefault();
-        return;
-      }
-      const delta = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 0;
-      if (!delta) return;
+      const shortcut = viewerShortcut({ key: event.key, code: event.code, repeat: event.repeat, editing: Boolean(target?.closest("input, textarea, select, button, a, [contenteditable='true']")) });
+      if (!shortcut) return;
+      if (shortcut === "pause") { event.preventDefault(); togglePaused(); return; }
+      if (shortcut === "mute") { event.preventDefault(); toggleMuted(); return; }
+      if (shortcut === "fullscreen") { event.preventDefault(); void toggleFullscreen(); return; }
+      const delta = shortcut === "next" ? 1 : -1;
       const nextIndex = Math.max(0, Math.min(items.length - 1, (activeIndex < 0 ? 0 : activeIndex) + delta));
       if (nextIndex === activeIndex) return;
       event.preventDefault();
@@ -261,7 +291,7 @@ function ViewerFeed({ items, activeId, containerRef, onActiveChange, onGoToLastW
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeIndex, containerRef, items, onActiveChange, toggleMuted, togglePaused]);
+  }, [activeIndex, containerRef, items, onActiveChange, toggleFullscreen, toggleMuted, togglePaused]);
 
   return (
     <div ref={containerRef} className="h-full snap-y snap-mandatory overflow-y-scroll bg-black">
@@ -269,8 +299,10 @@ function ViewerFeed({ items, activeId, containerRef, onActiveChange, onGoToLastW
       {onGoToLastWatched && <button onClick={onGoToLastWatched} className="absolute left-4 top-4 z-10 rounded bg-black/40 px-3 py-2 text-xs text-white backdrop-blur-sm">Go to last watched</button>}
       <button onClick={onRandom} disabled={randomizing} aria-label="Start a fresh random order" className="absolute left-4 top-14 z-10 rounded bg-black/40 p-2 text-white backdrop-blur-sm disabled:opacity-50"><Shuffle size={18} /></button>
       <button onClick={() => setShowShortcuts((value) => !value)} aria-label="Show keyboard shortcuts" aria-expanded={showShortcuts} className="absolute left-14 top-14 z-10 rounded bg-black/40 p-2 text-white backdrop-blur-sm"><Keyboard size={18} /></button>
+      <button onClick={() => void toggleFullscreen()} aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} aria-pressed={fullscreen} className="absolute left-24 top-14 z-10 rounded bg-black/40 p-2 text-white backdrop-blur-sm"><CornersOut size={18} /></button>
       {randomMode && <div className="absolute left-4 top-24 z-10 flex items-center gap-2 rounded bg-black/55 px-2.5 py-1.5 text-xs text-white backdrop-blur-sm">Random · {randomPosition == null ? "…" : randomPosition + 1} / {randomTotal}<button onClick={onOrdered} className="text-white/70 underline underline-offset-2 hover:text-white">Ordered feed</button></div>}
-      {showShortcuts && <div className="absolute left-4 top-36 z-10 rounded bg-black/65 px-3 py-2 text-xs leading-5 text-white backdrop-blur-sm">↑ ↓ / ← →: previous or next<br />Space: play or pause<br />M: mute or unmute</div>}
+      {!randomMode && queueTotal > 0 && <div className="absolute left-4 top-24 z-10 rounded bg-black/55 px-2.5 py-1.5 text-xs text-white backdrop-blur-sm">Gallery queue · {queueReadyTotal} ready of {queueTotal} selected</div>}
+      {showShortcuts && <div className="absolute left-4 top-36 z-10 rounded bg-black/65 px-3 py-2 text-xs leading-5 text-white backdrop-blur-sm">↑ ↓ / ← →: previous or next<br />Space: play or pause<br />M: mute or unmute<br />F: enter or exit fullscreen</div>}
       {items.map((item, index) => (
         <section
           key={item.id}

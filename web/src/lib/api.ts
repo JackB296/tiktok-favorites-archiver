@@ -1,4 +1,4 @@
-import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, VerifyReport } from "./types";
+import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -25,6 +25,20 @@ export const api = {
     body: JSON.stringify({ name, filters }),
   }),
   deleteGalleryPreset: (id: number) => json<{ ok: boolean }>(`/api/gallery-presets/${id}`, { method: "DELETE" }),
+  galleryTermLists: () => json<GalleryTermList[]>("/api/gallery-term-lists"),
+  createGalleryTermList: (name: string, mode: "include" | "exclude", terms: string[]) => json<GalleryTermList>("/api/gallery-term-lists", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, mode, terms }),
+  }),
+  deleteGalleryTermList: (id: number) => json<{ ok: boolean }>(`/api/gallery-term-lists/${id}`, { method: "DELETE" }),
+  playbackQueues: () => json<PlaybackQueue[]>("/api/playback-queues"),
+  createPlaybackQueue: (name: string, itemIds: number[]) => json<PlaybackQueue>("/api/playback-queues", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, item_ids: itemIds }),
+  }),
+  deletePlaybackQueue: (id: number) => json<{ ok: boolean }>(`/api/playback-queues/${id}`, { method: "DELETE" }),
 
   items: (q: ItemQuery = {}) => {
     const p = new URLSearchParams();
@@ -35,7 +49,7 @@ export const api = {
     return json<Item[]>(`/api/items${qs ? `?${qs}` : ""}`);
   },
 
-  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string } = {}) => {
+  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; min_attempts?: number; max_attempts?: number; recovery?: boolean; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string } = {}) => {
     const p = new URLSearchParams();
     if (q.search) p.set("search", q.search);
     if (q.kind) p.set("kind", q.kind);
@@ -52,6 +66,9 @@ export const api = {
     if (q.max_width) p.set("max_width", String(q.max_width));
     if (q.min_height) p.set("min_height", String(q.min_height));
     if (q.max_height) p.set("max_height", String(q.max_height));
+    if (q.min_attempts != null) p.set("min_attempts", String(q.min_attempts));
+    if (q.max_attempts != null) p.set("max_attempts", String(q.max_attempts));
+    if (q.recovery) p.set("recovery", "true");
     if (q.codec) p.set("codec", q.codec);
     if (q.date_from) p.set("date_from", q.date_from);
     if (q.date_to) p.set("date_to", q.date_to);
@@ -69,9 +86,15 @@ export const api = {
   itemWindow: (n: number) => json<ItemPage>(`/api/items/${n}/window`),
 
   status: () => json<RunStatus>("/api/status"),
+  runHistory: () => json<RunHistoryEntry[]>("/api/run-history"),
 
   verify: () => json<VerifyReport>("/api/verify"),
   requeueMissing: () => json<{ requeued: number }>("/api/verify/requeue", { method: "POST" }),
+  requeueItems: (ids: number[]) => json<RequeueResult>("/api/items/requeue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  }),
 
   librarySettings: () => json<LibrarySettings>("/api/library-settings"),
   libraryStats: () => json<LibraryStatistics>("/api/library-stats"),
@@ -81,6 +104,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
     }),
+  syncSettings: () => json<SyncSettings>("/api/sync-settings"),
+  updateSyncSettings: (settings: SyncSettings) => json<SyncSettings>("/api/sync-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  }),
 
   howto: async () => {
     const res = await fetch("/api/howto");

@@ -71,6 +71,8 @@ class JobManager:
 
             def run():
                 conn = self._conn()
+                history_id = store.start_run_history(conn, kind)
+                outcome = "completed"
                 try:
                     runs.execute(
                         conn,
@@ -80,8 +82,12 @@ class JobManager:
                         progress=self._broadcaster.publish,
                     )
                 except Exception as e:  # surface, don't crash the thread silently
+                    outcome = "failed"
                     self._broadcaster.publish({"event": "error", "error": str(e)})
                 finally:
+                    if outcome == "completed" and store.get_run_state(conn)["state"] == "stopped":
+                        outcome = "stopped"
+                    store.finish_run_history(conn, history_id, outcome, store.counts_by_status(conn))
                     self._broadcaster.publish({"event": "complete"})
                     conn.close()
 
@@ -112,6 +118,7 @@ class JobManager:
             return {
                 "state": rs["state"],
                 "phase": rs["phase"],
+                "concurrency": rs["concurrency"],
                 "running": self.is_running(),
                 "counts": store.counts_by_status(conn),
             }

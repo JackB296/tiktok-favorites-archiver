@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS item (
     media_fingerprint TEXT,
     indexed_at    TEXT,
     index_error   TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TEXT,
+    archive_missing INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
@@ -64,6 +67,27 @@ CREATE TABLE IF NOT EXISTS gallery_preset (
     name TEXT NOT NULL UNIQUE,
     filters_json TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gallery_term_list (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    mode TEXT NOT NULL CHECK (mode IN ('include', 'exclude')),
+    terms_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS playback_queue (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    item_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_history (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    outcome TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    counts_json TEXT
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS item_search USING fts5(
     caption,
@@ -94,6 +118,9 @@ _ITEM_MIGRATIONS = {
     "media_fingerprint": "TEXT",
     "indexed_at": "TEXT",
     "index_error": "TEXT",
+    "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+    "last_attempt_at": "TEXT",
+    "archive_missing": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -204,6 +231,16 @@ def set_has_assets(conn, item_id, has_assets):
     _update(conn, item_id, has_assets=1 if has_assets else 0)
 
 
+def record_archive_file_health(conn, missing_ids):
+    """Persist the latest integrity scan for Gallery recovery filtering."""
+    missing_ids = list(dict.fromkeys(missing_ids))
+    conn.execute("UPDATE item SET archive_missing = 0 WHERE archive_missing != 0")
+    if missing_ids:
+        placeholders = ",".join("?" for _ in missing_ids)
+        conn.execute(f"UPDATE item SET archive_missing = 1 WHERE id IN ({placeholders})", missing_ids)
+    conn.commit()
+
+
 def set_metadata(conn, item_id, caption, author):
     _update(conn, item_id, caption=caption, author=author)
 
@@ -221,7 +258,13 @@ def record_work_outcome(conn, item_id, outcome):
     }
     if "has_assets" in outcome:
         fields["has_assets"] = 1 if outcome["has_assets"] else 0
-    _update(conn, item_id, **fields)
+    fields["last_attempt_at"] = _now()
+    assignments = ", ".join(f"{col} = ?" for col in fields)
+    conn.execute(
+        f"UPDATE item SET {assignments}, attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?",
+        (*fields.values(), _now(), item_id),
+    )
+    conn.commit()
 
 
 def record_asset_recovery(conn, item_id, outcome):
@@ -316,6 +359,9 @@ _PAGE_ORDERS = {
     "duration_asc": ("duration_s ASC, id ASC", "duration_s", "ASC"),
     "favorite_date_desc": ("favorited_at DESC, id DESC", "favorited_at", "DESC"),
     "favorite_date_asc": ("favorited_at ASC, id ASC", "favorited_at", "ASC"),
+    "attempts_desc": ("attempt_count DESC, id DESC", "attempt_count", "DESC"),
+    "last_attempt_desc": ("last_attempt_at DESC, id DESC", "last_attempt_at", "DESC"),
+    "author_asc": ("author ASC, id ASC", "author", "ASC"),
     "relevance": ("rank ASC, id DESC", None, None),
 }
 
@@ -378,6 +424,9 @@ def page_items(
     index_state=None,
     include=None,
     exclude=None,
+    min_attempts=None,
+    max_attempts=None,
+    recovery=False,
     seed=None,
 ):
     """Return one cursor page without materializing the whole Archive library."""
@@ -407,6 +456,14 @@ def page_items(
     if max_height is not None:
         clauses.append("media_height <= ?")
         params.append(int(max_height))
+    if min_attempts is not None:
+        clauses.append("attempt_count >= ?")
+        params.append(int(min_attempts))
+    if max_attempts is not None:
+        clauses.append("attempt_count <= ?")
+        params.append(int(max_attempts))
+    if recovery:
+        clauses.append("(status = 'failed' OR archive_missing = 1 OR (status = 'pending' AND attempt_count = 0))")
     if codecs:
         clauses.append("media_codec IN (%s)" % ",".join("?" for _ in codecs))
         params += list(codecs)
@@ -612,3 +669,84 @@ def delete_gallery_preset(conn, preset_id):
     cursor = conn.execute("DELETE FROM gallery_preset WHERE id = ?", (preset_id,))
     conn.commit()
     return cursor.rowcount > 0
+
+
+# --- saved Gallery author/hashtag lists ------------------------------------
+
+def list_gallery_term_lists(conn):
+    rows = conn.execute(
+        "SELECT id, name, mode, terms_json FROM gallery_term_list ORDER BY name COLLATE NOCASE, id"
+    ).fetchall()
+    return [
+        {"id": row["id"], "name": row["name"], "mode": row["mode"], "terms": json.loads(row["terms_json"])}
+        for row in rows
+    ]
+
+
+def save_gallery_term_list(conn, name, mode, terms):
+    cursor = conn.execute(
+        "INSERT INTO gallery_term_list (name, mode, terms_json, created_at) VALUES (?, ?, ?, ?)",
+        (name, mode, json.dumps(terms, separators=(",", ":")), _now()),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def delete_gallery_term_list(conn, list_id):
+    cursor = conn.execute("DELETE FROM gallery_term_list WHERE id = ?", (list_id,))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+# --- saved playback queues --------------------------------------------------
+
+def list_playback_queues(conn):
+    rows = conn.execute(
+        "SELECT id, name, item_ids_json FROM playback_queue ORDER BY name COLLATE NOCASE, id"
+    ).fetchall()
+    return [
+        {"id": row["id"], "name": row["name"], "item_ids": json.loads(row["item_ids_json"])}
+        for row in rows
+    ]
+
+
+def save_playback_queue(conn, name, item_ids):
+    cursor = conn.execute(
+        "INSERT INTO playback_queue (name, item_ids_json, created_at) VALUES (?, ?, ?)",
+        (name, json.dumps(item_ids, separators=(",", ":")), _now()),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def delete_playback_queue(conn, queue_id):
+    cursor = conn.execute("DELETE FROM playback_queue WHERE id = ?", (queue_id,))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+# --- durable Archive run history -------------------------------------------
+
+def start_run_history(conn, kind):
+    cursor = conn.execute("INSERT INTO run_history (kind, started_at) VALUES (?, ?)", (kind, _now()))
+    conn.commit()
+    return cursor.lastrowid
+
+
+def finish_run_history(conn, run_id, outcome, counts):
+    conn.execute(
+        "UPDATE run_history SET outcome = ?, finished_at = ?, counts_json = ? WHERE id = ?",
+        (outcome, _now(), json.dumps(counts, separators=(",", ":"), sort_keys=True), run_id),
+    )
+    conn.commit()
+
+
+def list_run_history(conn, limit=20):
+    rows = conn.execute(
+        "SELECT id, kind, outcome, started_at, finished_at, counts_json FROM run_history ORDER BY id DESC LIMIT ?",
+        (max(1, min(int(limit), 100)),),
+    ).fetchall()
+    return [
+        {"id": row["id"], "kind": row["kind"], "outcome": row["outcome"], "started_at": row["started_at"], "finished_at": row["finished_at"], "counts": json.loads(row["counts_json"] or "{}")}
+        for row in rows
+    ]

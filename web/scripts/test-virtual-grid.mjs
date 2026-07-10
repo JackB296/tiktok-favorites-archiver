@@ -25,4 +25,8 @@ assert.deepEqual(
   { start: 0, end: 1, count: 1 },
 );
 
+assert.equal(grid.canLoadNextPage(42, false), true);
+assert.equal(grid.canLoadNextPage(null, false), false);
+assert.equal(grid.canLoadNextPage(42, true), false);
+
 console.log("PASS virtual grid geometry and visible-row bounds");

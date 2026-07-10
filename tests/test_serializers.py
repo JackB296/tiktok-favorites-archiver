@@ -113,6 +113,18 @@ def test_item_projects_indexed_media_facts():
     assert item["media_size"] == 12_500_000
 
 
+def test_item_projects_the_last_recovery_error():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://tiktok.com/1", status="failed")
+    store.set_status(conn, 1, "failed", error="video download failed")
+
+    with tempfile.TemporaryDirectory() as dl:
+        item = ArchiveItems(conn, dl).get(1)
+
+    assert item["status"] == "failed"
+    assert item["error"] == "video download failed"
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

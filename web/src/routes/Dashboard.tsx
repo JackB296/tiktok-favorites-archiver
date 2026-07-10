@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   UploadSimple,
   Play,
@@ -9,7 +10,7 @@ import {
   Question,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
-import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport } from "../lib/types";
+import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport, RunHistoryEntry, SyncSettings } from "../lib/types";
 import { Button, StatusBadge, cx } from "../components/ui";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "expired"];
@@ -24,6 +25,7 @@ function formatDuration(seconds: number) {
 }
 
 export function Dashboard() {
+  const navigate = useNavigate();
   const [status, setStatus] = useState<RunStatus | null>(null);
   const [cobaltOk, setCobaltOk] = useState<boolean | null>(null);
   const [events, setEvents] = useState<ProgressEvent[]>([]);
@@ -37,17 +39,23 @@ export function Dashboard() {
   const [enrichmentProgress, setEnrichmentProgress] = useState<ProgressEvent | null>(null);
   const [verifyReport, setVerifyReport] = useState<VerifyReport | null>(null);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
+  const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
+  const [syncSettings, setSyncSettings] = useState<SyncSettings | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => api.status().then(setStatus).catch(() => {});
   const refreshLibrary = () => api.librarySettings().then(setLibrary).catch(() => {});
   const refreshStatistics = () => api.libraryStats().then(setStatistics).catch(() => {});
+  const refreshRunHistory = () => api.runHistory().then(setRunHistory).catch(() => {});
+  const refreshSyncSettings = () => api.syncSettings().then(setSyncSettings).catch(() => {});
 
   useEffect(() => {
     refresh();
     api.health().then((h) => setCobaltOk(h.cobalt_reachable)).catch(() => setCobaltOk(false));
     refreshLibrary();
     refreshStatistics();
+    refreshRunHistory();
+    refreshSyncSettings();
     const poll = window.setInterval(refresh, 2000);
     const off = api.events((e) => {
       setEvents((prev) => [e, ...prev].slice(0, 200));
@@ -58,6 +66,7 @@ export function Dashboard() {
         refresh();
         refreshLibrary();
         refreshStatistics();
+        refreshRunHistory();
       }
     });
     return () => {
@@ -85,6 +94,11 @@ export function Dashboard() {
   async function updateLibrary(settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480 }) {
     const next = await api.updateLibrarySettings(settings).catch(() => null);
     if (next) setLibrary(next);
+  }
+
+  async function updateSyncSettings(concurrency: number) {
+    const next = await api.updateSyncSettings({ concurrency }).catch(() => null);
+    if (next) setSyncSettings(next);
   }
 
   async function act(a: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "pause" | "continue" | "stop") {
@@ -215,6 +229,26 @@ export function Dashboard() {
         </section>
 
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <h2 className="text-sm font-semibold text-ink">Archive performance</h2>
+          <p className="mt-1 text-sm text-ink-dim">Choose how many favorites Sync and Backfill process at once. This setting is saved locally and takes effect on the next run; keep it low if Cobalt is rate-limiting.</p>
+          <label className="mt-4 block text-sm font-medium text-ink" htmlFor="sync-concurrency">Parallel downloads</label>
+          <select id="sync-concurrency" value={syncSettings?.concurrency ?? status?.concurrency ?? 4} onChange={(e) => updateSyncSettings(Number(e.target.value))} className="mt-1 h-10 rounded-[var(--radius-control)] border border-line bg-elevated px-3 text-sm text-ink">
+            {[1, 2, 4, 6, 8, 12, 16].map((value) => <option key={value} value={value}>{value} at a time{value === 4 ? " (recommended)" : ""}</option>)}
+          </select>
+          <p className="mt-2 text-xs text-ink-faint">Cobalt’s own rate limit remains a Docker setting so the two services stay in agreement.</p>
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Archive inventory</h2>
+              <p className="mt-1 text-sm text-ink-dim">Download a compact CSV of every favorite and its source link, status, retry history, file health, and indexed media facts. It is useful for backup records or spreadsheet analysis; media files are not copied.</p>
+            </div>
+            <a href="/api/archive-inventory.csv" download className="inline-flex h-9 items-center rounded border border-line px-3 text-sm text-ink-dim hover:text-ink">Download CSV</a>
+          </div>
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-ink">Media server metadata</h2>
@@ -269,6 +303,12 @@ export function Dashboard() {
           {verifyMsg && <p className="mt-2 text-sm text-ink-dim">{verifyMsg}</p>}
         </section>
 
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <h2 className="text-sm font-semibold text-ink">Recent archive runs</h2>
+          <p className="mt-1 text-sm text-ink-dim">Stored locally so you can see what finished after the live activity log has cleared.</p>
+          {runHistory.length ? <ul className="mt-3 divide-y divide-line text-sm">{runHistory.slice(0, 8).map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><span className="capitalize text-ink">{run.kind}</span><span className="text-ink-dim">{run.outcome ?? "running"} · {run.counts.done ?? 0} ready · {run.counts.failed ?? 0} failed</span><time className="text-xs text-ink-faint" dateTime={run.started_at}>{new Date(run.started_at).toLocaleString()}</time></li>)}</ul> : <p className="mt-3 text-sm text-ink-faint">No completed archive runs yet.</p>}
+        </section>
+
         {/* Controls */}
         <section className="mb-4 flex flex-wrap items-center gap-2">
           {!running ? (
@@ -278,6 +318,9 @@ export function Dashboard() {
               </Button>
               <Button variant="ghost" onClick={() => act("backfill")}>
                 <ArrowClockwise size={16} /> Backfill assets
+              </Button>
+              <Button variant="ghost" disabled={!status?.counts?.failed} onClick={() => navigate("/gallery?status=failed")}>
+                Review {status?.counts?.failed ?? 0} failed
               </Button>
             </>
           ) : (

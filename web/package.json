@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test:virtual-grid": "node scripts/test-virtual-grid.mjs"
+    "test:virtual-grid": "node scripts/test-virtual-grid.mjs",
+    "test:viewer-shortcuts": "node scripts/test-viewer-shortcuts.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.0.0",
