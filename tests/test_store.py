@@ -268,6 +268,17 @@ def test_page_items_searches_metadata_with_relevance_and_updates_index():
     assert [row["id"] for row in store.page_items(conn, query="games", limit=10)] == [1, 3]
 
 
+def test_page_items_filters_media_codec_and_resolution_bounds():
+    conn = _db()
+    for item_id, codec, width, height in ((1, "h264", 1080, 1920), (2, "vp9", 1920, 1080), (3, "h264", 720, 1280)):
+        store.insert_item(conn, item_id, f"link{item_id}", status="done")
+        store.record_media_index(conn, item_id, {"thumbnail_path": "x", "duration_s": 1, "width": width, "height": height, "codec": codec, "file_size": 1}, "x")
+
+    rows = store.page_items(conn, codecs=["h264"], min_width=1000, min_height=1500)
+
+    assert [row["id"] for row in rows] == [1]
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

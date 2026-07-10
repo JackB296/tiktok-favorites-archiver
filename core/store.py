@@ -332,6 +332,11 @@ def page_items(
     max_duration=None,
     min_size=None,
     max_size=None,
+    min_width=None,
+    max_width=None,
+    min_height=None,
+    max_height=None,
+    codecs=None,
     date_from=None,
     date_to=None,
     orientations=None,
@@ -353,6 +358,21 @@ def page_items(
     if max_size is not None:
         clauses.append("media_size <= ?")
         params.append(int(max_size))
+    if min_width is not None:
+        clauses.append("media_width >= ?")
+        params.append(int(min_width))
+    if max_width is not None:
+        clauses.append("media_width <= ?")
+        params.append(int(max_width))
+    if min_height is not None:
+        clauses.append("media_height >= ?")
+        params.append(int(min_height))
+    if max_height is not None:
+        clauses.append("media_height <= ?")
+        params.append(int(max_height))
+    if codecs:
+        clauses.append("media_codec IN (%s)" % ",".join("?" for _ in codecs))
+        params += list(codecs)
     if date_from:
         clauses.append("favorited_at >= ?")
         params.append(date_from)

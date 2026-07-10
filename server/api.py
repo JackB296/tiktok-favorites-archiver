@@ -47,7 +47,8 @@ def _library_settings(conn):
 
 _GALLERY_PRESET_FIELDS = {
     "search", "kind", "status", "order", "minDuration", "maxDuration",
-    "minSize", "maxSize", "dateFrom", "dateTo", "orientation", "include", "exclude",
+    "minSize", "maxSize", "minWidth", "maxWidth", "minHeight", "maxHeight", "codec",
+    "dateFrom", "dateTo", "orientation", "include", "exclude",
 }
 
 
@@ -135,6 +136,11 @@ def page_items(
     max_duration: float = None,
     min_size: int = None,
     max_size: int = None,
+    min_width: int = None,
+    max_width: int = None,
+    min_height: int = None,
+    max_height: int = None,
+    codec: str = None,
     date_from: str = None,
     date_to: str = None,
     orientation: str = None,
@@ -156,6 +162,11 @@ def page_items(
             max_duration=max_duration,
             min_size=min_size,
             max_size=max_size,
+            min_width=min_width,
+            max_width=max_width,
+            min_height=min_height,
+            max_height=max_height,
+            codecs=[term.strip() for term in (codec or "").split(",") if term.strip()],
             date_from=date_from,
             date_to=date_to,
             orientations=[term.strip() for term in (orientation or "").split(",") if term.strip()],

@@ -10,10 +10,10 @@ import { usePlayback } from "./playback";
  * plus manual prev/next. Nothing plays unless `active`.
  */
 export function PostMedia({ item, active, preload = false }: { item: Item; active: boolean; preload?: boolean }) {
-  const { muted } = usePlayback();
+  const { muted, paused } = usePlayback();
   if (!active && !preload) return <MediaPlaceholder />;
-  if (item.video_url) return <VideoMedia src={item.video_url} active={active} muted={muted} preload={preload} />;
-  if (item.images.length) return <SlideMedia images={item.images} audio={item.audio} active={active} muted={muted} />;
+  if (item.video_url) return <VideoMedia src={item.video_url} active={active} muted={muted} paused={paused} preload={preload} />;
+  if (item.images.length) return <SlideMedia images={item.images} audio={item.audio} active={active} muted={muted} paused={paused} />;
   return <div className="flex h-full w-full items-center justify-center text-sm text-ink-faint">no media yet</div>;
 }
 
@@ -21,14 +21,14 @@ function MediaPlaceholder() {
   return <div aria-hidden="true" className="h-full w-full bg-black" />;
 }
 
-function VideoMedia({ src, active, muted, preload }: { src: string; active: boolean; muted: boolean; preload: boolean }) {
+function VideoMedia({ src, active, muted, paused, preload }: { src: string; active: boolean; muted: boolean; paused: boolean; preload: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
-    if (active) v.play().catch(() => {});
+    if (active && !paused) v.play().catch(() => {});
     else v.pause();
-  }, [active]);
+  }, [active, paused]);
   useEffect(() => {
     if (ref.current) ref.current.muted = muted;
   }, [muted]);
@@ -42,31 +42,33 @@ function SlideMedia({
   audio,
   active,
   muted,
+  paused,
 }: {
   images: string[];
   audio: string | null;
   active: boolean;
   muted: boolean;
+  paused: boolean;
 }) {
   const [idx, setIdx] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
-    if (!active || images.length < 2) return;
+    if (!active || paused || images.length < 2) return;
     const t = window.setInterval(() => setIdx((i) => (i + 1) % images.length), SLIDE_MS);
     return () => window.clearInterval(t);
-  }, [active, images.length]);
+  }, [active, images.length, paused]);
 
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
     a.muted = muted;
-    if (active) a.play().catch(() => {});
+    if (active && !paused) a.play().catch(() => {});
     else {
       a.pause();
       a.currentTime = 0;
     }
-  }, [active, muted]);
+  }, [active, muted, paused]);
 
   const go = (delta: number) => setIdx((i) => (i + delta + images.length) % images.length);
 

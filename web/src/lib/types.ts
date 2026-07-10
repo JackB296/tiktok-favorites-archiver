@@ -73,6 +73,11 @@ export interface GalleryPresetFilters {
   maxDuration?: string;
   minSize?: string;
   maxSize?: string;
+  minWidth?: string;
+  maxWidth?: string;
+  minHeight?: string;
+  maxHeight?: string;
+  codec?: string;
   dateFrom?: string;
   dateTo?: string;
   orientation?: string;
