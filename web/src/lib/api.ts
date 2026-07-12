@@ -1,4 +1,4 @@
-import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult } from "./types";
+import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -137,21 +137,23 @@ export const api = {
     return json<ImportResult>("/api/import", { method: "POST", body });
   },
 
-  legacyBootstrapPreview: (oldExport: File, currentExport: File, checkpoint: File) => {
+  legacyBootstrapPreview: (oldExport: File, currentExport: File, checkpoint: File, segments?: LegacyMappingSegment[]) => {
     const body = new FormData();
     body.append("old_export", oldExport);
     body.append("current_export", currentExport);
     body.append("checkpoint", checkpoint);
+    if (segments) body.append("mapping_segments", JSON.stringify(segments));
     return json<LegacyBootstrapPreview>("/api/import/legacy-preview", { method: "POST", body });
   },
 
-  legacyBootstrapApply: (oldExport: File, currentExport: File, checkpoint: File, previewToken: string) => {
+  legacyBootstrapApply: (oldExport: File, currentExport: File, checkpoint: File, previewToken: string, segments?: LegacyMappingSegment[]) => {
     const body = new FormData();
     body.append("old_export", oldExport);
     body.append("current_export", currentExport);
     body.append("checkpoint", checkpoint);
     body.append("preview_token", previewToken);
     body.append("confirmation", "MIGRATE");
+    if (segments) body.append("mapping_segments", JSON.stringify(segments));
     return json<LegacyBootstrapResult>("/api/import/legacy-apply", { method: "POST", body });
   },
 

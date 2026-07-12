@@ -11,8 +11,9 @@ import {
   CaretDown,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
+import { parseLegacyMappingText } from "../lib/legacyBootstrap";
 import type { OffloadSuggestion } from "../lib/api";
-import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview } from "../lib/types";
+import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyMappingSegment } from "../lib/types";
 import { Button, StatusBadge, cx } from "../components/ui";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "ignored", "expired"];
@@ -53,6 +54,7 @@ export function Dashboard() {
   const [legacyOldExport, setLegacyOldExport] = useState<File | null>(null);
   const [legacyCurrentExport, setLegacyCurrentExport] = useState<File | null>(null);
   const [legacyCheckpoint, setLegacyCheckpoint] = useState<File | null>(null);
+  const [legacyMappingText, setLegacyMappingText] = useState("");
   const [legacyPreview, setLegacyPreview] = useState<LegacyBootstrapPreview | null>(null);
   const [legacyVerified, setLegacyVerified] = useState(false);
   const [legacyBusy, setLegacyBusy] = useState(false);
@@ -124,12 +126,21 @@ export function Dashboard() {
       setLegacyMsg("Choose the old export, current export, and last-downloaded-link file first.");
       return;
     }
+    let segments: LegacyMappingSegment[] | undefined;
+    try {
+      segments = parseLegacyMappingText(legacyMappingText);
+    } catch (err) {
+      setLegacyMsg((err as Error).message);
+      return;
+    }
     setLegacyBusy(true);
     setLegacyMsg("Validating exports and local archive numbers…");
     setLegacyPreview(null);
     setLegacyVerified(false);
     try {
-      const preview = await api.legacyBootstrapPreview(legacyOldExport, legacyCurrentExport, legacyCheckpoint);
+      const preview = await api.legacyBootstrapPreview(
+        legacyOldExport, legacyCurrentExport, legacyCheckpoint, segments,
+      );
       setLegacyPreview(preview);
       setLegacyMsg("Preview passed every safety check. Verify the sample mappings before applying it.");
     } catch (err) {
@@ -142,6 +153,13 @@ export function Dashboard() {
   async function applyLegacyBootstrap() {
     if (!legacyOldExport || !legacyCurrentExport || !legacyCheckpoint || !legacyPreview || !legacyVerified) return;
     const allocation = legacyPreview.allocation;
+    let segments: LegacyMappingSegment[] | undefined;
+    try {
+      segments = parseLegacyMappingText(legacyMappingText);
+    } catch (err) {
+      setLegacyMsg((err as Error).message);
+      return;
+    }
     if (!window.confirm(
       `Create ${allocation.total_rows.toLocaleString()} library records? ` +
       `Only ${allocation.new_pending.toLocaleString()} newer favorites will be queued for download. ` +
@@ -155,10 +173,12 @@ export function Dashboard() {
         legacyCurrentExport,
         legacyCheckpoint,
         legacyPreview.token,
+        segments,
       );
       setLegacyMsg(
         `Bootstrap complete: ${result.local_done.toLocaleString()} local videos matched, ` +
-        `${result.legacy_gaps_ignored.toLocaleString()} legacy gaps preserved, ` +
+        `${result.physical_gaps_ignored.toLocaleString()} missing filenames and ` +
+        `${result.reused_number_markers.toLocaleString()} reused-number marker preserved, ` +
         `${result.offloaded.toLocaleString()} older favorites marked offloaded, and ` +
         `${result.new_pending.toLocaleString()} newer favorites queued.`,
       );
@@ -343,6 +363,20 @@ export function Dashboard() {
               />
             </div>
 
+            <label className="mt-4 block text-sm text-ink-dim">
+              <span className="font-medium text-ink">Mapping segments</span>
+              <span className="mt-0.5 block text-xs leading-relaxed text-ink-faint">
+                Leave blank for one uninterrupted CLI run. If verified samples show a restart changed numbering, enter each run as <code>first-file:offset</code>, separated by commas. Example: <code>20968:5833, 22315:5832</code>.
+              </span>
+              <input
+                value={legacyMappingText}
+                onChange={(event) => { setLegacyMappingText(event.target.value); resetLegacyPreview(); }}
+                placeholder="Automatically infer one segment"
+                spellCheck={false}
+                className="mt-2 h-10 w-full rounded border border-line bg-elevated px-3 font-mono text-sm text-ink placeholder:text-ink-faint"
+              />
+            </label>
+
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <Button
                 variant="ghost"
@@ -358,9 +392,13 @@ export function Dashboard() {
               <div className="mt-5 rounded-[var(--radius-control)] border border-line bg-elevated p-4">
                 <h3 className="text-sm font-semibold text-ink">Validated migration preview</h3>
                 <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <Stat label="Inferred offset" value={legacyPreview.offset.toLocaleString()} hint="filename − old position" />
+                  <Stat
+                    label={legacyPreview.segments.length > 1 ? "Mapping segments" : "Inferred offset"}
+                    value={legacyPreview.segments.length > 1 ? legacyPreview.segments.length : legacyPreview.offset.toLocaleString()}
+                    hint={legacyPreview.segments.map((segment) => segment.offset.toLocaleString()).join(" → ")}
+                  />
                   <Stat label="Local videos" value={legacyPreview.inventory.local_files.toLocaleString()} hint={`#${legacyPreview.inventory.lowest_number}–#${legacyPreview.inventory.highest_number}`} />
-                  <Stat label="Legacy gaps" value={legacyPreview.inventory.gaps.toLocaleString()} hint="preserved, never retried" />
+                  <Stat label="Legacy gaps" value={legacyPreview.inventory.gaps.toLocaleString()} hint={`${legacyPreview.inventory.physical_gaps} filenames + ${legacyPreview.inventory.reused_number_markers} reused`} />
                   <Stat label="New downloads" value={legacyPreview.allocation.new_pending.toLocaleString()} hint="after the checkpoint" />
                 </div>
 
@@ -371,6 +409,23 @@ export function Dashboard() {
                   <p>Older offloaded records: <strong className="text-ink">{legacyPreview.allocation.offloaded.toLocaleString()}</strong></p>
                   <p>Local mapped positions: <strong className="text-ink">{legacyPreview.inventory.mapped_old_position_first.toLocaleString()}–{legacyPreview.inventory.mapped_old_position_last.toLocaleString()}</strong></p>
                   <p>Next archive number: <strong className="text-ink">#{legacyPreview.allocation.next_archive_number.toLocaleString()}</strong></p>
+                </div>
+
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full min-w-[36rem] text-left text-xs">
+                    <thead className="text-ink-faint">
+                      <tr><th className="pb-2 pr-3 font-medium">Physical files</th><th className="pb-2 pr-3 font-medium">Export positions</th><th className="pb-2 font-medium">Offset</th></tr>
+                    </thead>
+                    <tbody className="text-ink-dim">
+                      {legacyPreview.segments.map((segment) => (
+                        <tr key={segment.start_id} className="border-t border-line">
+                          <td className="py-2 pr-3 text-ink">#{segment.start_id}–#{segment.end_id}</td>
+                          <td className="py-2 pr-3">{segment.first_position.toLocaleString()}–{segment.last_position.toLocaleString()}</td>
+                          <td className="py-2">{segment.offset.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
 
                 <div className="mt-4 overflow-x-auto">

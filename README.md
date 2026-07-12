@@ -160,6 +160,14 @@ several sample link-to-file mappings. Apply is enabled only after you confirm
 the samples. Apply writes one atomic SQLite transaction and does not rename,
 delete, move, index, or download any media.
 
+If the original CLI was restarted and its numbering changed, use **Mapping
+segments** before preview. Enter comma-separated `first-file:offset` pairs.
+For example, `20968:5833, 22315:5832` means files #20,968–#22,314 use offset
+5,833 and files from #22,315 onward use 5,832. Preview shows each resulting
+file and export-position range separately. Any favorite consumed by a failed
+run and then hidden by a reused filename is preserved as its own ignored
+position marker.
+
 After it succeeds, the result explains how many local files were matched, how
 many failed legacy filename slots were preserved, how many inaccessible older
 favorites were marked offloaded, and how many truly new favorites are pending.

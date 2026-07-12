@@ -362,24 +362,15 @@ def _remove_temp_files(paths):
             pass
 
 
-def _legacy_plan_while_idle(request, old_path, current_path, checkpoint_path):
-    def operation():
-        conn = _open(request)
-        try:
-            if conn.execute("SELECT 1 FROM item LIMIT 1").fetchone() is not None:
-                raise legacy_bootstrap.LegacyBootstrapError(
-                    "Legacy bootstrap requires an empty library database."
-                )
-        finally:
-            conn.close()
-        return legacy_bootstrap.plan_bootstrap(
-            old_path,
-            current_path,
-            checkpoint_path,
-            _download_dir(request),
-        )
-
-    return request.app.state.jobs.run_when_idle(operation)
+def _legacy_mapping_segments(value):
+    if not value:
+        return None
+    if not isinstance(value, str):
+        raise legacy_bootstrap.LegacyBootstrapError("Mapping segments must be JSON text.")
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise legacy_bootstrap.LegacyBootstrapError("Mapping segments are not valid JSON.") from exc
 
 
 @router.post("/import")
@@ -413,13 +404,30 @@ async def legacy_import_preview(
     old_export: UploadFile = File(...),
     current_export: UploadFile = File(...),
     checkpoint: UploadFile = File(...),
+    mapping_segments: str = Form(""),
 ):
     paths = []
     try:
         paths.append(await _stage_upload(old_export, "tiktok-old-export-", ".json"))
         paths.append(await _stage_upload(current_export, "tiktok-current-export-", ".json"))
         paths.append(await _stage_upload(checkpoint, "tiktok-checkpoint-", ".txt"))
-        plan = _legacy_plan_while_idle(request, *paths)
+        segments = _legacy_mapping_segments(mapping_segments)
+
+        def operation():
+            conn = _open(request)
+            try:
+                if conn.execute("SELECT 1 FROM item LIMIT 1").fetchone() is not None:
+                    raise legacy_bootstrap.LegacyBootstrapError(
+                        "Legacy bootstrap requires an empty library database."
+                    )
+            finally:
+                conn.close()
+            return legacy_bootstrap.plan_bootstrap(
+                paths[0], paths[1], paths[2], _download_dir(request),
+                mapping_segments=segments,
+            )
+
+        plan = request.app.state.jobs.run_when_idle(operation)
         return plan.preview()
     except JobBusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -437,6 +445,7 @@ async def legacy_import_apply(
     checkpoint: UploadFile = File(...),
     preview_token: str = Form(...),
     confirmation: str = Form(...),
+    mapping_segments: str = Form(""),
 ):
     if confirmation != "MIGRATE":
         raise HTTPException(status_code=400, detail="Type MIGRATE to confirm legacy bootstrap.")
@@ -445,10 +454,12 @@ async def legacy_import_apply(
         paths.append(await _stage_upload(old_export, "tiktok-old-export-", ".json"))
         paths.append(await _stage_upload(current_export, "tiktok-current-export-", ".json"))
         paths.append(await _stage_upload(checkpoint, "tiktok-checkpoint-", ".txt"))
+        segments = _legacy_mapping_segments(mapping_segments)
 
         def operation():
             plan = legacy_bootstrap.plan_bootstrap(
-                paths[0], paths[1], paths[2], _download_dir(request)
+                paths[0], paths[1], paths[2], _download_dir(request),
+                mapping_segments=segments,
             )
             conn = _open(request)
             try:

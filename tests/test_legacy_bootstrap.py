@@ -39,6 +39,33 @@ def _fixture(root):
     return old_path, current_path, checkpoint_path, downloads
 
 
+def _piecewise_fixture(root):
+    old = [(f"https://tiktok.com/{n}", f"old-{n}") for n in range(1, 11)]
+    current = old + [
+        ("https://tiktok.com/11", "new-11"),
+        ("https://tiktok.com/12", "new-12"),
+    ]
+    old_path = os.path.join(root, "old.json")
+    current_path = os.path.join(root, "current.json")
+    checkpoint_path = os.path.join(root, "last_downloaded_link.txt")
+    downloads = os.path.join(root, "downloads")
+    os.makedirs(downloads)
+    _make_export(old_path, old)
+    _make_export(current_path, current, current=True)
+    with open(checkpoint_path, "w", encoding="utf-8") as f:
+        f.write("https://tiktok.com/10\n")
+    # First run: #12..#14 -> positions 5..7 (offset 7), with #13 missing.
+    # Position 8 then failed at the end of that run. The restart reused #15,
+    # so #15..#16 -> positions 9..10 (offset 6).
+    for item_id in (12, 14, 15, 16):
+        open(os.path.join(downloads, f"{item_id}.mp4"), "wb").close()
+    segments = [
+        {"start_id": 12, "offset": 7},
+        {"start_id": 15, "offset": 6},
+    ]
+    return (old_path, current_path, checkpoint_path, downloads), segments
+
+
 def test_preview_builds_exact_legacy_allocation():
     with tempfile.TemporaryDirectory() as d:
         plan = legacy_bootstrap.plan_bootstrap(*_fixture(d))
@@ -54,6 +81,8 @@ def test_preview_builds_exact_legacy_allocation():
         "highest_number": 15,
         "mapped_old_position_first": 5,
         "mapped_old_position_last": 8,
+        "physical_gaps": 1,
+        "reused_number_markers": 0,
         "gaps": 1,
     }
     assert preview["allocation"] == {
@@ -63,9 +92,13 @@ def test_preview_builds_exact_legacy_allocation():
         "local_segment_last": 15,
         "local_done": 3,
         "legacy_gaps_ignored": 1,
+        "physical_gaps_ignored": 1,
+        "reused_number_markers": 0,
         "offloaded_first": 16,
         "offloaded_last": 19,
         "offloaded": 4,
+        "reused_marker_first": None,
+        "reused_marker_last": None,
         "new_pending_first": 20,
         "new_pending_last": 21,
         "new_pending": 2,
@@ -86,6 +119,112 @@ def test_preview_token_changes_when_numeric_inventory_changes():
         second = legacy_bootstrap.plan_bootstrap(*args)
         assert first.token != second.token
         assert second.gap_ids == ()
+
+
+def test_piecewise_preview_preserves_reused_number_position():
+    with tempfile.TemporaryDirectory() as d:
+        args, segments = _piecewise_fixture(d)
+        plan = legacy_bootstrap.plan_bootstrap(*args, mapping_segments=segments)
+
+    preview = plan.preview()
+    assert preview["segments"] == [
+        {
+            "start_id": 12,
+            "end_id": 14,
+            "offset": 7,
+            "first_position": 5,
+            "last_position": 7,
+        },
+        {
+            "start_id": 15,
+            "end_id": 16,
+            "offset": 6,
+            "first_position": 9,
+            "last_position": 10,
+        },
+    ]
+    assert plan.reused_number_positions == (8,)
+    assert preview["inventory"]["mapped_old_position_first"] == 5
+    assert preview["inventory"]["mapped_old_position_last"] == 10
+    assert preview["inventory"]["physical_gaps"] == 1
+    assert preview["inventory"]["reused_number_markers"] == 1
+    assert preview["inventory"]["gaps"] == 2
+    assert preview["allocation"] == {
+        "reserved_physical_first": 1,
+        "reserved_physical_last": 11,
+        "local_segment_first": 12,
+        "local_segment_last": 16,
+        "local_done": 4,
+        "legacy_gaps_ignored": 2,
+        "physical_gaps_ignored": 1,
+        "reused_number_markers": 1,
+        "offloaded_first": 17,
+        "offloaded_last": 20,
+        "offloaded": 4,
+        "reused_marker_first": 21,
+        "reused_marker_last": 21,
+        "new_pending_first": 22,
+        "new_pending_last": 23,
+        "new_pending": 2,
+        "next_archive_number": 24,
+        "total_rows": 12,
+    }
+    sample_mapping = {
+        sample["archive_number"]: sample["old_export_position"]
+        for sample in preview["samples"]
+    }
+    assert sample_mapping[12] == 5
+    assert sample_mapping[14] == 7
+    assert sample_mapping[15] == 9
+    assert sample_mapping[16] == 10
+
+
+def test_verified_windows_segments_map_exact_restart_boundary():
+    segments, reused = legacy_bootstrap._build_segments(
+        [
+            {"start_id": 20968, "offset": 5833},
+            {"start_id": 22315, "offset": 5832},
+        ],
+        tuple(range(20968, 23991)),
+        old_count=18158,
+        checkpoint_position=18158,
+    )
+
+    assert [segment.public() for segment in segments] == [
+        {
+            "start_id": 20968,
+            "end_id": 22314,
+            "offset": 5833,
+            "first_position": 15135,
+            "last_position": 16481,
+        },
+        {
+            "start_id": 22315,
+            "end_id": 23990,
+            "offset": 5832,
+            "first_position": 16483,
+            "last_position": 18158,
+        },
+    ]
+    assert reused == (16482,)
+
+
+def test_piecewise_preview_rejects_unsafe_segments():
+    with tempfile.TemporaryDirectory() as d:
+        args, _segments = _piecewise_fixture(d)
+        bad_cases = (
+            ([{"start_id": 13, "offset": 7}, {"start_id": 15, "offset": 6}], "lowest local"),
+            ([{"start_id": 12, "offset": 7}, {"start_id": 15, "offset": 8}], "overlap"),
+            ([{"start_id": 12, "offset": 7}, {"start_id": 15, "offset": 7}], "checkpoint"),
+            ([{"start_id": 12, "offset": 7}, {"start_id": 13, "offset": 6}], "existing MP4"),
+        )
+        for segments, message in bad_cases:
+            try:
+                legacy_bootstrap.plan_bootstrap(*args, mapping_segments=segments)
+            except legacy_bootstrap.LegacyBootstrapError as exc:
+                assert message in str(exc), (segments, str(exc))
+            else:
+                raise AssertionError(f"expected unsafe segment refusal: {segments}")
 
 
 def test_preview_rejects_checkpoint_that_is_not_old_export_end():
@@ -159,6 +298,8 @@ def test_apply_creates_exact_rows_without_touching_media():
         "items_created": 10,
         "local_done": 3,
         "legacy_gaps_ignored": 1,
+        "physical_gaps_ignored": 1,
+        "reused_number_markers": 0,
         "offloaded": 4,
         "new_pending": 2,
         "next_archive_number": 22,
@@ -180,6 +321,43 @@ def test_apply_creates_exact_rows_without_touching_media():
     assert store.get_item(conn, 20)["status"] == "pending"
     assert store.get_item(conn, 20)["favorite_order"] == 9
     assert [row["id"] for row in store.page_items(conn, order="latest")] == [21, 20, 15, 14, 13, 12, 19, 18, 17, 16]
+
+
+def test_piecewise_apply_keeps_physical_and_reused_gaps_distinct():
+    conn = store.init_db(store.connect(":memory:"))
+    with tempfile.TemporaryDirectory() as d:
+        args, segments = _piecewise_fixture(d)
+        before = sorted(os.listdir(args[3]))
+        plan = legacy_bootstrap.plan_bootstrap(*args, mapping_segments=segments)
+        result = legacy_bootstrap.apply_bootstrap(conn, plan, plan.token)
+        after = sorted(os.listdir(args[3]))
+
+    assert before == after
+    assert result == {
+        "items_created": 12,
+        "local_done": 4,
+        "legacy_gaps_ignored": 2,
+        "physical_gaps_ignored": 1,
+        "reused_number_markers": 1,
+        "offloaded": 4,
+        "new_pending": 2,
+        "next_archive_number": 24,
+    }
+    assert [row["id"] for row in store.all_items(conn)] == list(range(12, 24))
+    assert store.get_item(conn, 12)["favorite_order"] == 5
+    assert store.get_item(conn, 13)["favorite_order"] == 6
+    assert store.get_item(conn, 13)["status"] == "ignored"
+    assert "no local MP4" in store.get_item(conn, 13)["error"]
+    assert store.get_item(conn, 14)["favorite_order"] == 7
+    assert store.get_item(conn, 15)["favorite_order"] == 9
+    assert store.get_item(conn, 16)["favorite_order"] == 10
+    assert store.get_item(conn, 21)["favorite_order"] == 8
+    assert store.get_item(conn, 21)["status"] == "ignored"
+    assert "reused archive number" in store.get_item(conn, 21)["error"]
+    assert store.get_item(conn, 22)["status"] == "pending"
+    assert [row["id"] for row in store.page_items(conn, order="latest")] == [
+        23, 22, 16, 15, 21, 14, 13, 12, 20, 19, 18, 17,
+    ]
 
 
 def test_apply_refuses_stale_token_and_nonempty_database():

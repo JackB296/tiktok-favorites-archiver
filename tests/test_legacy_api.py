@@ -39,17 +39,24 @@ def test_legacy_routes_preview_then_apply_with_container_dependencies():
         downloads = os.path.join(d, "downloads")
         os.makedirs(downloads)
         store.init_db(store.connect(db_path)).close()
-        old = [(f"https://tiktok.com/{n}", str(n)) for n in range(1, 6)]
-        current = old + [("https://tiktok.com/6", "6")]
+        old = [(f"https://tiktok.com/{n}", str(n)) for n in range(1, 11)]
+        current = old + [
+            ("https://tiktok.com/11", "11"),
+            ("https://tiktok.com/12", "12"),
+        ]
         old_path = os.path.join(d, "old.json")
         current_path = os.path.join(d, "current.json")
         checkpoint_path = os.path.join(d, "last_downloaded_link.txt")
         _make_export(old_path, old, "Activity")
         _make_export(current_path, current, "Likes and Favorites")
         with open(checkpoint_path, "w", encoding="utf-8") as f:
-            f.write("https://tiktok.com/5")
-        for item_id in (8, 10):
+            f.write("https://tiktok.com/10")
+        for item_id in (12, 14, 15, 16):
             open(os.path.join(downloads, f"{item_id}.mp4"), "wb").close()
+        mapping_segments = json.dumps([
+            {"start_id": 12, "offset": 7},
+            {"start_id": 15, "offset": 6},
+        ])
 
         state = SimpleNamespace(
             db_path=db_path,
@@ -63,9 +70,12 @@ def test_legacy_routes_preview_then_apply_with_container_dependencies():
             _upload(old_path),
             _upload(current_path),
             _upload(checkpoint_path),
+            mapping_segments,
         ))
-        assert preview["offset"] == 5
-        assert preview["allocation"]["new_pending"] == 1
+        assert preview["offset"] == 6
+        assert len(preview["segments"]) == 2
+        assert preview["allocation"]["reused_number_markers"] == 1
+        assert preview["allocation"]["new_pending"] == 2
 
         result = asyncio.run(api.legacy_import_apply(
             request,
@@ -74,13 +84,17 @@ def test_legacy_routes_preview_then_apply_with_container_dependencies():
             _upload(checkpoint_path),
             preview["token"],
             "MIGRATE",
+            mapping_segments,
         ))
-        assert result["local_done"] == 2
-        assert result["legacy_gaps_ignored"] == 1
-        assert result["new_pending"] == 1
+        assert result["local_done"] == 4
+        assert result["legacy_gaps_ignored"] == 2
+        assert result["reused_number_markers"] == 1
+        assert result["new_pending"] == 2
         conn = store.connect(db_path)
         try:
-            assert [row["id"] for row in store.page_items(conn, order="latest")] == [13, 10, 9, 8, 12, 11]
+            assert [row["id"] for row in store.page_items(conn, order="latest")] == [
+                23, 22, 16, 15, 21, 14, 13, 12, 20, 19, 18, 17,
+            ]
         finally:
             conn.close()
 

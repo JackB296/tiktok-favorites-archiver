@@ -71,10 +71,22 @@ export interface ImportResult {
   manifest_rows: number;
 }
 
+export interface LegacyMappingSegment {
+  start_id: number;
+  offset: number;
+}
+
+export interface LegacyMappingSegmentPreview extends LegacyMappingSegment {
+  end_id: number;
+  first_position: number;
+  last_position: number;
+}
+
 export interface LegacyBootstrapPreview {
   valid: true;
   token: string;
   offset: number;
+  segments: LegacyMappingSegmentPreview[];
   checkpoint: {
     link: string;
     old_position: number;
@@ -88,6 +100,8 @@ export interface LegacyBootstrapPreview {
     highest_number: number;
     mapped_old_position_first: number;
     mapped_old_position_last: number;
+    physical_gaps: number;
+    reused_number_markers: number;
     gaps: number;
   };
   allocation: {
@@ -97,9 +111,13 @@ export interface LegacyBootstrapPreview {
     local_segment_last: number;
     local_done: number;
     legacy_gaps_ignored: number;
+    physical_gaps_ignored: number;
+    reused_number_markers: number;
     offloaded_first: number | null;
     offloaded_last: number | null;
     offloaded: number;
+    reused_marker_first: number | null;
+    reused_marker_last: number | null;
     new_pending_first: number | null;
     new_pending_last: number | null;
     new_pending: number;
@@ -119,6 +137,8 @@ export interface LegacyBootstrapResult {
   items_created: number;
   local_done: number;
   legacy_gaps_ignored: number;
+  physical_gaps_ignored: number;
+  reused_number_markers: number;
   offloaded: number;
   new_pending: number;
   next_archive_number: number;

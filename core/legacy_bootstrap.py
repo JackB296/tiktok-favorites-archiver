@@ -61,6 +61,76 @@ def _range(first, last):
 
 
 @dataclass(frozen=True)
+class MappingSegment:
+    start_id: int
+    end_id: int
+    offset: int
+    first_position: int
+    last_position: int
+
+    def public(self):
+        return {
+            "start_id": self.start_id,
+            "end_id": self.end_id,
+            "offset": self.offset,
+            "first_position": self.first_position,
+            "last_position": self.last_position,
+        }
+
+
+def _build_segments(mapping_segments, local_ids, old_count, checkpoint_position):
+    local_first, local_last = local_ids[0], local_ids[-1]
+    if mapping_segments is None:
+        mapping_segments = [{
+            "start_id": local_first,
+            "offset": local_last - checkpoint_position,
+        }]
+    if not isinstance(mapping_segments, list) or not mapping_segments:
+        raise LegacyBootstrapError("Mapping segments must be a non-empty list.")
+
+    specs = []
+    for value in mapping_segments:
+        if not isinstance(value, dict) or type(value.get("start_id")) is not int or type(value.get("offset")) is not int:
+            raise LegacyBootstrapError("Each mapping segment needs integer start_id and offset values.")
+        specs.append((value["start_id"], value["offset"]))
+    if specs != sorted(set(specs)) or len({start for start, _offset in specs}) != len(specs):
+        raise LegacyBootstrapError("Mapping segment start IDs must be unique and ascending.")
+    if specs[0][0] != local_first:
+        raise LegacyBootstrapError("The first mapping segment must start at the lowest local archive number.")
+
+    local_set = set(local_ids)
+    segments = []
+    reused_positions = []
+    previous_last_position = None
+    for index, (start_id, offset) in enumerate(specs):
+        if start_id not in local_set:
+            raise LegacyBootstrapError(f"Mapping segment #{start_id} must begin at an existing MP4.")
+        end_id = specs[index + 1][0] - 1 if index + 1 < len(specs) else local_last
+        if not local_first <= start_id <= end_id <= local_last:
+            raise LegacyBootstrapError("Mapping segment bounds must stay inside the local archive range.")
+        first_position = start_id - offset
+        last_position = end_id - offset
+        if first_position < 1 or last_position > old_count:
+            raise LegacyBootstrapError("A mapping segment lands outside the old export.")
+        if previous_last_position is not None:
+            if first_position <= previous_last_position:
+                raise LegacyBootstrapError("Mapping segments overlap or reverse favorite positions.")
+            reused_positions.extend(range(previous_last_position + 1, first_position))
+        segments.append(MappingSegment(
+            start_id=start_id,
+            end_id=end_id,
+            offset=offset,
+            first_position=first_position,
+            last_position=last_position,
+        ))
+        previous_last_position = last_position
+
+    if segments[-1].last_position != checkpoint_position:
+        raise LegacyBootstrapError("The final mapping segment does not land on the checkpoint.")
+    return tuple(segments), tuple(reused_positions)
+
+
+@dataclass(frozen=True)
 class LegacyBootstrapPlan:
     old_favorites: tuple
     current_favorites: tuple
@@ -69,6 +139,8 @@ class LegacyBootstrapPlan:
     checkpoint_current_position: int
     local_ids: tuple
     gap_ids: tuple
+    segments: tuple
+    reused_number_positions: tuple
     offset: int
     mapped_first_position: int
     mapped_last_position: int
@@ -76,6 +148,8 @@ class LegacyBootstrapPlan:
     offloaded_last_id: Optional[int]
     pending_first_id: Optional[int]
     pending_last_id: Optional[int]
+    reused_marker_first_id: Optional[int]
+    reused_marker_last_id: Optional[int]
     next_archive_number: int
     token: str
 
@@ -97,18 +171,32 @@ class LegacyBootstrapPlan:
 
     @property
     def total_rows(self):
-        return (self.local_last_id - self.local_first_id + 1) + self.offloaded_count + self.pending_count
+        return (
+            (self.local_last_id - self.local_first_id + 1)
+            + self.offloaded_count
+            + len(self.reused_number_positions)
+            + self.pending_count
+        )
+
+    def position_for_id(self, item_id):
+        for segment in self.segments:
+            if segment.start_id <= item_id <= segment.end_id:
+                return item_id - segment.offset
+        raise LegacyBootstrapError(f"Archive number #{item_id} is not covered by a mapping segment.")
 
     def preview(self):
         samples = []
-        if len(self.local_ids) <= 5:
-            sample_ids = self.local_ids
-        else:
-            indexes = (0, len(self.local_ids) // 4, len(self.local_ids) // 2,
-                       (len(self.local_ids) * 3) // 4, len(self.local_ids) - 1)
-            sample_ids = tuple(dict.fromkeys(self.local_ids[index] for index in indexes))
+        sample_ids = []
+        for segment in self.segments:
+            segment_ids = [
+                item_id for item_id in self.local_ids
+                if segment.start_id <= item_id <= segment.end_id
+            ]
+            indexes = (0, len(segment_ids) // 2, len(segment_ids) - 1)
+            sample_ids.extend(segment_ids[index] for index in indexes)
+        sample_ids = tuple(dict.fromkeys(sample_ids))
         for item_id in sample_ids:
-            old_position = item_id - self.offset
+            old_position = self.position_for_id(item_id)
             link, favorited_at = self.old_favorites[old_position - 1]
             samples.append({
                 "archive_number": item_id,
@@ -121,6 +209,7 @@ class LegacyBootstrapPlan:
             "valid": True,
             "token": self.token,
             "offset": self.offset,
+            "segments": [segment.public() for segment in self.segments],
             "checkpoint": {
                 "link": self.checkpoint,
                 "old_position": self.checkpoint_old_position,
@@ -137,7 +226,9 @@ class LegacyBootstrapPlan:
                 "highest_number": self.local_last_id,
                 "mapped_old_position_first": self.mapped_first_position,
                 "mapped_old_position_last": self.mapped_last_position,
-                "gaps": len(self.gap_ids),
+                "physical_gaps": len(self.gap_ids),
+                "reused_number_markers": len(self.reused_number_positions),
+                "gaps": len(self.gap_ids) + len(self.reused_number_positions),
             },
             "allocation": {
                 "reserved_physical_first": 1,
@@ -145,10 +236,14 @@ class LegacyBootstrapPlan:
                 "local_segment_first": self.local_first_id,
                 "local_segment_last": self.local_last_id,
                 "local_done": len(self.local_ids),
-                "legacy_gaps_ignored": len(self.gap_ids),
+                "legacy_gaps_ignored": len(self.gap_ids) + len(self.reused_number_positions),
+                "physical_gaps_ignored": len(self.gap_ids),
+                "reused_number_markers": len(self.reused_number_positions),
                 "offloaded_first": self.offloaded_first_id,
                 "offloaded_last": self.offloaded_last_id,
                 "offloaded": self.offloaded_count,
+                "reused_marker_first": self.reused_marker_first_id,
+                "reused_marker_last": self.reused_marker_last_id,
                 "new_pending_first": self.pending_first_id,
                 "new_pending_last": self.pending_last_id,
                 "new_pending": self.pending_count,
@@ -163,7 +258,13 @@ class LegacyBootstrapPlan:
         }
 
 
-def plan_bootstrap(old_export_path, current_export_path, checkpoint_path, download_dir):
+def plan_bootstrap(
+    old_export_path,
+    current_export_path,
+    checkpoint_path,
+    download_dir,
+    mapping_segments=None,
+):
     """Validate legacy evidence and return a deterministic, read-only plan."""
     old_favorites = tuple(export.load_all_favorites(old_export_path))
     current_favorites = tuple(export.load_all_favorites(current_export_path))
@@ -194,33 +295,37 @@ def plan_bootstrap(old_export_path, current_export_path, checkpoint_path, downlo
     local_ids = _numeric_mp4_ids(download_dir)
     local_first = local_ids[0]
     local_last = local_ids[-1]
-    offset = local_last - old_position
-    mapped_first = local_first - offset
-    mapped_last = local_last - offset
-    if mapped_first < 1 or mapped_last > len(old_favorites):
-        raise LegacyBootstrapError(
-            "The inferred archive-number offset maps local files outside the old export."
-        )
-    if mapped_last != old_position:
-        raise LegacyBootstrapError("The highest local archive number does not map to the checkpoint.")
+    segments, reused_positions = _build_segments(
+        mapping_segments, local_ids, len(old_favorites), old_position
+    )
+    offset = segments[-1].offset
+    mapped_first = segments[0].first_position
+    mapped_last = segments[-1].last_position
 
     local_set = set(local_ids)
     gap_ids = tuple(item_id for item_id in range(local_first, local_last + 1) if item_id not in local_set)
     offloaded_count = mapped_first - 1
     pending_count = len(current_favorites) - current_position
     offloaded_first, offloaded_last = _range(local_last + 1, local_last + offloaded_count)
-    pending_first, pending_last = _range(local_last + offloaded_count + 1,
-                                          local_last + offloaded_count + pending_count)
-    next_archive_number = local_last + offloaded_count + pending_count + 1
+    reused_first, reused_last = _range(
+        local_last + offloaded_count + 1,
+        local_last + offloaded_count + len(reused_positions),
+    )
+    pending_first, pending_last = _range(
+        local_last + offloaded_count + len(reused_positions) + 1,
+        local_last + offloaded_count + len(reused_positions) + pending_count,
+    )
+    next_archive_number = local_last + offloaded_count + len(reused_positions) + pending_count + 1
 
     token_payload = {
-        "version": 1,
+        "version": 2,
         "old_favorites": old_favorites,
         "current_favorites": current_favorites,
         "checkpoint": checkpoint,
         "local_ids": local_ids,
         "gap_ids": gap_ids,
-        "offset": offset,
+        "segments": [segment.public() for segment in segments],
+        "reused_number_positions": reused_positions,
     }
     token = hashlib.sha256(
         json.dumps(token_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -234,6 +339,8 @@ def plan_bootstrap(old_export_path, current_export_path, checkpoint_path, downlo
         checkpoint_current_position=current_position,
         local_ids=local_ids,
         gap_ids=gap_ids,
+        segments=segments,
+        reused_number_positions=reused_positions,
         offset=offset,
         mapped_first_position=mapped_first,
         mapped_last_position=mapped_last,
@@ -241,6 +348,8 @@ def plan_bootstrap(old_export_path, current_export_path, checkpoint_path, downlo
         offloaded_last_id=offloaded_last,
         pending_first_id=pending_first,
         pending_last_id=pending_last,
+        reused_marker_first_id=reused_first,
+        reused_marker_last_id=reused_last,
         next_archive_number=next_archive_number,
         token=token,
     )
@@ -267,25 +376,35 @@ def apply_bootstrap(conn, plan, preview_token):
 
     try:
         conn.execute("BEGIN IMMEDIATE")
-        for item_id in range(plan.local_first_id, plan.local_last_id + 1):
-            old_position = item_id - plan.offset
-            favorite = plan.old_favorites[old_position - 1]
-            if item_id in local_set:
-                insert(item_id, old_position, favorite, "done")
-            else:
-                insert(
-                    item_id,
-                    old_position,
-                    favorite,
-                    "ignored",
-                    error="legacy CLI gap: no local MP4 was present during bootstrap",
-                )
+        for segment in plan.segments:
+            for item_id in range(segment.start_id, segment.end_id + 1):
+                old_position = item_id - segment.offset
+                favorite = plan.old_favorites[old_position - 1]
+                if item_id in local_set:
+                    insert(item_id, old_position, favorite, "done")
+                else:
+                    insert(
+                        item_id,
+                        old_position,
+                        favorite,
+                        "ignored",
+                        error="legacy CLI gap: no local MP4 was present during bootstrap",
+                    )
 
         next_id = plan.local_last_id + 1
         for favorite_order, favorite in enumerate(
             plan.current_favorites[:plan.mapped_first_position - 1], start=1
         ):
             insert(next_id, favorite_order, favorite, "done", offloaded=1)
+            next_id += 1
+        for favorite_order in plan.reused_number_positions:
+            insert(
+                next_id,
+                favorite_order,
+                plan.old_favorites[favorite_order - 1],
+                "ignored",
+                error="legacy CLI restart reused archive number; no local MP4 exists",
+            )
             next_id += 1
         for favorite_order, favorite in enumerate(
             plan.current_favorites[plan.checkpoint_current_position:],
@@ -301,7 +420,9 @@ def apply_bootstrap(conn, plan, preview_token):
     return {
         "items_created": plan.total_rows,
         "local_done": len(plan.local_ids),
-        "legacy_gaps_ignored": len(plan.gap_ids),
+        "legacy_gaps_ignored": len(plan.gap_ids) + len(plan.reused_number_positions),
+        "physical_gaps_ignored": len(plan.gap_ids),
+        "reused_number_markers": len(plan.reused_number_positions),
         "offloaded": plan.offloaded_count,
         "new_pending": plan.pending_count,
         "next_archive_number": plan.next_archive_number,
