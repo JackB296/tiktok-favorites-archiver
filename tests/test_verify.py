@@ -96,6 +96,89 @@ def test_missing_download_dir_reports_everything_missing():
     assert report["missing"]["count"] == 1 and report["ok"] is False
 
 
+def test_offloaded_items_without_files_are_not_missing():
+    conn = _db()
+    store.insert_item(conn, 1, "a", status="done")   # offloaded, no local file
+    store.insert_item(conn, 2, "b", status="done")   # local file present
+    store.set_offloaded(conn, [1])
+
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "2.mp4"), "w").close()
+        report = verify.verify_archive(conn, dl)
+
+    assert report["missing"]["count"] == 0 and report["ok"] is True
+    assert report["offloaded"] == 1
+    assert store.get_item(conn, 1)["archive_missing"] == 0
+
+
+def test_requeue_missing_skips_offloaded_items():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/a", status="done")  # offloaded -> keep
+    store.insert_item(conn, 2, "https://tiktok.com/b", status="done")  # missing -> requeue
+    store.set_offloaded(conn, [1])
+
+    with tempfile.TemporaryDirectory() as dl:
+        result = verify.requeue_missing(conn, dl)
+
+    assert result == {"requeued": 1}
+    assert store.get_item(conn, 1)["status"] == "done"
+    assert store.get_item(conn, 2)["status"] == "pending"
+
+
+def test_requeue_selected_skips_offloaded_items():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/a", status="done")  # offloaded -> skip
+    store.insert_item(conn, 2, "https://tiktok.com/b", status="failed")
+    store.set_offloaded(conn, [1])
+
+    with tempfile.TemporaryDirectory() as dl:
+        result = verify.requeue_selected(conn, dl, [1, 2])
+
+    assert result == {"requeued": [2], "skipped": 1}
+    assert store.get_item(conn, 1)["status"] == "done"
+    assert store.get_item(conn, 2)["status"] == "pending"
+
+
+def test_offload_suggestion_targets_ids_below_the_earliest_local_file():
+    conn = _db()
+    store.insert_item(conn, 1, "a", status="done")     # already offloaded
+    store.insert_item(conn, 2, "b", status="pending")  # undownloaded
+    store.insert_item(conn, 3, "c", status="failed")   # undownloaded
+    store.insert_item(conn, 5, "e", status="done")
+    store.set_offloaded(conn, [1])
+
+    with tempfile.TemporaryDirectory() as dl:
+        for name in ("5.mp4", "9.mp4"):
+            open(os.path.join(dl, name), "w").close()
+        suggestion = verify.offload_suggestion(conn, dl)
+
+    assert suggestion["earliest_local"] == 5
+    assert suggestion["suggested"] == {"first_id": 1, "last_id": 4}
+    assert suggestion["range_total"] == 3
+    assert suggestion["range_undownloaded"] == 2
+    assert suggestion["range_already_offloaded"] == 1
+
+
+def test_offload_suggestion_is_none_without_a_gap_below_the_earliest_file():
+    conn = _db()
+    with tempfile.TemporaryDirectory() as dl:
+        assert verify.offload_suggestion(conn, dl) == {
+            "earliest_local": None,
+            "suggested": None,
+            "range_total": 0,
+            "range_undownloaded": 0,
+            "range_already_offloaded": 0,
+        }
+        open(os.path.join(dl, "1.mp4"), "w").close()
+        assert verify.offload_suggestion(conn, dl) == {
+            "earliest_local": 1,
+            "suggested": None,
+            "range_total": 0,
+            "range_undownloaded": 0,
+            "range_already_offloaded": 0,
+        }
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

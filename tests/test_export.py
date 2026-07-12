@@ -41,6 +41,22 @@ def test_load_all_links_skips_items_without_link():
         assert export.load_all_links(p) == ["https://tiktok.com/x"]
 
 
+def test_load_all_favorites_accepts_current_likes_and_favorites_schema():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "current.json")
+        data = {"Likes and Favorites": {"Favorite Videos": {"FavoriteVideoList": [
+            {"Link": "https://www.tiktokv.com/new", "Date": "2026-07-11"},
+            {"Link": "https://www.tiktok.com/old", "Date": "2026-07-10"},
+        ]}}}
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        assert export.load_all_favorites(p) == [
+            ("https://www.tiktok.com/old", "2026-07-10"),
+            ("https://www.tiktok.com/new", "2026-07-11"),
+        ]
+
+
 
 if __name__ == "__main__":
     import traceback

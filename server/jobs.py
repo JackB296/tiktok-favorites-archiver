@@ -14,6 +14,10 @@ import threading
 from core import enrich, runs, sidecars, store, sync
 
 
+class JobBusyError(RuntimeError):
+    """Raised when exclusive maintenance is attempted during an active job."""
+
+
 class Broadcaster:
     """Thread-safe fan-out of events to subscriber queues."""
 
@@ -53,7 +57,9 @@ class JobManager:
         self._thread = None
         self._broadcaster = Broadcaster()
         self._lock = threading.Lock()
-        store.init_db(store.connect(db_path)).close()  # once, not per status poll
+        conn = store.init_db(store.connect(db_path))  # once, not per status poll
+        store.reset_interrupted_downloads(conn)  # heal rows stranded by a crash
+        conn.close()
 
     def _conn(self):
         return store.connect(self.db_path)
@@ -95,21 +101,35 @@ class JobManager:
             self._thread.start()
             return True
 
+    def run_when_idle(self, operation):
+        """Run short exclusive maintenance without racing a job start.
+
+        Both this method and ``start`` use the same lock. Once the idle check
+        passes, no Sync/backfill/index job can start until ``operation`` has
+        either completed or raised.
+        """
+        with self._lock:
+            if self.is_running():
+                raise JobBusyError("an Archive job is currently running")
+            return operation()
+
     def _set_state(self, state):
+        if not self.is_running():
+            return False
         conn = self._conn()
         try:
-            store.set_run_state(conn, state=state)
+            return store.set_active_run_state(conn, state)
         finally:
             conn.close()
 
     def pause(self):
-        self._set_state("paused")
+        return self._set_state("paused")
 
     def resume(self):
-        self._set_state("running")
+        return self._set_state("running")
 
     def stop(self):
-        self._set_state("stopping")
+        return self._set_state("stopping")
 
     def status(self):
         conn = self._conn()

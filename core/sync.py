@@ -130,6 +130,7 @@ def run_sync(conn, download_dir, deps=None, concurrency=None, progress=None,
             return store.get_run_state(conn)["state"]
 
     with db_lock:
+        store.reset_interrupted_downloads(conn)
         rs = store.get_run_state(conn)
         library = store.get_library_settings(conn)
         eff_concurrency = int(concurrency or (rs["concurrency"] if rs else config.CONCURRENCY) or config.CONCURRENCY)
@@ -228,6 +229,7 @@ def items_needing_backfill(conn):
         row for row in store.all_items(conn)
         if row["has_assets"] == 0 and row["kind"] != "video"
         and not str(row["link"]).startswith("local://")
+        and not row["offloaded"] and row["status"] != "ignored"
     ]
 
 

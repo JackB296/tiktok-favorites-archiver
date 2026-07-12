@@ -35,7 +35,14 @@ def import_existing_files(conn, download_dir):
         n = int(stem)
         item = store.get_item(conn, n)
         if item is None:
-            store.insert_item(conn, n, f"local://file/{n}", kind="unknown", status="done")
+            store.insert_item(
+                conn,
+                n,
+                f"local://file/{n}",
+                kind="unknown",
+                status="done",
+                favorite_order=store.next_favorite_order(conn),
+            )
         elif item["status"] != "done":
             store.set_status(conn, n, "done")
         if os.path.isdir(os.path.join(download_dir, str(n))):

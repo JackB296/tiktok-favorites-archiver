@@ -76,6 +76,15 @@ def test_video_download_failure_is_retryable():
         assert store.get_item(conn, 1)["status"] == "failed"
 
 
+def test_items_stranded_downloading_by_a_crash_are_retried_on_the_next_run():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "v", status="downloading")  # orphaned by a hard kill
+    results = {"v": cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel")}
+    with tempfile.TemporaryDirectory() as dl:
+        _run_sync(conn, dl, deps=_fake_deps(results), concurrency=1)
+    assert store.get_item(conn, 1)["status"] == "done"  # reset + retried in the same run
+
+
 def test_expired_links_remain_as_archive_markers_and_are_not_retried():
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 1, "gone", status="expired")
@@ -212,6 +221,15 @@ def test_pause_then_continue():
     assert calls["waits"] >= 1                      # the pause gate was observed, then released
     assert store.get_item(conn, 1)["status"] == "done"
     assert store.get_item(conn, 2)["status"] == "done"
+
+
+def test_items_needing_backfill_skips_offloaded_and_ignored_items():
+    conn = store.init_db(store.connect(":memory:"))
+    _seed(conn, ["a", "b", "c"])  # ids 1..3, kind unknown, no assets
+    store.set_offloaded(conn, [1])
+    store.set_ignored(conn, [2])
+
+    assert [row["id"] for row in sync.items_needing_backfill(conn)] == [3]
 
 
 if __name__ == "__main__":

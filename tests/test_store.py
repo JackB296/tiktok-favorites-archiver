@@ -35,6 +35,36 @@ def test_next_id_preserves_gaps():
     assert store.next_item_id(conn) == 6  # max + 1, gaps preserved
 
 
+def test_favorite_order_is_independent_from_physical_archive_number():
+    conn = _db()
+    store.insert_item(conn, 120, "middle", favorite_order=2, status="done")
+    store.insert_item(conn, 500, "newest", favorite_order=3, status="done")
+    store.insert_item(conn, 300, "oldest", favorite_order=1, status="done")
+
+    assert [row["id"] for row in store.page_items(conn, order="latest")] == [500, 120, 300]
+    assert [row["id"] for row in store.page_items(conn, order="archive")] == [300, 120, 500]
+    assert [row["id"] for row in store.window_items(conn, 120)] == [120, 300]
+
+
+def test_feed_filter_skips_unready_rows_before_playable_archive_items():
+    conn = _db()
+    store.insert_item(conn, 10, "local", favorite_order=1, status="done")
+    store.insert_item(conn, 20, "new-pending", favorite_order=2, status="pending")
+    store.insert_item(conn, 21, "dead-original", favorite_order=3, status="expired")
+
+    assert [row["id"] for row in store.page_items(conn, feed=True)] == [21, 10]
+
+
+def test_upsert_uses_next_favorite_order_not_next_physical_id():
+    conn = _db()
+    store.insert_item(conn, 100, "old", favorite_order=1)
+
+    new_id = store.upsert_link(conn, "new")
+
+    assert new_id == 101
+    assert store.get_item(conn, new_id)["favorite_order"] == 2
+
+
 def test_upsert_link_dedups_and_numbers():
     conn = _db()
     first = store.upsert_link(conn, "a", favorited_at="2020")
@@ -56,6 +86,21 @@ def test_status_kind_assets_metadata_transitions():
     assert row["has_assets"] == 1 and row["caption"] == "hi #cats" and row["author"] == "someone"
     store.set_status(conn, 1, "failed", error="boom")
     assert store.get_item(conn, 1)["error"] == "boom"
+
+
+def test_reset_interrupted_downloads_requeues_stranded_items_as_failed():
+    conn = _db()
+    store.insert_item(conn, 1, "a")
+    store.set_status(conn, 1, "downloading")
+    store.insert_item(conn, 2, "b", status="done")
+
+    assert store.reset_interrupted_downloads(conn) == 1
+
+    row = store.get_item(conn, 1)
+    assert row["status"] == "failed"
+    assert "interrupted" in row["error"]
+    assert store.get_item(conn, 2)["status"] == "done"  # finished items untouched
+    assert store.reset_interrupted_downloads(conn) == 0  # clean DB is a no-op
 
 
 def test_gallery_term_lists_round_trip_and_can_be_deleted():
@@ -421,6 +466,138 @@ def test_library_statistics_summarize_indexed_archive_media():
         "favorites": 3, "ready": 2, "videos": 2, "slideshows": 1,
         "indexed": 2, "duration_s": 150.0, "media_size": 300,
     }
+
+
+def test_page_orders_use_indexes_not_temp_btree():
+    conn = _db()
+    keyed_orders = {
+        "size_desc": "media_size", "duration_desc": "duration_s",
+        "duration_asc": "duration_s", "favorite_date_desc": "favorited_at",
+        "favorite_date_asc": "favorited_at", "attempts_desc": "attempt_count",
+        "last_attempt_desc": "last_attempt_at", "author_asc": "author",
+    }
+    for order, field in keyed_orders.items():
+        plan = "\n".join(
+            row["detail"] for row in conn.execute(
+                f"EXPLAIN QUERY PLAN SELECT * FROM item "
+                f"WHERE {field} IS NOT NULL ORDER BY {field} DESC, id DESC LIMIT 50"
+            )
+        )
+        assert "USE TEMP B-TREE" not in plan, f"{order}: {plan}"
+
+
+def test_page_items_rejects_unknown_filter():
+    conn = _db()
+    store.insert_item(conn, 1, "a")
+    try:
+        store.page_items(conn, bogus_filter=1)
+    except ValueError as e:
+        assert "bogus_filter" in str(e)
+    else:
+        raise AssertionError("unknown page_items filter must be rejected")
+
+
+def test_selectable_orders_match_page_orders():
+    assert set(store.SELECTABLE_ORDERS) == (set(store._PAGE_ORDERS) - {"relevance"}) | {"random"}
+
+
+def test_set_offloaded_marks_done_and_clears_failure_residue():
+    conn = _db()
+    store.insert_item(conn, 1, "a", status="failed")
+    store.set_status(conn, 1, "failed", error="boom")
+    store.insert_item(conn, 2, "b", status="done")
+    store.record_archive_file_health(conn, [2])
+
+    assert store.set_offloaded(conn, [1, 2]) == 2
+    for item_id in (1, 2):
+        row = store.get_item(conn, item_id)
+        assert row["status"] == "done" and row["offloaded"] == 1
+        assert row["error"] is None and row["archive_missing"] == 0
+    assert store.set_offloaded(conn, [1, 2]) == 0  # already marked -> no change
+
+
+def test_unmark_offloaded_clears_only_the_flag():
+    conn = _db()
+    store.insert_item(conn, 1, "a")
+    store.set_offloaded(conn, [1])
+
+    assert store.set_offloaded(conn, [1], offloaded=False) == 1
+    row = store.get_item(conn, 1)
+    assert row["offloaded"] == 0 and row["status"] == "done"  # status untouched
+    assert store.set_offloaded(conn, [1], offloaded=False) == 0  # idempotent
+
+
+def test_set_ignored_only_converts_pending_and_failed():
+    conn = _db()
+    store.insert_item(conn, 1, "a")                    # pending -> ignored
+    store.insert_item(conn, 2, "b", status="failed")   # failed -> ignored
+    store.insert_item(conn, 3, "c", status="done")     # untouched
+    store.insert_item(conn, 4, "d", status="expired")  # untouched
+
+    assert store.set_ignored(conn, [1, 2, 3, 4]) == 2
+    assert store.get_item(conn, 1)["status"] == "ignored"
+    assert store.get_item(conn, 2)["status"] == "ignored"
+    assert store.get_item(conn, 3)["status"] == "done"
+    assert store.get_item(conn, 4)["status"] == "expired"
+
+
+def test_unignore_restores_pending():
+    conn = _db()
+    store.insert_item(conn, 1, "a")
+    store.insert_item(conn, 2, "b", status="done")
+    store.set_ignored(conn, [1])
+
+    assert store.set_ignored(conn, [1, 2], ignored=False) == 1
+    assert store.get_item(conn, 1)["status"] == "pending"
+    assert store.get_item(conn, 2)["status"] == "done"  # never was ignored
+
+
+def test_item_ids_in_range_respects_bounds():
+    conn = _db()
+    for n in (1, 2, 3, 5, 9):
+        store.insert_item(conn, n, f"link{n}")
+    assert store.item_ids_in_range(conn, 2, 5) == [2, 3, 5]
+    assert store.item_ids_in_range(conn, 6, 8) == []
+
+
+def test_item_ids_matching_agrees_with_page_items_and_rejects_paging():
+    conn = _db()
+    store.insert_item(conn, 1, "one", status="done")
+    store.insert_item(conn, 2, "two", status="failed")
+    store.insert_item(conn, 3, "three", status="failed")
+    store.set_metadata(conn, 2, "#games clip", "alice")
+    store.set_metadata(conn, 3, "#fyp clip", "bob")
+
+    page_ids = sorted(
+        row["id"] for row in store.page_items(conn, statuses=["failed"], exclude=["fyp"], limit=100)
+    )
+    assert store.item_ids_matching(conn, statuses=["failed"], exclude=["fyp"]) == page_ids == [2]
+    for bad in ({"order": "archive"}, {"limit": 10}, {"cursor": 1}, {"seed": 7}, {"bogus": 1}):
+        try:
+            store.item_ids_matching(conn, **bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{bad} must be rejected")
+
+
+def test_page_items_filters_by_offloaded_flag():
+    conn = _db()
+    store.insert_item(conn, 1, "a", status="done")
+    store.insert_item(conn, 2, "b", status="done")
+    store.set_offloaded(conn, [1])
+
+    assert [row["id"] for row in store.page_items(conn, offloaded=True)] == [1]
+    assert [row["id"] for row in store.page_items(conn, offloaded=False)] == [2]
+
+
+def test_items_needing_index_skips_offloaded_items():
+    conn = _db()
+    store.insert_item(conn, 1, "a", status="done")
+    store.insert_item(conn, 2, "b", status="done")
+    store.set_offloaded(conn, [2])
+
+    assert [row["id"] for row in store.items_needing_index(conn)] == [1]
 
 
 if __name__ == "__main__":

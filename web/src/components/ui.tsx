@@ -42,6 +42,7 @@ const STATUS_COLOR: Record<Status, string> = {
   failed: "text-bad",
   expired: "text-ink-faint",
   skipped: "text-ink-faint",
+  ignored: "text-ink-faint",
 };
 
 const STATUS_LABEL: Partial<Record<Status, string>> = { done: "ready", expired: "unavailable" };

@@ -25,6 +25,30 @@ def test_inventory_csv_has_stable_columns_and_escapes_text():
     }]
 
 
+def test_inventory_csv_neutralizes_formula_prefixed_text():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://tiktok.com/a", favorited_at="2025-01-01", kind="video", status="done")
+    store.set_metadata(conn, 1, '=HYPERLINK("http://evil")', "@creator")
+    lines = list(inventory.csv_lines(store.all_items(conn)))
+
+    assert "'=HYPERLINK" in lines[1]
+    assert "'@creator" in lines[1]
+    rows = list(csv.DictReader(io.StringIO("".join(lines))))
+    assert rows[0]["caption"] == '\'=HYPERLINK("http://evil")'
+    assert rows[0]["author"] == "'@creator"
+
+
+def test_inventory_csv_leaves_numbers_and_benign_text_unchanged():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 7, "https://tiktok.com/b", favorited_at="2025-01-02", kind="video", status="done")
+    store.set_metadata(conn, 7, "a perfectly normal caption", "creator")
+    rows = list(csv.DictReader(io.StringIO("".join(inventory.csv_lines(store.all_items(conn))))))
+
+    assert rows[0]["id"] == "7"
+    assert rows[0]["caption"] == "a perfectly normal caption"
+    assert rows[0]["author"] == "creator"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

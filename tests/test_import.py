@@ -106,6 +106,16 @@ def test_orphan_file_beyond_export_is_represented():
         assert orphan["link"].startswith("local://")
 
 
+def test_orphan_file_uses_next_logical_order_when_physical_id_would_collide():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 100, "known", favorite_order=7)
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "7.mp4"), "w").close()
+        importer.import_existing_files(conn, dl)
+
+    assert store.get_item(conn, 7)["favorite_order"] == 8
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

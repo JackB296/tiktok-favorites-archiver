@@ -61,7 +61,7 @@ flowchart LR
 
 The app reads your export, records every favorite in a SQLite database, and works through them with a bounded pool of workers that stays under Cobalt's rate limit. Cobalt resolves each link to real media. Videos download directly. For a photo post, the images and audio are downloaded, rebuilt into a slideshow MP4 (each image centered on a black canvas sized to the largest image, with no downscaling), and the raw images are kept so the web viewer can render them as a carousel.
 
-File numbering is stable: `147.mp4` is item 147 in the database. A rerun never renumbers or overwrites what you already have, and Plex keeps its place.
+File numbering is stable: `147.mp4` remains archive item 147 in the database. Favorite chronology is stored separately, so a legacy migration can preserve old filenames without making Feed order incorrect. A rerun never renumbers or overwrites what you already have, and Plex keeps its place.
 
 ## Details worth knowing
 
@@ -77,6 +77,7 @@ File numbering is stable: `147.mp4` is item 147 in the database. A rerun never r
 - **Media-server metadata.** One click writes a `.nfo` title file and `.jpg` poster next to every video — Plex, Jellyfin, and Kodi show real titles and artwork instead of bare numbers. Your media files are never modified.
 - **Integrity check.** The Sync tab can verify the whole archive: finished favorites missing their video (one click re-queues them), stray files no favorite claims, and leftover temp files from interrupted runs.
 - **Localhost only.** The app has no login, so Docker binds it to `127.0.0.1` — nothing else on your network can reach it. Plex reads `./downloads` from disk and is unaffected.
+- **Backups.** Two things hold your archive: the media in `./downloads` and the database at `./appdata/archive.db` (numbering, statuses, captions, saved filters). Copy both while the app is stopped and you can restore everything.
 
 ## Architecture
 
@@ -89,7 +90,7 @@ web/      React + Vite + Tailwind SPA: Feed, Gallery, Sync
 Dockerfile + docker-compose.yml   the app plus an official Cobalt image
 ```
 
-The download engine is a standalone Python package with no web dependency, covered by a unit-test suite (run with `python3 tests/test_*.py`). The backend wraps it with job control and live progress. The frontend talks to a small typed API and never reaches Cobalt directly.
+The download engine is a standalone Python package with no web dependency, covered by a unit-test suite (run with `for f in tests/test_*.py; do python3 "$f"; done`). The backend wraps it with job control and live progress. The frontend talks to a small typed API and never reaches Cobalt directly.
 
 ## Configuration
 
@@ -101,8 +102,10 @@ With Docker, set these on the `app` service in `docker-compose.yml`:
 | `DOWNLOAD_DIR` | `/app/downloads` | Where media is saved |
 | `CONCURRENCY` | `4` | Simultaneous downloads |
 | `RATE_MAX_CALLS` / `RATE_PERIOD` | `8` / `1.0` | Requests allowed per window, in seconds |
+| `DB_FILE` | `/app/data/archive.db` | Path of the SQLite archive database |
+| `APP_PORT` | `8080` | Port the web app listens on |
 
-If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATELIMIT_WINDOW` in the same file to match.
+If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATELIMIT_WINDOW` in the same file to match. If you change `APP_PORT`, update the `ports:` mapping too.
 
 ## Getting your TikTok data
 
@@ -112,6 +115,61 @@ If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATEL
 4. Upload `user_data_tiktok.json` in the Sync tab.
 
 Exports expire. If links stop resolving partway through a run, request a fresh one.
+
+## Upgrading an archive made by the original CLI
+
+Use the guarded legacy bootstrap if you have numbered MP4s and
+`last_downloaded_link.txt`, but no `downloads/manifest.csv` or established
+`appdata/archive.db`. It is designed for an unavailable NAS: only the numeric
+MP4s currently in `downloads` are required.
+
+On Windows, install and start Docker Desktop first. In GitHub Desktop, fetch
+and pull the latest code, then open PowerShell in the repository folder:
+
+```powershell
+docker compose down
+Test-Path '.\downloads'
+Get-ChildItem '.\downloads' -Filter '*.mp4' -File | Select-Object -First 5 Name
+Test-Path '.\last_downloaded_link.txt'
+Get-ChildItem '.\appdata' -Force -ErrorAction SilentlyContinue
+```
+
+Bootstrap deliberately requires a database with no favorite rows. If
+`appdata` contains an earlier test database, preserve the whole directory and
+start with a new one; do not delete it:
+
+```powershell
+if (Test-Path '.\appdata') {
+    $backup = ".\appdata-before-legacy-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
+    Rename-Item '.\appdata' $backup
+}
+New-Item -ItemType Directory -Force '.\appdata'
+docker compose up --build -d
+```
+
+Open **http://localhost:8080 → Sync → First-time setup from the old CLI** and
+choose:
+
+1. **Old export:** the `user_data_tiktok.json` used by the final CLI run.
+2. **Current export:** the newest `user_data_tiktok.json` containing the new favorites.
+3. **Checkpoint:** the old `last_downloaded_link.txt`.
+
+Press **Preview mapping**. Nothing is written during preview. Check the
+inferred offset, local filename range, gap count, number of new downloads, and
+several sample link-to-file mappings. Apply is enabled only after you confirm
+the samples. Apply writes one atomic SQLite transaction and does not rename,
+delete, move, index, or download any media.
+
+After it succeeds, the result explains how many local files were matched, how
+many failed legacy filename slots were preserved, how many inaccessible older
+favorites were marked offloaded, and how many truly new favorites are pending.
+Only then press **Start sync**. Gallery indexing can run with Sync or be rebuilt
+later; it is not part of the migration.
+
+Pulling code through GitHub Desktop does not touch `downloads`, `appdata`, the
+export JSON, or `last_downloaded_link.txt`: all are git-ignored local data. The
+Docker Compose bind mounts use those same folders on the host, so rebuilding
+the image does not copy the media into Docker or erase it.
 
 ## Headless archive command
 

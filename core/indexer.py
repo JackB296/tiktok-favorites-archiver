@@ -87,7 +87,7 @@ def rebuild_index(conn, download_dir, inspect=media_index.index_media, thumbnail
     return _index_items(
         conn,
         download_dir,
-        store.items_by_status(conn, ["done"]),
+        store.items_for_index_rebuild(conn),
         inspect,
         thumbnail_width,
         progress,

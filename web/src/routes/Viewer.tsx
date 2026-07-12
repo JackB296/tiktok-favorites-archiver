@@ -8,6 +8,7 @@ import { PlaybackSession, usePlayback } from "../components/playback";
 import { EmptyState, Skeleton } from "../components/ui";
 import { viewerShortcut } from "../lib/viewerShortcuts";
 import { isFeedItem } from "../lib/feedItems";
+import { useDelayedLoading } from "../lib/useDelayedLoading";
 
 const KEEP_BEHIND = 5;
 const PRELOAD_AHEAD = 2;
@@ -15,6 +16,7 @@ const PRELOAD_AHEAD = 2;
 export function Viewer() {
   const [searchParams] = useSearchParams();
   const [items, setItems] = useState<Item[] | null>(null);
+  const initialLoadingPhase = useDelayedLoading(items === null);
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [activeId, setActiveId] = useState<number | null>(null);
@@ -36,7 +38,7 @@ export function Viewer() {
 
   useEffect(() => {
     let alive = true;
-    const openLatest = () => api.itemPage({ limit: 50, order: "latest" }).then((page) => {
+    const openLatest = () => api.itemPage({ limit: 50, order: "latest", feed: true }).then((page) => {
       if (!alive) return;
       const playable = page.items.filter(isFeedItem);
       setItems(playable);
@@ -139,7 +141,7 @@ export function Viewer() {
     }
     if (nextCursor == null) return;
     setLoadingMore(true);
-    api.itemPage({ limit: 50, cursor: nextCursor, order: "latest" })
+    api.itemPage({ limit: 50, cursor: nextCursor, order: "latest", feed: true })
       .then((page) => {
         setItems((current) => [...(current ?? []), ...page.items.filter(isFeedItem)]);
         setNextCursor(page.next_cursor);
@@ -212,7 +214,7 @@ export function Viewer() {
     setRandomMode(false);
     setRandomPosition(null);
     setRandomTotal(0);
-    const page = await api.itemPage({ limit: 50, order: "latest" }).catch(() => null);
+    const page = await api.itemPage({ limit: 50, order: "latest", feed: true }).catch(() => null);
     if (!page) return;
     const playable = page.items.filter(isFeedItem);
     setItems(playable);
@@ -222,6 +224,7 @@ export function Viewer() {
   }
 
   if (!items) {
+    if (initialLoadingPhase === "quiet") return <div className="h-full bg-black" aria-busy="true" aria-label="Loading Feed" />;
     return (
       <div className="mx-auto max-w-md p-4">
         <Skeleton className="h-[82dvh] w-full !rounded-[var(--radius-media)]" />

@@ -50,6 +50,26 @@ def test_rebuild_reindexes_existing_items_and_reports_progress():
     ]
 
 
+def test_rebuild_index_skips_offloaded_items_even_if_a_local_copy_remains():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "a", status="done")
+    store.set_offloaded(conn, [1])
+    calls = []
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "1.mp4"), "wb") as f:
+            f.write(b"movie")
+
+        def inspect(_download_dir, item_id, _width):
+            calls.append(item_id)
+            return media_index.MediaIndex(12.0, 100, 200, "h264", 5, ".archive/thumbnails/1.webp")
+
+        result = indexer.rebuild_index(conn, d, inspect=inspect, workers=1)
+
+    assert result == {"indexed": 0, "failed": 0}
+    assert calls == []
+
+
 def test_parallel_indexing_covers_every_candidate_exactly_once():
     conn = store.init_db(store.connect(":memory:"))
     for n in range(1, 9):

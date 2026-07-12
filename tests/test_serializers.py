@@ -6,7 +6,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import store
-from server.archive_items import ArchiveItems
+from server.archive_items import ArchiveItems, gallery_preset_filters, parse_mark_request, parse_page_query
 
 
 def test_video_item_exposes_video_url():
@@ -44,15 +44,15 @@ def test_missing_media_yields_nulls():
         assert d["video_url"] is None and d["images"] == []
 
 
-def test_list_applies_search_and_projects_public_items():
+def test_page_applies_search_and_projects_public_items():
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 1, "https://tiktok.com/cats")
     store.set_metadata(conn, 1, "cats", "alice")
 
     with tempfile.TemporaryDirectory() as dl:
-        data = ArchiveItems(conn, dl).list(query="cats")
+        page = ArchiveItems(conn, dl).page(query="cats")
 
-    assert [item["id"] for item in data] == [1]
+    assert [item["id"] for item in page["items"]] == [1]
 
 
 def test_page_returns_latest_items_and_a_cursor():
@@ -123,6 +123,131 @@ def test_item_projects_the_last_recovery_error():
 
     assert item["status"] == "failed"
     assert item["error"] == "video download failed"
+
+
+def test_parse_page_query_maps_and_transforms_a_full_param_set():
+    query = parse_page_query({
+        "search": "cats", "kind": "video", "status": "done", "limit": "24",
+        "cursor": "99", "order": "random", "seed": "7",
+        "min_duration": "1.5", "max_duration": "30", "min_size": "10", "max_size": "20",
+        "min_width": "100", "max_width": "200", "min_height": "300", "max_height": "400",
+        "min_attempts": "0", "max_attempts": "5",
+        "codec": "h264,hevc", "orientation": "portrait, square",
+        "include": "games, retro", "exclude": "fyp",
+        "date_from": "2025-01-01", "date_to": "2025-02-01",
+        "assets": "with", "index_state": "indexed", "recovery": "true",
+    })
+
+    assert query == {
+        "query": "cats", "kinds": ["video"], "statuses": ["done"], "limit": 24,
+        "cursor": 99, "order": "random", "seed": 7,
+        "min_duration": 1.5, "max_duration": 30.0, "min_size": 10, "max_size": 20,
+        "min_width": 100, "max_width": 200, "min_height": 300, "max_height": 400,
+        "min_attempts": 0, "max_attempts": 5,
+        "codecs": ["h264", "hevc"], "orientations": ["portrait", "square"],
+        "include": ["games", "retro"], "exclude": ["fyp"],
+        "date_from": "2025-01-01", "date_to": "2025-02-01",
+        "has_assets": True, "index_state": "indexed", "recovery": True,
+    }
+
+
+def test_parse_page_query_maps_assets_without_and_ignores_falsy_recovery():
+    query = parse_page_query({"assets": "without", "recovery": "false", "kind": ""})
+
+    assert query == {"has_assets": False, "recovery": False, "kinds": None}
+
+
+def test_parse_page_query_preserves_fastapi_boolean_vocabulary():
+    for raw in ("1", "true", "yes", "on"):
+        assert parse_page_query({"recovery": raw}) == {"recovery": True}
+    for raw in ("0", "false", "no", "off"):
+        assert parse_page_query({"recovery": raw}) == {"recovery": False}
+
+
+def test_parse_page_query_rejects_unknown_params_and_bad_values():
+    bad_requests = (
+        {"bogus": "1"},                # unknown param
+        {"limit": "abc"},              # bad int
+        {"min_duration": "fast"},      # bad float
+        {"assets": "sideways"},        # unknown assets value
+        {"index_state": "weird"},      # unknown index state
+        {"order": "upside_down"},      # unknown order
+        {"order": "relevance"},        # internal order is not selectable
+        {"order": "random"},           # random without a seed
+        {"recovery": "sometimes"},     # invalid boolean
+    )
+    for params in bad_requests:
+        try:
+            parse_page_query(params)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{params} must be rejected")
+
+
+def test_parse_page_query_maps_the_offloaded_filter():
+    assert parse_page_query({"offloaded": "with"}) == {"offloaded": True}
+    assert parse_page_query({"offloaded": "without"}) == {"offloaded": False}
+
+
+def test_gallery_presets_accept_the_offloaded_filter():
+    assert gallery_preset_filters({"offloaded": "with", "search": "games"}) == {
+        "offloaded": "with",
+        "search": "games",
+    }
+
+
+def test_public_projection_includes_the_offloaded_flag():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://tiktok.com/a", status="done")
+    store.insert_item(conn, 2, "https://tiktok.com/b", status="done")
+    store.set_offloaded(conn, [1])
+
+    with tempfile.TemporaryDirectory() as dl:
+        items = ArchiveItems(conn, dl)
+        assert items.get(1)["offloaded"] is True
+        assert items.get(2)["offloaded"] is False
+
+
+def test_parse_mark_request_accepts_each_selector():
+    assert parse_mark_request({"action": "offload", "ids": [1, 2]}) == ("offload", "ids", [1, 2], False)
+    assert parse_mark_request({"action": "unoffload", "range": {"first_id": 1, "last_id": 9}}) == (
+        "unoffload", "range", {"first_id": 1, "last_id": 9}, False,
+    )
+    action, kind, value, dry_run = parse_mark_request(
+        {"action": "ignore", "filter": {"status": "failed"}, "dry_run": True}
+    )
+    assert (action, kind, dry_run) == ("ignore", "filter", True)
+    assert value == {"statuses": ["failed"]}
+    assert parse_mark_request({"action": "unignore", "ids": [7]}) == ("unignore", "ids", [7], False)
+
+
+def test_parse_mark_request_rejects_bad_bodies():
+    bad_bodies = (
+        [],                                                    # not an object
+        {"action": "explode", "ids": [1]},                     # unknown action
+        {"ids": [1]},                                          # missing action
+        {"action": "offload"},                                 # zero selectors
+        {"action": "offload", "ids": [1], "range": {"first_id": 1, "last_id": 2}},  # two selectors
+        {"action": "offload", "ids": []},                      # empty ids
+        {"action": "offload", "ids": list(range(1, 102))},     # too many ids
+        {"action": "offload", "ids": [0]},                     # non-positive id
+        {"action": "offload", "ids": ["1"]},                   # non-int id
+        {"action": "offload", "range": {"first_id": 5, "last_id": 2}},  # inverted range
+        {"action": "offload", "range": {"first_id": 1}},       # missing bound
+        {"action": "offload", "filter": {"order": "archive"}},  # paging key in filter
+        {"action": "offload", "filter": {"limit": "10"}},      # paging key in filter
+        {"action": "offload", "filter": {"bogus": "1"}},       # unknown filter param
+        {"action": "offload", "filter": "status=failed"},      # non-object filter
+        {"action": "offload", "ids": [1], "dry_run": "yes"},   # non-bool dry_run
+    )
+    for body in bad_bodies:
+        try:
+            parse_mark_request(body)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{body} must be rejected")
 
 
 if __name__ == "__main__":

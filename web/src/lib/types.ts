@@ -7,7 +7,8 @@ export type Status =
   | "done"
   | "failed"
   | "skipped"
-  | "expired";
+  | "expired"
+  | "ignored";
 
 export type RunState = "idle" | "running" | "paused" | "stopping" | "stopped" | "failed";
 
@@ -22,6 +23,7 @@ export interface Item {
   attempt_count: number;
   last_attempt_at: string | null;
   archive_missing: boolean;
+  offloaded: boolean;
   favorited_at: string | null;
   has_assets: boolean;
   duration_s: number | null;
@@ -69,6 +71,59 @@ export interface ImportResult {
   manifest_rows: number;
 }
 
+export interface LegacyBootstrapPreview {
+  valid: true;
+  token: string;
+  offset: number;
+  checkpoint: {
+    link: string;
+    old_position: number;
+    current_position: number;
+    favorites_after_checkpoint: number;
+  };
+  exports: { old_favorites: number; current_favorites: number };
+  inventory: {
+    local_files: number;
+    lowest_number: number;
+    highest_number: number;
+    mapped_old_position_first: number;
+    mapped_old_position_last: number;
+    gaps: number;
+  };
+  allocation: {
+    reserved_physical_first: number;
+    reserved_physical_last: number;
+    local_segment_first: number;
+    local_segment_last: number;
+    local_done: number;
+    legacy_gaps_ignored: number;
+    offloaded_first: number | null;
+    offloaded_last: number | null;
+    offloaded: number;
+    new_pending_first: number | null;
+    new_pending_last: number | null;
+    new_pending: number;
+    next_archive_number: number;
+    total_rows: number;
+  };
+  samples: Array<{
+    archive_number: number;
+    old_export_position: number;
+    link: string;
+    favorited_at: string | null;
+  }>;
+  warnings: string[];
+}
+
+export interface LegacyBootstrapResult {
+  items_created: number;
+  local_done: number;
+  legacy_gaps_ignored: number;
+  offloaded: number;
+  new_pending: number;
+  next_archive_number: number;
+}
+
 export interface LibrarySettings {
   index_enabled: number;
   thumbnail_width: 320 | 480;
@@ -107,6 +162,7 @@ export interface GalleryPresetFilters {
   dateTo?: string;
   orientation?: string;
   assets?: string;
+  offloaded?: string;
   indexState?: string;
   include?: string;
   exclude?: string;
@@ -142,6 +198,7 @@ export interface VerifySection {
 export interface VerifyReport {
   favorites: number;
   done: number;
+  offloaded: number;
   missing: VerifySection;
   orphans: VerifySection;
   leftovers: VerifySection;

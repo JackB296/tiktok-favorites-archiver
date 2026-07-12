@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime
 
 # Lifecycle vocabularies — kept as data (not DB-enforced) so they can evolve.
-ITEM_STATUSES = ("pending", "resolving", "downloading", "done", "failed", "skipped", "expired")
+ITEM_STATUSES = ("pending", "resolving", "downloading", "done", "failed", "skipped", "ignored", "expired")
 ITEM_KINDS = ("unknown", "video", "slideshow", "unresolved")
 RUN_STATES = ("idle", "running", "paused", "stopping", "stopped", "failed")
 
@@ -23,6 +23,7 @@ DEFAULT_CONCURRENCY = 4
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS item (
     id           INTEGER PRIMARY KEY,   -- == <n> in downloads/<n>.mp4
+    favorite_order INTEGER,             -- chronological export position; independent of filename
     link         TEXT NOT NULL UNIQUE,
     favorited_at TEXT,
     kind         TEXT NOT NULL DEFAULT 'unknown',
@@ -43,10 +44,17 @@ CREATE TABLE IF NOT EXISTS item (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     last_attempt_at TEXT,
     archive_missing INTEGER NOT NULL DEFAULT 0,
+    offloaded    INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_item_status ON item(status);
+CREATE INDEX IF NOT EXISTS idx_item_media_size    ON item(media_size, id)      WHERE media_size IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_item_duration      ON item(duration_s, id)      WHERE duration_s IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_item_favorited_at  ON item(favorited_at, id)    WHERE favorited_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_item_attempts      ON item(attempt_count, id);
+CREATE INDEX IF NOT EXISTS idx_item_last_attempt  ON item(last_attempt_at, id) WHERE last_attempt_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_item_author        ON item(author, id)          WHERE author IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS run_state (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
@@ -109,6 +117,7 @@ END;
 """
 
 _ITEM_MIGRATIONS = {
+    "favorite_order": "INTEGER",
     "thumbnail_path": "TEXT",
     "duration_s": "REAL",
     "media_width": "INTEGER",
@@ -121,6 +130,7 @@ _ITEM_MIGRATIONS = {
     "attempt_count": "INTEGER NOT NULL DEFAULT 0",
     "last_attempt_at": "TEXT",
     "archive_missing": "INTEGER NOT NULL DEFAULT 0",
+    "offloaded": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -147,6 +157,13 @@ def init_db(conn):
     for name, type_name in _ITEM_MIGRATIONS.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE item ADD COLUMN {name} {type_name}")
+    # Existing libraries used physical archive number as chronology. Preserve
+    # that behavior while allowing legacy bootstrap to place collision-free
+    # rows elsewhere in the filename namespace.
+    conn.execute("UPDATE item SET favorite_order = id WHERE favorite_order IS NULL")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_item_favorite_order ON item(favorite_order)"
+    )
     item_count = conn.execute("SELECT COUNT(*) FROM item").fetchone()[0]
     search_count = conn.execute("SELECT COUNT(*) FROM item_search").fetchone()[0]
     if item_count and search_count != item_count:
@@ -183,12 +200,27 @@ def next_item_id(conn):
     return row["m"] + 1
 
 
-def insert_item(conn, item_id, link, favorited_at=None, kind="unknown", status="pending"):
+def next_favorite_order(conn):
+    row = conn.execute("SELECT COALESCE(MAX(favorite_order), 0) AS m FROM item").fetchone()
+    return row["m"] + 1
+
+
+def insert_item(
+    conn,
+    item_id,
+    link,
+    favorited_at=None,
+    kind="unknown",
+    status="pending",
+    favorite_order=None,
+):
     now = _now()
+    if favorite_order is None:
+        favorite_order = item_id
     conn.execute(
-        "INSERT INTO item (id, link, favorited_at, kind, status, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (item_id, link, favorited_at, kind, status, now, now),
+        "INSERT INTO item (id, favorite_order, link, favorited_at, kind, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (item_id, favorite_order, link, favorited_at, kind, status, now, now),
     )
     conn.commit()
     return item_id
@@ -209,7 +241,13 @@ def upsert_link(conn, link, favorited_at=None):
             )
             conn.commit()
         return existing["id"]
-    return insert_item(conn, next_item_id(conn), link, favorited_at)
+    return insert_item(
+        conn,
+        next_item_id(conn),
+        link,
+        favorited_at,
+        favorite_order=next_favorite_order(conn),
+    )
 
 
 def _update(conn, item_id, **fields):
@@ -239,6 +277,127 @@ def record_archive_file_health(conn, missing_ids):
         placeholders = ",".join("?" for _ in missing_ids)
         conn.execute(f"UPDATE item SET archive_missing = 1 WHERE id IN ({placeholders})", missing_ids)
     conn.commit()
+
+
+def reset_interrupted_downloads(conn):
+    """Fold items stranded mid-download by a crash back into the retry path.
+
+    Only one Archive run exists at a time, so any ``downloading`` row seen at
+    process or run start is stale. Marking it ``failed`` makes the next Sync
+    retry it and lets the existing recovery UI select it.
+    """
+    cursor = conn.execute(
+        "UPDATE item SET status = 'failed', error = ?, updated_at = ? "
+        "WHERE status = 'downloading'",
+        ("interrupted: the app stopped mid-download", _now()),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
+def item_ids_in_range(conn, first_id, last_id):
+    """Existing item ids inside an inclusive archive-number range."""
+    return [row["id"] for row in conn.execute(
+        "SELECT id FROM item WHERE id BETWEEN ? AND ? ORDER BY id",
+        (int(first_id), int(last_id)),
+    )]
+
+
+def item_ids_matching(conn, **query):
+    """Ids of every item matching a Gallery filter query (no paging)."""
+    for key in ("limit", "cursor", "order", "seed"):
+        if query.get(key) is not None and query.get(key) != PAGE_QUERY_DEFAULTS[key]:
+            raise ValueError(f"{key} is not a filter")
+    unknown = set(query) - set(PAGE_QUERY_DEFAULTS)
+    if unknown:
+        raise ValueError("unknown item filters: " + ", ".join(sorted(unknown)))
+    q = {**PAGE_QUERY_DEFAULTS, **query}
+    clauses, params = _item_filters(kinds=q["kinds"], statuses=q["statuses"])
+    more_clauses, more_params = _page_filter_clauses(q)
+    clauses += more_clauses
+    params += more_params
+    fts_query = _fts_query(q["query"])
+    if fts_query:
+        sql = "SELECT item.id FROM item JOIN item_search ON item_search.rowid = item.id"
+        clauses.append("item_search MATCH ?")
+        params.append(fts_query)
+    else:
+        sql = "SELECT id FROM item"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    return [row["id"] for row in conn.execute(sql + " ORDER BY id", params)]
+
+
+_MARK_CHUNK = 500  # stay under SQLite's bound-parameter limit
+
+
+def _id_chunks(item_ids):
+    ids = [int(item_id) for item_id in item_ids]
+    for start in range(0, len(ids), _MARK_CHUNK):
+        yield ids[start:start + _MARK_CHUNK]
+
+
+def set_offloaded(conn, item_ids, offloaded=True):
+    """Mark media as archived externally (or clear the mark). Returns changed count."""
+    now = _now()
+    changed = 0
+    for chunk in _id_chunks(item_ids):
+        placeholders = ",".join("?" for _ in chunk)
+        if offloaded:
+            cursor = conn.execute(
+                f"UPDATE item SET offloaded = 1, status = 'done', error = NULL, "
+                f"archive_missing = 0, updated_at = ? WHERE id IN ({placeholders}) "
+                "AND (offloaded != 1 OR status != 'done' OR error IS NOT NULL OR archive_missing != 0)",
+                (now, *chunk),
+            )
+        else:
+            cursor = conn.execute(
+                f"UPDATE item SET offloaded = 0, updated_at = ? "
+                f"WHERE id IN ({placeholders}) AND offloaded = 1",
+                (now, *chunk),
+            )
+        changed += cursor.rowcount
+    conn.commit()
+    return changed
+
+
+def set_ignored(conn, item_ids, ignored=True):
+    """User-set 'never download' terminal status (or restore to pending)."""
+    now = _now()
+    changed = 0
+    for chunk in _id_chunks(item_ids):
+        placeholders = ",".join("?" for _ in chunk)
+        if ignored:
+            cursor = conn.execute(
+                f"UPDATE item SET status = 'ignored', error = NULL, updated_at = ? "
+                f"WHERE id IN ({placeholders}) AND status IN ('pending', 'failed')",
+                (now, *chunk),
+            )
+        else:
+            cursor = conn.execute(
+                f"UPDATE item SET status = 'pending', updated_at = ? "
+                f"WHERE id IN ({placeholders}) AND status = 'ignored'",
+                (now, *chunk),
+            )
+        changed += cursor.rowcount
+    conn.commit()
+    return changed
+
+
+def range_status_summary(conn, first_id, last_id):
+    """Status counts inside an inclusive id range, for the offload suggestion."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS total, "
+        "SUM(CASE WHEN status IN ('pending','failed') THEN 1 ELSE 0 END) AS undownloaded, "
+        "SUM(CASE WHEN offloaded = 1 THEN 1 ELSE 0 END) AS already_offloaded "
+        "FROM item WHERE id BETWEEN ? AND ?",
+        (int(first_id), int(last_id)),
+    ).fetchone()
+    return {
+        "total": int(row["total"] or 0),
+        "undownloaded": int(row["undownloaded"] or 0),
+        "already_offloaded": int(row["already_offloaded"] or 0),
+    }
 
 
 def set_metadata(conn, item_id, caption, author):
@@ -302,7 +461,14 @@ def record_media_index_error(conn, item_id, error):
 def items_needing_index(conn):
     """Finished Archive items without a persisted Gallery index."""
     return conn.execute(
-        "SELECT * FROM item WHERE status = 'done' AND thumbnail_path IS NULL ORDER BY id"
+        "SELECT * FROM item WHERE status = 'done' AND offloaded = 0 AND thumbnail_path IS NULL ORDER BY id"
+    ).fetchall()
+
+
+def items_for_index_rebuild(conn):
+    """Finished local media eligible for an explicit full index rebuild."""
+    return conn.execute(
+        "SELECT * FROM item WHERE status = 'done' AND offloaded = 0 ORDER BY id"
     ).fetchall()
 
 
@@ -352,8 +518,8 @@ def search_items(conn, query=None, kinds=None, statuses=None):
 
 
 _PAGE_ORDERS = {
-    "latest": ("id DESC", None, None),
-    "archive": ("id ASC", None, None),
+    "latest": ("favorite_order DESC, id DESC", "favorite_order", "DESC"),
+    "archive": ("favorite_order ASC, id ASC", "favorite_order", "ASC"),
     "size_desc": ("media_size DESC, id DESC", "media_size", "DESC"),
     "duration_desc": ("duration_s DESC, id DESC", "duration_s", "DESC"),
     "duration_asc": ("duration_s ASC, id ASC", "duration_s", "ASC"),
@@ -364,6 +530,11 @@ _PAGE_ORDERS = {
     "author_asc": ("author ASC, id ASC", "author", "ASC"),
     "relevance": ("rank ASC, id DESC", None, None),
 }
+
+# The user-selectable order names, in one place. "relevance" is internal — it
+# is auto-selected when a text query is present; "random" is valid but lives
+# outside _PAGE_ORDERS (its ORDER BY is generated per seed).
+SELECTABLE_ORDERS = tuple(name for name in _PAGE_ORDERS if name != "relevance") + ("random",)
 
 # Seeded shuffle for random paging: ordering by an avalanche hash of
 # (id XOR seed mask) is a stable permutation per seed, so cursor pages never
@@ -400,104 +571,133 @@ def _random_key_sql(seed):
     return xor(f"({x} >> 16)", x)
 
 
-def page_items(
-    conn,
-    query=None,
-    kinds=None,
-    statuses=None,
-    limit=50,
-    cursor=None,
-    order="latest",
-    min_duration=None,
-    max_duration=None,
-    min_size=None,
-    max_size=None,
-    min_width=None,
-    max_width=None,
-    min_height=None,
-    max_height=None,
-    codecs=None,
-    date_from=None,
-    date_to=None,
-    orientations=None,
-    has_assets=None,
-    index_state=None,
-    include=None,
-    exclude=None,
-    min_attempts=None,
-    max_attempts=None,
-    recovery=False,
-    seed=None,
-):
-    """Return one cursor page without materializing the whole Archive library."""
-    clauses, params = _item_filters(kinds=kinds, statuses=statuses)
-    fts_query = _fts_query(query)
-    if min_duration is not None:
+# Every filter/sort kwarg page_items accepts, with its default. Adding a
+# Gallery filter = one entry here + one clause in _page_filter_clauses.
+PAGE_QUERY_DEFAULTS = {
+    "query": None,
+    "kinds": None,
+    "statuses": None,
+    "limit": 50,
+    "cursor": None,
+    "order": "latest",
+    "min_duration": None,
+    "max_duration": None,
+    "min_size": None,
+    "max_size": None,
+    "min_width": None,
+    "max_width": None,
+    "min_height": None,
+    "max_height": None,
+    "codecs": None,
+    "date_from": None,
+    "date_to": None,
+    "orientations": None,
+    "has_assets": None,
+    "index_state": None,
+    "include": None,
+    "exclude": None,
+    "min_attempts": None,
+    "max_attempts": None,
+    "recovery": False,
+    "offloaded": None,
+    "seed": None,
+    "feed": False,
+}
+
+
+def _page_filter_clauses(q):
+    """WHERE fragments + params for the straight-line Gallery filters."""
+    clauses = []
+    params = []
+    if q["feed"]:
+        clauses.append("(status IN ('done', 'expired') OR offloaded = 1)")
+    if q["min_duration"] is not None:
         clauses.append("duration_s >= ?")
-        params.append(float(min_duration))
-    if max_duration is not None:
+        params.append(float(q["min_duration"]))
+    if q["max_duration"] is not None:
         clauses.append("duration_s <= ?")
-        params.append(float(max_duration))
-    if min_size is not None:
+        params.append(float(q["max_duration"]))
+    if q["min_size"] is not None:
         clauses.append("media_size >= ?")
-        params.append(int(min_size))
-    if max_size is not None:
+        params.append(int(q["min_size"]))
+    if q["max_size"] is not None:
         clauses.append("media_size <= ?")
-        params.append(int(max_size))
-    if min_width is not None:
+        params.append(int(q["max_size"]))
+    if q["min_width"] is not None:
         clauses.append("media_width >= ?")
-        params.append(int(min_width))
-    if max_width is not None:
+        params.append(int(q["min_width"]))
+    if q["max_width"] is not None:
         clauses.append("media_width <= ?")
-        params.append(int(max_width))
-    if min_height is not None:
+        params.append(int(q["max_width"]))
+    if q["min_height"] is not None:
         clauses.append("media_height >= ?")
-        params.append(int(min_height))
-    if max_height is not None:
+        params.append(int(q["min_height"]))
+    if q["max_height"] is not None:
         clauses.append("media_height <= ?")
-        params.append(int(max_height))
-    if min_attempts is not None:
+        params.append(int(q["max_height"]))
+    if q["min_attempts"] is not None:
         clauses.append("attempt_count >= ?")
-        params.append(int(min_attempts))
-    if max_attempts is not None:
+        params.append(int(q["min_attempts"]))
+    if q["max_attempts"] is not None:
         clauses.append("attempt_count <= ?")
-        params.append(int(max_attempts))
-    if recovery:
+        params.append(int(q["max_attempts"]))
+    if q["recovery"]:
         clauses.append("(status = 'failed' OR archive_missing = 1 OR (status = 'pending' AND attempt_count = 0))")
-    if codecs:
-        clauses.append("media_codec IN (%s)" % ",".join("?" for _ in codecs))
-        params += list(codecs)
-    if date_from:
+    if q["offloaded"] is not None:
+        clauses.append("offloaded = ?")
+        params.append(1 if q["offloaded"] else 0)
+    if q["codecs"]:
+        clauses.append("media_codec IN (%s)" % ",".join("?" for _ in q["codecs"]))
+        params += list(q["codecs"])
+    if q["date_from"]:
         clauses.append("favorited_at >= ?")
-        params.append(date_from)
-    if date_to:
+        params.append(q["date_from"])
+    if q["date_to"]:
         clauses.append("favorited_at <= ?")
-        params.append(date_to)
-    if orientations:
+        params.append(q["date_to"])
+    if q["orientations"]:
         orientation_sql = {
             "portrait": "media_height > media_width",
             "landscape": "media_width > media_height",
             "square": "media_width = media_height",
         }
-        selected = [orientation_sql[name] for name in orientations if name in orientation_sql]
+        selected = [orientation_sql[name] for name in q["orientations"] if name in orientation_sql]
         if selected:
             clauses.append("(" + " OR ".join(selected) + ")")
-    if has_assets is not None:
+    if q["has_assets"] is not None:
         clauses.append("has_assets = ?")
-        params.append(1 if has_assets else 0)
+        params.append(1 if q["has_assets"] else 0)
     index_filters = {
         "indexed": "thumbnail_path IS NOT NULL",
         "missing": "thumbnail_path IS NULL AND index_error IS NULL",
         "failed": "index_error IS NOT NULL",
     }
-    if index_state in index_filters:
-        clauses.append(index_filters[index_state])
-    for term in include or []:
+    if q["index_state"] in index_filters:
+        clauses.append(index_filters[q["index_state"]])
+    for term in q["include"] or []:
         clauses.append("(caption LIKE ? OR author LIKE ?)")
         params += [f"%{term}%", f"%{term}%"]
-    for term in exclude or []:
+    for term in q["exclude"] or []:
         clauses.append("NOT (caption LIKE ? OR author LIKE ?)")
         params += [f"%{term}%", f"%{term}%"]
+    return clauses, params
+
+
+def page_items(conn, **query):
+    """Return one cursor page without materializing the whole Archive library."""
+    unknown = set(query) - set(PAGE_QUERY_DEFAULTS)
+    if unknown:
+        raise ValueError("unknown page_items filters: " + ", ".join(sorted(unknown)))
+    q = {**PAGE_QUERY_DEFAULTS, **query}
+    clauses, params = _item_filters(kinds=q["kinds"], statuses=q["statuses"])
+    fts_query = _fts_query(q["query"])
+    filter_clauses, filter_params = _page_filter_clauses(q)
+    clauses += filter_clauses
+    params += filter_params
+    order = q["order"]
+    cursor = q["cursor"]
+    seed = q["seed"]
+    limit = q["limit"]
     if fts_query and order == "latest":
         order = "relevance"
     if order == "random":
@@ -557,9 +757,13 @@ def page_items(
 
 def window_items(conn, item_id, limit=50):
     """Return the selected Favorite then its older archive neighbors."""
+    selected = get_item(conn, item_id)
+    if selected is None:
+        return []
     return conn.execute(
-        "SELECT * FROM item WHERE id <= ? ORDER BY id DESC LIMIT ?",
-        (item_id, max(1, min(int(limit), 100))),
+        "SELECT * FROM item WHERE favorite_order <= ? "
+        "ORDER BY favorite_order DESC, id DESC LIMIT ?",
+        (selected["favorite_order"], max(1, min(int(limit), 100))),
     ).fetchall()
 
 
@@ -585,6 +789,17 @@ def set_run_state(conn, **fields):
     assignments = ", ".join(f"{col} = ?" for col in fields)
     conn.execute(f"UPDATE run_state SET {assignments} WHERE id = 1", tuple(fields.values()))
     conn.commit()
+
+
+def set_active_run_state(conn, state):
+    """Change control state only while the persisted run is still active."""
+    cursor = conn.execute(
+        "UPDATE run_state SET state = ?, updated_at = ? "
+        "WHERE id = 1 AND state IN ('running', 'paused', 'stopping')",
+        (state, _now()),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
 
 
 def get_library_settings(conn):

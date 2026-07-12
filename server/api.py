@@ -10,11 +10,13 @@ import sqlite3
 import tempfile
 from queue import Empty
 
-from fastapi import APIRouter, Request, UploadFile, File, HTTPException
+from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse
 
-from core import config, store, importer, cobalt, verify, inventory
+from core import config, store, importer, cobalt, verify, inventory, legacy_bootstrap
+from server import archive_items
 from server.archive_items import ArchiveItems
+from server.jobs import JobBusyError
 
 router = APIRouter(prefix="/api")
 
@@ -43,27 +45,6 @@ def _library_settings(conn):
     settings = dict(store.get_library_settings(conn))
     settings["index"] = store.library_index_status(conn)
     return settings
-
-
-_GALLERY_PRESET_FIELDS = {
-    "search", "kind", "status", "order", "minDuration", "maxDuration",
-    "minSize", "maxSize", "minWidth", "maxWidth", "minHeight", "maxHeight", "codec",
-    "dateFrom", "dateTo", "orientation", "assets", "indexState", "include", "exclude",
-    "minAttempts", "maxAttempts", "recovery",
-}
-
-
-def _gallery_preset_filters(value):
-    if not isinstance(value, dict):
-        raise ValueError("filters must be an object")
-    if any(
-        key not in _GALLERY_PRESET_FIELDS
-        or (key == "recovery" and not isinstance(item, bool))
-        or (key != "recovery" and not isinstance(item, str))
-        for key, item in value.items()
-    ):
-        raise ValueError("filters contain an unsupported value")
-    return {key: item for key, item in value.items() if item}
 
 
 def _gallery_term_list(body):
@@ -133,7 +114,7 @@ async def create_gallery_preset(request: Request):
     if not isinstance(name, str) or not (name := name.strip()) or len(name) > 80:
         raise HTTPException(status_code=400, detail="name must be between 1 and 80 characters")
     try:
-        filters = _gallery_preset_filters(body.get("filters"))
+        filters = archive_items.gallery_preset_filters(body.get("filters"))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     conn = _open(request)
@@ -229,87 +210,18 @@ def delete_playback_queue(request: Request, queue_id: int):
         conn.close()
 
 
-@router.get("/items")
-def list_items(request: Request, search: str = None, kind: str = None, status: str = None):
-    conn = _open(request)
-    try:
-        return _archive_items(request, conn).list(
-            query=search,
-            kinds=[kind] if kind else None,
-            statuses=[status] if status else None,
-        )
-    finally:
-        conn.close()
-
-
 @router.get("/items/page")
-def page_items(
-    request: Request,
-    search: str = None,
-    kind: str = None,
-    status: str = None,
-    limit: int = 50,
-    cursor: int = None,
-    order: str = "latest",
-    min_duration: float = None,
-    max_duration: float = None,
-    min_size: int = None,
-    max_size: int = None,
-    min_width: int = None,
-    max_width: int = None,
-    min_height: int = None,
-    max_height: int = None,
-    codec: str = None,
-    date_from: str = None,
-    date_to: str = None,
-    orientation: str = None,
-    assets: str = None,
-    index_state: str = None,
-    include: str = None,
-    exclude: str = None,
-    min_attempts: int = None,
-    max_attempts: int = None,
-    recovery: bool = False,
-    seed: int = None,
-):
-    if order not in ("latest", "archive", "size_desc", "duration_desc", "duration_asc", "favorite_date_desc", "favorite_date_asc", "attempts_desc", "last_attempt_desc", "author_asc", "random"):
-        raise HTTPException(status_code=400, detail="unknown item order")
-    if order == "random" and seed is None:
-        raise HTTPException(status_code=400, detail="random order requires a shuffle seed")
-    if assets not in (None, "with", "without"):
-        raise HTTPException(status_code=400, detail="unknown assets filter")
-    if index_state not in (None, "indexed", "missing", "failed"):
-        raise HTTPException(status_code=400, detail="unknown index state")
+def page_items(request: Request):
+    try:
+        query = archive_items.parse_page_query(request.query_params)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     conn = _open(request)
     try:
-        return _archive_items(request, conn).page(
-            query=search,
-            kinds=[kind] if kind else None,
-            statuses=[status] if status else None,
-            limit=limit,
-            cursor=cursor,
-            order=order,
-            min_duration=min_duration,
-            max_duration=max_duration,
-            min_size=min_size,
-            max_size=max_size,
-            min_width=min_width,
-            max_width=max_width,
-            min_height=min_height,
-            max_height=max_height,
-            codecs=[term.strip() for term in (codec or "").split(",") if term.strip()],
-            date_from=date_from,
-            date_to=date_to,
-            orientations=[term.strip() for term in (orientation or "").split(",") if term.strip()],
-            has_assets={"with": True, "without": False}.get(assets),
-            index_state=index_state,
-            include=[term.strip() for term in (include or "").split(",") if term.strip()],
-            exclude=[term.strip() for term in (exclude or "").split(",") if term.strip()],
-            min_attempts=min_attempts,
-            max_attempts=max_attempts,
-            recovery=recovery,
-            seed=seed,
-        )
+        try:
+            return _archive_items(request, conn).page(**query)
+        except ValueError as e:  # stale cursor, etc. — was a 500 before
+            raise HTTPException(status_code=400, detail=str(e))
     finally:
         conn.close()
 
@@ -326,12 +238,16 @@ def item_ids(request: Request):
 @router.post("/items/selection")
 async def item_selection(request: Request):
     body = await request.json()
-    item_ids = body.get("ids", [])
-    if not isinstance(item_ids, list) or len(item_ids) > 100:
-        raise HTTPException(status_code=400, detail="ids must contain at most 100 item IDs")
+    item_ids = body.get("ids", []) if isinstance(body, dict) else None
+    if (
+        not isinstance(item_ids, list)
+        or len(item_ids) > 100
+        or any(type(item_id) is not int or item_id < 1 for item_id in item_ids)
+    ):
+        raise HTTPException(status_code=400, detail="ids must contain at most 100 positive integer item IDs")
     conn = _open(request)
     try:
-        return _archive_items(request, conn).selected([int(item_id) for item_id in item_ids])
+        return _archive_items(request, conn).selected(item_ids)
     finally:
         conn.close()
 
@@ -352,6 +268,44 @@ async def requeue_items(request: Request):
     conn = _open(request)
     try:
         return verify.requeue_selected(conn, _download_dir(request), item_ids)
+    finally:
+        conn.close()
+
+
+@router.post("/items/mark")
+async def mark_items(request: Request):
+    """Bulk offload/ignore marking by explicit ids, id range, or Gallery filter."""
+    body = await request.json()
+    try:
+        action, kind, value, dry_run = archive_items.parse_mark_request(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if request.app.state.jobs.is_running():
+        raise HTTPException(status_code=409, detail="wait for the current run to finish")
+    conn = _open(request)
+    try:
+        if kind == "ids":
+            ids = value
+        elif kind == "range":
+            ids = store.item_ids_in_range(conn, value["first_id"], value["last_id"])
+        else:
+            ids = store.item_ids_matching(conn, **value)
+        if dry_run:
+            return {"matched": len(ids), "changed": 0, "dry_run": True}
+        if action in ("offload", "unoffload"):
+            changed = store.set_offloaded(conn, ids, offloaded=(action == "offload"))
+        else:
+            changed = store.set_ignored(conn, ids, ignored=(action == "ignore"))
+        return {"matched": len(ids), "changed": changed}
+    finally:
+        conn.close()
+
+
+@router.get("/items/offload-suggestion")
+def items_offload_suggestion(request: Request):
+    conn = _open(request)
+    try:
+        return verify.offload_suggestion(conn, _download_dir(request))
     finally:
         conn.close()
 
@@ -380,32 +334,136 @@ def item_window(request: Request, n: int, limit: int = 50):
 MAX_IMPORT_BYTES = 512 * 1024 * 1024  # far above any real TikTok export
 
 
-@router.post("/import")
-async def import_export(request: Request, file: UploadFile = File(...)):
-    # Stream to a unique temp file: no whole-payload buffering in memory, no
-    # fixed path shared between concurrent imports.
-    fd, tmp_path = tempfile.mkstemp(prefix="tiktok-export-", suffix=".json")
+async def _stage_upload(upload, prefix, suffix):
+    """Stream one multipart file to a unique temporary path."""
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
     try:
         received = 0
         with os.fdopen(fd, "wb") as f:
-            while chunk := await file.read(1024 * 1024):
+            while chunk := await upload.read(1024 * 1024):
                 received += len(chunk)
                 if received > MAX_IMPORT_BYTES:
-                    raise HTTPException(status_code=413, detail="export file too large")
+                    raise HTTPException(status_code=413, detail=f"{upload.filename or 'upload'} is too large")
                 f.write(chunk)
-        conn = _open(request)
+        return path
+    except Exception:
         try:
-            try:
-                return importer.import_all(conn, tmp_path, _download_dir(request))
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Invalid export: {e}")
-        finally:
-            conn.close()
-    finally:
-        try:
-            os.unlink(tmp_path)
+            os.unlink(path)
         except OSError:
             pass
+        raise
+
+
+def _remove_temp_files(paths):
+    for path in paths:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _legacy_plan_while_idle(request, old_path, current_path, checkpoint_path):
+    def operation():
+        conn = _open(request)
+        try:
+            if conn.execute("SELECT 1 FROM item LIMIT 1").fetchone() is not None:
+                raise legacy_bootstrap.LegacyBootstrapError(
+                    "Legacy bootstrap requires an empty library database."
+                )
+        finally:
+            conn.close()
+        return legacy_bootstrap.plan_bootstrap(
+            old_path,
+            current_path,
+            checkpoint_path,
+            _download_dir(request),
+        )
+
+    return request.app.state.jobs.run_when_idle(operation)
+
+
+@router.post("/import")
+async def import_export(request: Request, file: UploadFile = File(...)):
+    tmp_path = None
+    try:
+        tmp_path = await _stage_upload(file, "tiktok-export-", ".json")
+
+        def operation():
+            conn = _open(request)
+            try:
+                return importer.import_all(conn, tmp_path, _download_dir(request))
+            finally:
+                conn.close()
+
+        return request.app.state.jobs.run_when_idle(operation)
+    except JobBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid export: {exc}")
+    finally:
+        if tmp_path:
+            _remove_temp_files([tmp_path])
+
+
+@router.post("/import/legacy-preview")
+async def legacy_import_preview(
+    request: Request,
+    old_export: UploadFile = File(...),
+    current_export: UploadFile = File(...),
+    checkpoint: UploadFile = File(...),
+):
+    paths = []
+    try:
+        paths.append(await _stage_upload(old_export, "tiktok-old-export-", ".json"))
+        paths.append(await _stage_upload(current_export, "tiktok-current-export-", ".json"))
+        paths.append(await _stage_upload(checkpoint, "tiktok-checkpoint-", ".txt"))
+        plan = _legacy_plan_while_idle(request, *paths)
+        return plan.preview()
+    except JobBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except legacy_bootstrap.LegacyBootstrapError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        _remove_temp_files(paths)
+
+
+@router.post("/import/legacy-apply")
+async def legacy_import_apply(
+    request: Request,
+    old_export: UploadFile = File(...),
+    current_export: UploadFile = File(...),
+    checkpoint: UploadFile = File(...),
+    preview_token: str = Form(...),
+    confirmation: str = Form(...),
+):
+    if confirmation != "MIGRATE":
+        raise HTTPException(status_code=400, detail="Type MIGRATE to confirm legacy bootstrap.")
+    paths = []
+    try:
+        paths.append(await _stage_upload(old_export, "tiktok-old-export-", ".json"))
+        paths.append(await _stage_upload(current_export, "tiktok-current-export-", ".json"))
+        paths.append(await _stage_upload(checkpoint, "tiktok-checkpoint-", ".txt"))
+
+        def operation():
+            plan = legacy_bootstrap.plan_bootstrap(
+                paths[0], paths[1], paths[2], _download_dir(request)
+            )
+            conn = _open(request)
+            try:
+                return legacy_bootstrap.apply_bootstrap(conn, plan, preview_token)
+            finally:
+                conn.close()
+
+        return request.app.state.jobs.run_when_idle(operation)
+    except JobBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except legacy_bootstrap.LegacyBootstrapError as exc:
+        status_code = 409 if "empty library" in str(exc) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc))
+    finally:
+        _remove_temp_files(paths)
 
 
 @router.get("/status")
@@ -531,13 +589,16 @@ def sync_control(request: Request, action: str):
     if action == "enrich":
         return {"started": jm.start("enrich")}
     if action == "pause":
-        jm.pause()
+        if not jm.pause():
+            raise HTTPException(status_code=409, detail="no run in progress")
         return {"ok": True}
     if action == "continue":
-        jm.resume()
+        if not jm.resume():
+            raise HTTPException(status_code=409, detail="no run in progress")
         return {"ok": True}
     if action == "stop":
-        jm.stop()
+        if not jm.stop():
+            raise HTTPException(status_code=409, detail="no run in progress")
         return {"ok": True}
     raise HTTPException(status_code=400, detail=f"unknown action: {action}")
 

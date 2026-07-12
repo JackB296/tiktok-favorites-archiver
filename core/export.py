@@ -23,7 +23,17 @@ def load_all_favorites(file_path):
         logging.error(f"Error decoding JSON from file: {file_path}")
         return []
 
-    item_favorite_list = data.get("Activity", {}).get("Favorite Videos", {}).get("FavoriteVideoList", [])
+    # TikTok has used both section names for the same export payload. Older
+    # exports put favorites below ``Activity``; current exports put them below
+    # ``Likes and Favorites``. Keep accepting both so a schema-label change
+    # cannot silently turn a valid upload into an empty import.
+    item_favorite_list = []
+    for section_name in ("Likes and Favorites", "Activity"):
+        candidate = data.get(section_name, {}).get("Favorite Videos", {}).get("FavoriteVideoList")
+        if isinstance(candidate, list):
+            item_favorite_list = candidate
+            if candidate:
+                break
 
     return [
         (re.sub(r"tiktokv.com", "tiktok.com", item["Link"]), item.get("Date"))

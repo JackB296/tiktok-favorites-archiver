@@ -8,9 +8,15 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const feed = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 
-assert.equal(feed.isFeedItem({ status: "done", video_url: "/media/1.mp4", images: [] }), true);
-assert.equal(feed.isFeedItem({ status: "done", video_url: null, images: ["/media/2/1.jpg"] }), true);
-assert.equal(feed.isFeedItem({ status: "expired", video_url: null, images: [] }), true);
-assert.equal(feed.isFeedItem({ status: "failed", video_url: null, images: [] }), false);
+assert.equal(feed.isFeedItem({ status: "done", video_url: "/media/1.mp4", images: [], offloaded: false }), true);
+assert.equal(feed.isFeedItem({ status: "done", video_url: null, images: ["/media/2/1.jpg"], offloaded: false }), true);
+assert.equal(feed.isFeedItem({ status: "expired", video_url: null, images: [], offloaded: false }), true);
+assert.equal(feed.isFeedItem({ status: "done", video_url: null, images: [], offloaded: true }), true);
+assert.equal(feed.isFeedItem({ status: "failed", video_url: null, images: [], offloaded: false }), false);
+
+assert.equal(feed.feedMediaKind({ status: "done", video_url: "/media/1.mp4", images: [], offloaded: true }), "video");
+assert.equal(feed.feedMediaKind({ status: "done", video_url: null, images: ["/media/2/1.jpg"], offloaded: true }), "slideshow");
+assert.equal(feed.feedMediaKind({ status: "done", video_url: null, images: [], offloaded: true }), "offloaded");
+assert.equal(feed.feedMediaKind({ status: "expired", video_url: null, images: [], offloaded: false }), "expired");
 
 console.log("PASS Feed retains unavailable originals without showing retryable failures");

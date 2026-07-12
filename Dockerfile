@@ -5,11 +5,21 @@ COPY web/package.json web/package-lock.json ./
 # npm can omit Rollup's platform-native optional package when the lockfile was
 # produced on another OS. Install the matching Alpine binary after the locked
 # dependency set so Vite builds on both Apple Silicon and x86 Docker hosts.
+# The native-package versions are read from package-lock.json at build time so
+# they always match the JS lockfile (each musl package version-locks to its
+# parent: rollup, lightningcss, @tailwindcss/oxide).
 RUN npm ci \
+    && ROLLUP_V=$(node -p "require('./package-lock.json').packages['node_modules/rollup'].version") \
+    && LCSS_V=$(node -p "require('./package-lock.json').packages['node_modules/lightningcss'].version") \
+    && OXIDE_V=$(node -p "require('./package-lock.json').packages['node_modules/@tailwindcss/oxide'].version") \
     && case "$(uname -m)" in \
-         aarch64) npm install --no-save --ignore-scripts @rollup/rollup-linux-arm64-musl@4.62.2 lightningcss-linux-arm64-musl@1.32.0 @tailwindcss/oxide-linux-arm64-musl@4.3.2 ;; \
-         x86_64) npm install --no-save --ignore-scripts @rollup/rollup-linux-x64-musl@4.62.2 lightningcss-linux-x64-musl@1.32.0 @tailwindcss/oxide-linux-x64-musl@4.3.2 ;; \
-       esac
+         aarch64) ARCH=arm64 ;; \
+         x86_64)  ARCH=x64 ;; \
+       esac \
+    && npm install --no-save --ignore-scripts \
+         "@rollup/rollup-linux-${ARCH}-musl@${ROLLUP_V}" \
+         "lightningcss-linux-${ARCH}-musl@${LCSS_V}" \
+         "@tailwindcss/oxide-linux-${ARCH}-musl@${OXIDE_V}"
 COPY web/ ./
 RUN npm run build
 
@@ -23,8 +33,8 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt requirements-web.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-web.txt
+COPY requirements.txt requirements-web.txt constraints.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-web.txt -c constraints.txt
 
 COPY core/ ./core/
 COPY server/ ./server/

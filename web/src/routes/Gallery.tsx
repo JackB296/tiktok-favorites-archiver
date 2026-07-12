@@ -14,10 +14,12 @@ import {
   Info,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
+import type { MarkAction } from "../lib/api";
 import type { GalleryPreset, GalleryPresetFilters, GalleryTermList, Item, PlaybackQueue } from "../lib/types";
 import { EmptyState, HelpLabel, Skeleton, cx } from "../components/ui";
 import { VirtualGalleryGrid } from "../components/VirtualGalleryGrid";
 import { canLoadNextPage } from "../lib/virtualGrid";
+import { useDelayedLoading } from "../lib/useDelayedLoading";
 
 const FILTERS = [
   { key: "", label: "All", help: "Show every favorite that matches the search and advanced filters." },
@@ -44,7 +46,7 @@ function filtersToSearchParams(filters: GalleryPresetFilters) {
     min_height: filters.minHeight, max_height: filters.maxHeight, codec: filters.codec,
     min_attempts: filters.minAttempts, max_attempts: filters.maxAttempts,
     recovery: filters.recovery ? "1" : undefined,
-    from: filters.dateFrom, to: filters.dateTo, orientation: filters.orientation, assets: filters.assets, index: filters.indexState,
+    from: filters.dateFrom, to: filters.dateTo, orientation: filters.orientation, assets: filters.assets, offloaded: filters.offloaded, index: filters.indexState,
     include: filters.include, exclude: filters.exclude,
   };
   Object.entries(values).forEach(([key, value]) => { if (value && !(key === "sort" && value === "latest")) params.set(key, value); });
@@ -62,8 +64,7 @@ export function Gallery() {
   const [search, setSearch] = useState(() => fromUrl("q"));
   const [kind, setKind] = useState(() => fromUrl("kind"));
   const [items, setItems] = useState<Item[] | null>(null);
-  const [showInitialLoading, setShowInitialLoading] = useState(false);
-  const loadingShownAt = useRef<number | null>(null);
+  const initialLoadingPhase = useDelayedLoading(items === null);
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [advanced, setAdvanced] = useState(false);
@@ -88,6 +89,7 @@ export function Gallery() {
   const [dateTo, setDateTo] = useState(() => fromUrl("to"));
   const [orientation, setOrientation] = useState(() => fromUrl("orientation"));
   const [assets, setAssets] = useState(() => fromUrl("assets"));
+  const [offloaded, setOffloaded] = useState(() => fromUrl("offloaded"));
   const [indexState, setIndexState] = useState(() => fromUrl("index"));
   const [include, setInclude] = useState(() => fromUrl("include"));
   const [exclude, setExclude] = useState(() => fromUrl("exclude"));
@@ -110,6 +112,8 @@ export function Gallery() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [filterActionBusy, setFilterActionBusy] = useState(false);
+  const [filterActionMessage, setFilterActionMessage] = useState<string | null>(null);
   const [inspectionMode, setInspectionMode] = useState(false);
   const [inspectedItem, setInspectedItem] = useState<Item | null>(null);
 
@@ -118,49 +122,33 @@ export function Gallery() {
     setOrder(next);
   }
 
+  const num = (s: string) => (s.trim() === "" ? undefined : Number(s));
+
   const pageQuery = {
     search, kind, status, limit: 50, order,
     seed: order === "random" ? randomSeed : undefined,
-    min_duration: minDuration ? Number(minDuration) : undefined,
-    max_duration: maxDuration ? Number(maxDuration) : undefined,
-    min_size: minSize ? Number(minSize) * 1024 * 1024 : undefined,
-    max_size: maxSize ? Number(maxSize) * 1024 * 1024 : undefined,
-    min_width: minWidth ? Number(minWidth) : undefined,
-    max_width: maxWidth ? Number(maxWidth) : undefined,
-    min_height: minHeight ? Number(minHeight) : undefined,
-    max_height: maxHeight ? Number(maxHeight) : undefined,
-    min_attempts: minAttempts ? Number(minAttempts) : undefined,
-    max_attempts: maxAttempts ? Number(maxAttempts) : undefined,
+    min_duration: num(minDuration),
+    max_duration: num(maxDuration),
+    min_size: minSize.trim() === "" ? undefined : Number(minSize) * 1024 * 1024,
+    max_size: maxSize.trim() === "" ? undefined : Number(maxSize) * 1024 * 1024,
+    min_width: num(minWidth),
+    max_width: num(maxWidth),
+    min_height: num(minHeight),
+    max_height: num(maxHeight),
+    min_attempts: num(minAttempts),
+    max_attempts: num(maxAttempts),
     recovery: recovery || undefined,
     codec: codec || undefined,
     date_from: dateFrom || undefined,
     date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
     orientation: orientation || undefined,
     assets: (assets === "with" || assets === "without" ? assets : undefined) as "with" | "without" | undefined,
+    offloaded: (offloaded === "with" || offloaded === "without" ? offloaded : undefined) as "with" | "without" | undefined,
     index_state: (indexState === "indexed" || indexState === "missing" || indexState === "failed" ? indexState : undefined) as "indexed" | "missing" | "failed" | undefined,
     include, exclude,
   };
 
   const queryVersion = useRef(0);
-
-  useEffect(() => {
-    if (items !== null) return;
-    const timer = window.setTimeout(() => {
-      loadingShownAt.current = Date.now();
-      setShowInitialLoading(true);
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [items]);
-
-  useEffect(() => {
-    if (items === null || !showInitialLoading) return;
-    const elapsed = loadingShownAt.current == null ? 400 : Date.now() - loadingShownAt.current;
-    const timer = window.setTimeout(() => {
-      loadingShownAt.current = null;
-      setShowInitialLoading(false);
-    }, Math.max(0, 400 - elapsed));
-    return () => window.clearTimeout(timer);
-  }, [items, showInitialLoading]);
 
   useEffect(() => {
     let alive = true;
@@ -179,12 +167,12 @@ export function Gallery() {
       alive = false;
       window.clearTimeout(t);
     };
-  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, indexState, include, exclude]);
+  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude]);
 
   useEffect(() => {
     setSelectedIds(new Set());
     setRecoveryMessage(null);
-  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, indexState, include, exclude]);
+  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude]);
 
   useEffect(() => {
     api.galleryPresets().then(setPresets).catch(() => setPresetMessage("Could not load saved filters."));
@@ -199,12 +187,12 @@ export function Gallery() {
   }, []);
 
   function currentFilters(): GalleryPresetFilters {
-    return { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, indexState, include, exclude };
+    return { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude };
   }
 
   useEffect(() => {
     setSearchParams(filtersToSearchParams(currentFilters()), { replace: true });
-  }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, indexState, include, exclude, setSearchParams]);
+  }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude, setSearchParams]);
 
   function applyPreset(filters: GalleryPresetFilters) {
     setSearch(filters.search ?? "");
@@ -227,6 +215,7 @@ export function Gallery() {
     setDateTo(filters.dateTo ?? "");
     setOrientation(filters.orientation ?? "");
     setAssets(filters.assets ?? "");
+    setOffloaded(filters.offloaded ?? "");
     setIndexState(filters.indexState ?? "");
     setInclude(filters.include ?? "");
     setExclude(filters.exclude ?? "");
@@ -353,7 +342,7 @@ export function Gallery() {
     setMinWidth(""); setMaxWidth(""); setMinHeight(""); setMaxHeight(""); setCodec("");
     setMinAttempts(""); setMaxAttempts("");
     setRecovery(false); setRecoveryInboxMessage(null);
-    setDateFrom(""); setDateTo(""); setOrientation(""); setAssets(""); setIndexState(""); setInclude(""); setExclude("");
+    setDateFrom(""); setDateTo(""); setOrientation(""); setAssets(""); setOffloaded(""); setIndexState(""); setInclude(""); setExclude("");
     setSelectedPresetId("");
   }
 
@@ -444,6 +433,66 @@ export function Gallery() {
     }
   }
 
+  async function markSelected(action: MarkAction) {
+    const ids = Array.from(selectedIds);
+    if (!ids.length || recoveryBusy) return;
+    setRecoveryBusy(true);
+    setRecoveryMessage(null);
+    try {
+      const result = await api.markItems(action, { ids });
+      const page = await api.itemPage(pageQuery);
+      queryVersion.current += 1;
+      setItems(page.items);
+      setNextCursor(page.next_cursor);
+      setSelectedIds(new Set());
+      setRecoveryMessage(`${result.changed} favorite${result.changed === 1 ? "" : "s"} updated.`);
+    } catch (error) {
+      setRecoveryMessage((error as Error).message);
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }
+
+  /** The current page filters as the same key/value strings `api.itemPage` sends. */
+  function currentFilterSelector(): Record<string, string> {
+    const excluded = new Set(["order", "seed", "limit", "cursor"]);
+    const filter: Record<string, string> = {};
+    Object.entries(pageQuery).forEach(([key, value]) => {
+      if (excluded.has(key) || value == null || value === "") return;
+      filter[key] = String(value);
+    });
+    return filter;
+  }
+
+  async function markMatching(action: "offload" | "ignore") {
+    if (filterActionBusy) return;
+    setFilterActionBusy(true);
+    setFilterActionMessage(null);
+    try {
+      const filter = currentFilterSelector();
+      const preview = await api.markItems(action, { filter }, true);
+      if (!preview.matched) {
+        setFilterActionMessage("No favorites match the current filters.");
+        return;
+      }
+      const verb = action === "offload" ? "mark" : "ignore";
+      if (!window.confirm(`This will ${verb} ${preview.matched} favorite${preview.matched === 1 ? "" : "s"}${action === "offload" ? " as offloaded" : ""} — proceed?`)) {
+        setFilterActionMessage("Cancelled.");
+        return;
+      }
+      const result = await api.markItems(action, { filter });
+      const page = await api.itemPage(pageQuery);
+      queryVersion.current += 1;
+      setItems(page.items);
+      setNextCursor(page.next_cursor);
+      setFilterActionMessage(`${result.changed} favorite${result.changed === 1 ? "" : "s"} updated.`);
+    } catch (error) {
+      setFilterActionMessage((error as Error).message);
+    } finally {
+      setFilterActionBusy(false);
+    }
+  }
+
   async function toggleRecoveryInbox() {
     if (recovery) {
       setRecovery(false);
@@ -463,6 +512,10 @@ export function Gallery() {
     }
   }
 
+  const selectedItems = (items ?? []).filter((it) => selectedIds.has(it.id));
+  const allSelectedOffloaded = selectedItems.length > 0 && selectedItems.every((it) => it.offloaded);
+  const allSelectedIgnored = selectedItems.length > 0 && selectedItems.every((it) => it.status === "ignored");
+
   const activeFilters: Array<{ label: string; clear: () => void }> = [];
   const addFilter = (value: string, label: string, clear: () => void) => value && activeFilters.push({ label, clear });
   addFilter(search, `Search: ${search}`, () => setSearch(""));
@@ -476,7 +529,7 @@ export function Gallery() {
   addFilter(minAttempts, `≥ ${minAttempts} attempts`, () => setMinAttempts("")); addFilter(maxAttempts, `≤ ${maxAttempts} attempts`, () => setMaxAttempts(""));
   if (recovery) activeFilters.push({ label: "Recovery inbox", clear: () => setRecovery(false) });
   addFilter(codec, `Codec: ${codec}`, () => setCodec("")); addFilter(dateFrom, `After: ${dateFrom}`, () => setDateFrom("")); addFilter(dateTo, `Before: ${dateTo}`, () => setDateTo(""));
-  addFilter(orientation, orientation, () => setOrientation("")); addFilter(assets, assets === "with" ? "Has raw assets" : "No raw assets", () => setAssets("")); addFilter(indexState, `Index: ${indexState}`, () => setIndexState("")); addFilter(include, `Include: ${include}`, () => setInclude("")); addFilter(exclude, `Exclude: ${exclude}`, () => setExclude(""));
+  addFilter(orientation, orientation, () => setOrientation("")); addFilter(assets, assets === "with" ? "Has raw assets" : "No raw assets", () => setAssets("")); addFilter(offloaded, offloaded === "with" ? "Offloaded" : "Stored locally", () => setOffloaded("")); addFilter(indexState, `Index: ${indexState}`, () => setIndexState("")); addFilter(include, `Include: ${include}`, () => setInclude("")); addFilter(exclude, `Exclude: ${exclude}`, () => setExclude(""));
 
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto">
@@ -523,6 +576,8 @@ export function Gallery() {
         <button type="button" onClick={playSelected} disabled={!selectedIds.size || recoveryBusy} className="rounded border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-elevated disabled:opacity-40"><Play size={14} weight="fill" /> Play selection</button>
         <input value={playbackQueueName} onChange={(event) => setPlaybackQueueName(event.target.value)} maxLength={80} placeholder="Save as queue…" className="h-8 rounded border border-line bg-elevated px-2 text-xs text-ink placeholder:text-ink-faint" />
         <button type="button" onClick={savePlaybackQueue} disabled={!selectedIds.size || !playbackQueueName.trim() || recoveryBusy} className="rounded border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-elevated disabled:opacity-40"><BookmarkSimple size={14} /> Save queue</button>
+        <button type="button" onClick={() => markSelected(allSelectedOffloaded ? "unoffload" : "offload")} disabled={!selectedIds.size || recoveryBusy} title="Offloaded favorites are archived on external storage, so Sync and integrity checks stop flagging them as missing." className="rounded border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-elevated disabled:opacity-40">{allSelectedOffloaded ? "Unmark offloaded" : "Mark offloaded"}</button>
+        <button type="button" onClick={() => markSelected(allSelectedIgnored ? "unignore" : "ignore")} disabled={!selectedIds.size || recoveryBusy} title="Ignored favorites keep their place in the archive but Sync never downloads them." className="rounded border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-elevated disabled:opacity-40">{allSelectedIgnored ? "Allow downloading" : "Don't download"}</button>
         <button type="button" onClick={requeueSelected} disabled={!selectedIds.size || recoveryBusy} className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-on-accent disabled:opacity-40">{recoveryBusy ? "Queuing…" : "Queue selected for Sync"}</button>
         <span className="text-xs text-ink-faint">Only failed favorites and finished favorites missing their file will be queued.</span>
         {recoveryMessage && <span className="w-full text-xs text-ink-dim">{recoveryMessage}</span>}
@@ -577,7 +632,7 @@ export function Gallery() {
           <select value={order} onChange={(e) => changeOrder(e.target.value as GalleryOrder)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="latest">Latest imported favorite</option><option value="archive">Oldest imported favorite</option><option value="favorite_date_desc">Newest favorite date</option><option value="favorite_date_asc">Oldest favorite date</option><option value="author_asc">Creator A–Z</option><option value="size_desc">Largest file</option><option value="duration_desc">Longest video</option><option value="duration_asc">Shortest video</option><option value="attempts_desc">Most download attempts</option><option value="last_attempt_desc">Most recently attempted</option><option value="random">Random order</option></select>
         </label>
         <label className="text-xs text-ink-dim"><HelpLabel help="Ready has local media. Failed can be retried. Unavailable means TikTok reports the original is gone and it will not be retried automatically.">Archive status</HelpLabel>
-          <select value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any status</option><option value="done">Ready</option><option value="pending">Pending</option><option value="failed">Failed</option><option value="skipped">Skipped</option><option value="expired">Unavailable original</option></select>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any status</option><option value="done">Ready</option><option value="pending">Pending</option><option value="failed">Failed</option><option value="skipped">Skipped</option><option value="expired">Unavailable original</option><option value="ignored">Ignored</option></select>
         </label>
         <label className="text-xs text-ink-dim"><HelpLabel help="Shows favorites Sync has tried at least this many times, including successful and failed attempts.">Minimum download attempts</HelpLabel>
           <input value={minAttempts} onChange={(e) => setMinAttempts(e.target.value)} type="number" min="0" step="1" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
@@ -590,6 +645,9 @@ export function Gallery() {
         </label>
         <label className="text-xs text-ink-dim"><HelpLabel help="Filters photo posts by whether their original downloaded images and audio are still stored beside the rebuilt video.">Raw slideshow assets</HelpLabel>
           <select value={assets} onChange={(e) => setAssets(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any asset state</option><option value="with">Has original assets</option><option value="without">No original assets</option></select>
+        </label>
+        <label className="text-xs text-ink-dim"><HelpLabel help="Offloaded favorites are archived on external storage (like a NAS), so they have no local file here but are not missing.">External storage</HelpLabel>
+          <select value={offloaded} onChange={(e) => setOffloaded(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any</option><option value="with">Offloaded</option><option value="without">Local</option></select>
         </label>
         <label className="text-xs text-ink-dim"><HelpLabel help="Indexed favorites have a thumbnail and media facts. Missing has not been indexed yet. Failed means thumbnail or media inspection failed.">Gallery index health</HelpLabel>
           <select value={indexState} onChange={(e) => setIndexState(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any index state</option><option value="indexed">Indexed</option><option value="missing">Not indexed</option><option value="failed">Index failed</option></select>
@@ -629,11 +687,17 @@ export function Gallery() {
         </label>
         <label className="text-xs text-ink-dim"><HelpLabel help="Whitelist: every comma-separated term must match the caption or creator. Use this to keep only specific creators, hashtags, or topics.">Whitelist creators / tags / words</HelpLabel><input value={include} onChange={(e) => setInclude(e.target.value)} placeholder="e.g. @creator, #games" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" /></label>
         <label className="text-xs text-ink-dim"><HelpLabel help="Blacklist: any matching comma-separated term removes that favorite. Use this to hide creators, hashtags, or topics such as #fyp.">Blacklist creators / tags / words</HelpLabel><input value={exclude} onChange={(e) => setExclude(e.target.value)} placeholder="e.g. #fyp, spoilers" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" /></label>
+        <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3 sm:col-span-2 lg:col-span-3">
+          <span className="text-xs text-ink-dim"><HelpLabel help="Applies an archive mark to every favorite matching the current search and filters. A count is shown for confirmation before anything changes.">With these filters…</HelpLabel></span>
+          <button type="button" onClick={() => markMatching("offload")} disabled={filterActionBusy} className="inline-flex h-9 items-center rounded border border-line px-3 text-sm text-ink-dim hover:text-ink disabled:opacity-40">Mark all matching offloaded</button>
+          <button type="button" onClick={() => markMatching("ignore")} disabled={filterActionBusy} className="inline-flex h-9 items-center rounded border border-line px-3 text-sm text-ink-dim hover:text-ink disabled:opacity-40">Ignore all matching</button>
+          {filterActionMessage && <span className="text-xs text-ink-faint">{filterActionMessage}</span>}
+        </div>
       </section>}
 
-      {!items && !showInitialLoading ? (
+      {!items && initialLoadingPhase === "quiet" ? (
         <div className="min-h-40" aria-busy="true" aria-label="Loading Gallery" />
-      ) : showInitialLoading ? (
+      ) : initialLoadingPhase === "indicator" ? (
         <Grid density={density}>
           {Array.from({ length: 10 }).map((_, i) => (
             <Skeleton key={i} className="aspect-[9/16] !rounded-[var(--radius-media)]" />
@@ -732,6 +796,8 @@ function Thumb({ item, onClick, selecting = false, inspecting = false, selected 
       <div className="absolute inset-x-0 bottom-0 p-2.5">
         {item.status === "failed" && <p title={item.error ?? undefined} className="truncate text-[11px] font-medium text-bad">{item.error ?? "Download failed"}</p>}
         {item.status === "expired" && <p title="TikTok no longer serves the original link. Its archive number is preserved and Sync will not retry it automatically." className="truncate text-[11px] font-medium text-white/60">Original unavailable</p>}
+        {item.status === "ignored" && <p title="Marked as don't-download. Its archive number is preserved and Sync will not attempt it." className="truncate text-[11px] font-medium text-white/60">Not downloading</p>}
+        {item.offloaded && <span title="Archived on external storage, so it is not flagged as missing here." className="mb-1 inline-block rounded bg-black/50 px-1.5 py-0.5 text-[10px] font-medium text-white/80">offloaded</span>}
         {item.author && <p className="truncate text-xs font-medium text-white">{item.author}</p>}
         {item.caption && <p className="truncate text-[11px] text-white/70">{item.caption}</p>}
         {(item.media_codec || size) && <p className="mt-0.5 truncate text-[10px] text-white/55 opacity-0 transition group-hover:opacity-100">{[item.media_codec, size].filter(Boolean).join(" · ")}</p>}
@@ -754,7 +820,7 @@ function DetailsDialog({ item, onClose, onPlay }: { item: Item; onClose: () => v
     ["Duration", formatDuration(item.duration_s) ?? "Not indexed"], ["Resolution", resolution],
     ["Codec", item.media_codec ?? "Not indexed"], ["File size", formatSize(item.media_size) ?? "Not indexed"],
     ["Download attempts", String(item.attempt_count)], ["Last attempt", item.last_attempt_at ?? "Never"],
-    ["Archive file", item.archive_missing ? "Missing (integrity scan)" : item.video_url ? "Ready" : "Not available"], ["Raw slideshow assets", item.has_assets ? "Available" : "None"],
+    ["Archive file", item.offloaded ? "Offloaded to external storage" : item.archive_missing ? "Missing (integrity scan)" : item.video_url ? "Ready" : "Not available"], ["Raw slideshow assets", item.has_assets ? "Available" : "None"],
   ];
   const safeLink = /^https?:\/\//i.test(item.link);
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="favorite-details-title">

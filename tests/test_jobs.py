@@ -66,25 +66,88 @@ def test_start_guard_and_progress_and_completion():
         assert events[-1].get("event") == "complete"
 
 
-def test_controls_set_run_state():
+def _run_state(dbp):
+    c = store.connect(dbp)
+    try:
+        return store.get_run_state(c)["state"]
+    finally:
+        c.close()
+
+
+def test_controls_refuse_while_idle_and_leave_state_untouched():
     with tempfile.TemporaryDirectory() as d:
         dbp = os.path.join(d, "a.db")
         store.init_db(store.connect(dbp)).close()
         jm = jobs.JobManager(dbp, d, runners={"sync": lambda *a, **k: None})
 
-        def state():
-            c = store.connect(dbp)
-            try:
-                return store.get_run_state(c)["state"]
-            finally:
-                c.close()
+        assert jm.pause() is False
+        assert _run_state(dbp) == "idle"
+        assert jm.resume() is False
+        assert _run_state(dbp) == "idle"
+        assert jm.stop() is False
+        assert _run_state(dbp) == "idle"
 
-        jm.pause()
-        assert state() == "paused"
-        jm.resume()
-        assert state() == "running"
-        jm.stop()
-        assert state() == "stopping"
+
+def test_controls_refuse_after_database_state_finishes_even_if_thread_is_still_alive():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+        jm = jobs.JobManager(dbp, d, runners={"sync": lambda *a, **k: None})
+
+        class FinishingThread:
+            def is_alive(self):
+                return True
+
+        jm._thread = FinishingThread()
+        assert jm.pause() is False
+        assert _run_state(dbp) == "idle"
+
+
+def test_controls_set_run_state_while_a_job_is_running():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+
+        release = threading.Event()
+        started = threading.Event()
+
+        def fake_runner(conn, download_dir, progress=None):
+            started.set()
+            release.wait(3)  # hold the job "running" until released
+
+        jm = jobs.JobManager(dbp, d, runners={"sync": fake_runner})
+        q = jm.subscribe()
+        assert jm.start("sync") is True
+        assert started.wait(3)
+
+        assert jm.pause() is True
+        assert _run_state(dbp) == "paused"
+        assert jm.resume() is True
+        assert _run_state(dbp) == "running"
+        assert jm.stop() is True
+        assert _run_state(dbp) == "stopping"
+
+        release.set()
+        _drain_until_complete(q)
+
+
+def test_manager_startup_heals_items_stranded_downloading_by_a_crash():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        conn = store.init_db(store.connect(dbp))
+        store.insert_item(conn, 1, "a")
+        store.set_status(conn, 1, "downloading")  # orphaned by a hard kill
+        conn.close()
+
+        jobs.JobManager(dbp, d, runners={"sync": lambda *a, **k: None})
+
+        conn = store.connect(dbp)
+        try:
+            row = store.get_item(conn, 1)
+            assert row["status"] == "failed"
+            assert "interrupted" in row["error"]
+        finally:
+            conn.close()
 
 
 def test_unknown_runner_returns_false():
@@ -93,6 +156,31 @@ def test_unknown_runner_returns_false():
         store.init_db(store.connect(dbp)).close()
         jm = jobs.JobManager(dbp, d, runners={"sync": lambda *a, **k: None})
         assert jm.start("nope") is False
+
+
+def test_run_when_idle_is_serialized_with_background_job_start():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+        release = threading.Event()
+        started = threading.Event()
+
+        def fake_runner(*_args, **_kwargs):
+            started.set()
+            release.wait(3)
+
+        jm = jobs.JobManager(dbp, d, runners={"sync": fake_runner})
+        assert jm.run_when_idle(lambda: "migration result") == "migration result"
+
+        assert jm.start("sync") is True
+        assert started.wait(3)
+        try:
+            jm.run_when_idle(lambda: "must not run")
+        except jobs.JobBusyError:
+            pass
+        else:
+            raise AssertionError("expected exclusive work to refuse an active job")
+        release.set()
 
 
 def test_runner_failure_is_persisted_and_broadcast():

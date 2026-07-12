@@ -36,7 +36,7 @@ def verify_archive(conn, download_dir):
 
     missing = sorted(
         row["id"] for row in items
-        if row["status"] == "done" and f"{row['id']}.mp4" not in movies
+        if row["status"] == "done" and not row["offloaded"] and f"{row['id']}.mp4" not in movies
     )
     store.record_archive_file_health(conn, missing)
     orphans = sorted(
@@ -48,6 +48,7 @@ def verify_archive(conn, download_dir):
     return {
         "favorites": len(items),
         "done": sum(1 for row in items if row["status"] == "done"),
+        "offloaded": sum(1 for row in items if row["offloaded"]),
         "missing": _summarize(missing),
         "orphans": _summarize(orphans),
         "leftovers": _summarize(leftovers),
@@ -67,7 +68,7 @@ def requeue_missing(conn, download_dir):
     for row in store.all_items(conn):
         if row["status"] != "done" or f"{row['id']}.mp4" in movies:
             continue
-        if str(row["link"]).startswith("local://"):
+        if str(row["link"]).startswith("local://") or row["offloaded"]:
             continue
         store.set_status(conn, row["id"], "pending")
         requeued += 1
@@ -88,7 +89,7 @@ def requeue_selected(conn, download_dir, item_ids):
     requeued = []
     for item_id in requested:
         row = rows.get(item_id)
-        if row is None or str(row["link"]).startswith("local://"):
+        if row is None or str(row["link"]).startswith("local://") or row["offloaded"]:
             continue
         missing_done_file = row["status"] == "done" and f"{item_id}.mp4" not in movies
         if row["status"] != "failed" and not missing_done_file:
@@ -96,3 +97,26 @@ def requeue_selected(conn, download_dir, item_ids):
         store.set_status(conn, item_id, "pending")
         requeued.append(item_id)
     return {"requeued": requeued, "skipped": len(requested) - len(requeued)}
+
+
+def offload_suggestion(conn, download_dir):
+    """Suggest the 'everything below my earliest local file' offload range."""
+    files = os.listdir(download_dir) if os.path.isdir(download_dir) else []
+    numbers = sorted(int(name.split(".")[0]) for name in _finished_movie_names(files))
+    if not numbers or numbers[0] <= 1:
+        return {
+            "earliest_local": numbers[0] if numbers else None,
+            "suggested": None,
+            "range_total": 0,
+            "range_undownloaded": 0,
+            "range_already_offloaded": 0,
+        }
+    first, last = 1, numbers[0] - 1
+    summary = store.range_status_summary(conn, first, last)
+    return {
+        "earliest_local": numbers[0],
+        "suggested": {"first_id": first, "last_id": last},
+        "range_total": summary["total"],
+        "range_undownloaded": summary["undownloaded"],
+        "range_already_offloaded": summary["already_offloaded"],
+    }
