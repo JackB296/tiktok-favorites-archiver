@@ -10,7 +10,7 @@ import os
 import csv
 import logging
 
-from core import config, export, store
+from core import config, export, inventory, store
 
 
 def import_export(conn, export_file):
@@ -63,8 +63,8 @@ def regenerate_manifest(conn, download_dir):
             writer.writerow(["file", "link", "type", "status", "timestamp"])
             for row in store.all_items(conn):
                 if os.path.exists(os.path.join(download_dir, f"{row['id']}.mp4")):
-                    writer.writerow([f"{row['id']}.mp4", row["link"], row["kind"],
-                                     row["status"], row["updated_at"]])
+                    writer.writerow([f"{row['id']}.mp4", inventory._safe_cell(row["link"]),
+                                     row["kind"], row["status"], row["updated_at"]])
                     written += 1
     except OSError as e:
         logging.error(f"Could not write manifest {manifest_path}: {e}")

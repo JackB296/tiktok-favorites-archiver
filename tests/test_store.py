@@ -269,6 +269,17 @@ def test_run_state_updates():
     assert rs["concurrency"] == 8 and rs["cobalt_url"] == "http://cobalt:9000/"
 
 
+def test_set_active_run_state_refuses_to_leave_stopping():
+    conn = _db()
+    store.set_run_state(conn, state="stopping")
+    assert store.set_active_run_state(conn, "paused") is False    # Pause must not cancel a Stop
+    assert store.get_run_state(conn)["state"] == "stopping"
+    assert store.set_active_run_state(conn, "running") is False   # nor a stale Continue
+    assert store.get_run_state(conn)["state"] == "stopping"
+    assert store.set_active_run_state(conn, "stopping") is True   # idempotent Stop stays allowed
+    assert store.get_run_state(conn)["state"] == "stopping"
+
+
 def test_search_items():
     conn = _db()
     store.insert_item(conn, 1, "https://tiktok.com/a", kind="video", status="done")

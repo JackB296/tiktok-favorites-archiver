@@ -865,12 +865,27 @@ def set_run_state(conn, **fields):
     conn.commit()
 
 
+# Allowed control transitions: requested state -> states it may be entered from.
+_CONTROL_TRANSITIONS = {
+    "paused": ("running", "paused"),
+    "running": ("running", "paused"),
+    "stopping": ("running", "paused", "stopping"),
+}
+
+
 def set_active_run_state(conn, state):
-    """Change control state only while the persisted run is still active."""
+    """Change control state only while the persisted run is still active.
+
+    A run that is stopping stays stopping: Pause/Continue must not cancel a
+    user's Stop.
+    """
+    allowed = _CONTROL_TRANSITIONS.get(state)
+    if allowed is None:
+        return False
+    placeholders = ",".join("?" for _ in allowed)
     cursor = conn.execute(
-        "UPDATE run_state SET state = ?, updated_at = ? "
-        "WHERE id = 1 AND state IN ('running', 'paused', 'stopping')",
-        (state, _now()),
+        f"UPDATE run_state SET state = ?, updated_at = ? WHERE id = 1 AND state IN ({placeholders})",
+        (state, _now(), *allowed),
     )
     conn.commit()
     return cursor.rowcount == 1

@@ -131,6 +131,55 @@ def test_controls_set_run_state_while_a_job_is_running():
         _drain_until_complete(q)
 
 
+def test_stop_is_not_cancelled_by_pause_or_continue():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+
+        release = threading.Event()
+        started = threading.Event()
+
+        def fake_runner(conn, download_dir, progress=None):
+            started.set()
+            release.wait(3)  # hold the job "running" until released
+
+        jm = jobs.JobManager(dbp, d, runners={"sync": fake_runner})
+        q = jm.subscribe()
+        assert jm.start("sync") is True
+        assert started.wait(3)
+
+        assert jm.stop() is True
+        assert _run_state(dbp) == "stopping"
+        assert jm.pause() is False              # Pause must not cancel the Stop
+        assert _run_state(dbp) == "stopping"
+        assert jm.resume() is False             # neither must a stale Continue
+        assert _run_state(dbp) == "stopping"
+
+        release.set()
+        _drain_until_complete(q)
+
+
+def test_controls_work_immediately_after_start_returns():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+
+        release = threading.Event()
+
+        def fake_runner(conn, download_dir, progress=None):
+            release.wait(3)  # block immediately
+
+        jm = jobs.JobManager(dbp, d, runners={"sync": fake_runner})
+        q = jm.subscribe()
+
+        assert jm.start("sync") is True
+        assert _run_state(dbp) == "running"     # persisted before start() returns
+        assert jm.pause() is True
+
+        release.set()
+        _drain_until_complete(q)
+
+
 def test_manager_startup_heals_items_stranded_downloading_by_a_crash():
     with tempfile.TemporaryDirectory() as d:
         dbp = os.path.join(d, "a.db")

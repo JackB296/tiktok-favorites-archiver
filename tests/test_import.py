@@ -106,6 +106,17 @@ def test_orphan_file_beyond_export_is_represented():
         assert orphan["link"].startswith("local://")
 
 
+def test_manifest_neutralizes_formula_prefixed_links():
+    conn = store.init_db(store.connect(":memory:"))
+    with tempfile.TemporaryDirectory() as dl:
+        store.insert_item(conn, 1, '=HYPERLINK("http://evil")', favorite_order=1)
+        open(os.path.join(dl, "1.mp4"), "w").close()
+        importer.regenerate_manifest(conn, dl)
+        with open(os.path.join(dl, importer.config.MANIFEST_FILE), newline="") as f:
+            rows = list(csv.reader(f))
+    assert rows[1][1] == '\'=HYPERLINK("http://evil")'
+
+
 def test_orphan_file_uses_next_logical_order_when_physical_id_would_collide():
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 100, "known", favorite_order=7)

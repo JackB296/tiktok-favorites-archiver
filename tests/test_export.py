@@ -41,6 +41,16 @@ def test_load_all_links_skips_items_without_link():
         assert export.load_all_links(p) == ["https://tiktok.com/x"]
 
 
+def test_normalization_rewrites_only_literal_tiktokv_domain():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "e.json")
+        _make_export(p, ["https://www.tiktokv.com/a", "https://www.tiktokvXcom/b"])
+        assert export.load_all_links(p) == [
+            "https://www.tiktokvXcom/b",
+            "https://www.tiktok.com/a",
+        ]
+
+
 def test_load_all_favorites_accepts_current_likes_and_favorites_schema():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "current.json")

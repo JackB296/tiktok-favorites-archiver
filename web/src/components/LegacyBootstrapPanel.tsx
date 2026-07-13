@@ -190,17 +190,22 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
                   <tr><th className="pb-2 pr-3 font-medium">Local file</th><th className="pb-2 pr-3 font-medium">Old export position</th><th className="pb-2 font-medium">Favorite link</th></tr>
                 </thead>
                 <tbody className="text-ink-dim">
-                  {preview.samples.map((sample) => (
-                    <tr key={sample.archive_number} className="border-t border-line">
-                      <td className="py-2 pr-3 text-ink">
-                        <a className="text-active hover:underline" href={`/media/${sample.archive_number}.mp4`} target="_blank" rel="noreferrer">#{sample.archive_number}.mp4</a>
-                      </td>
-                      <td className="py-2 pr-3">#{sample.old_export_position}</td>
-                      <td className="max-w-md truncate py-2">
-                        <a className="text-active hover:underline" href={sample.link} target="_blank" rel="noreferrer">{sample.link}</a>
-                      </td>
-                    </tr>
-                  ))}
+                  {preview.samples.map((sample) => {
+                    const safeLink = /^https?:\/\//i.test(sample.link);
+                    return (
+                      <tr key={sample.archive_number} className="border-t border-line">
+                        <td className="py-2 pr-3 text-ink">
+                          <a className="text-active hover:underline" href={`/media/${sample.archive_number}.mp4`} target="_blank" rel="noreferrer">#{sample.archive_number}.mp4</a>
+                        </td>
+                        <td className="py-2 pr-3">#{sample.old_export_position}</td>
+                        <td className="max-w-md truncate py-2">
+                          {safeLink
+                            ? <a className="text-active hover:underline" href={sample.link} target="_blank" rel="noreferrer">{sample.link}</a>
+                            : <span>{sample.link}</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

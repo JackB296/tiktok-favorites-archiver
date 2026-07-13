@@ -8,6 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
+    "test": "npm run test:virtual-grid && npm run test:viewer-shortcuts && npm run test:ui-behavior && npm run test:feed-items && npm run test:loading-presentation && npm run test:legacy-bootstrap",
+    "typecheck": "tsc --noEmit",
     "test:virtual-grid": "node scripts/test-virtual-grid.mjs",
     "test:viewer-shortcuts": "node scripts/test-viewer-shortcuts.mjs",
     "test:ui-behavior": "node scripts/test-ui-behavior.mjs",

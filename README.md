@@ -204,6 +204,8 @@ Backend tests are stdlib-only — no dependencies to install:
 for f in tests/test_*.py; do python3 "$f"; done
 ```
 
+`python3 tests/test_store.py` runs one file; every test file is independently runnable.
+
 The web app needs Node 20.19+ (see `web/.nvmrc`). `npm run dev` serves the SPA with hot reload and proxies `/api` and `/media` to a backend on `localhost:8080`, so start the Docker app (or `uvicorn server.main:app`) first:
 
 ```bash
@@ -211,7 +213,10 @@ cd web
 npm ci
 npm run dev     # SPA on http://localhost:5173, API proxied to :8080
 npm run build   # type-check + production bundle
+npm test        # six behavior scripts
 ```
+
+The behavior scripts exercise the pure-logic modules in `web/src/lib/`.
 
 ## Built with
 

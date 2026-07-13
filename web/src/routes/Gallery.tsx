@@ -69,9 +69,12 @@ export function Gallery() {
   const [search, setSearch] = useState(() => fromUrl("q"));
   const [kind, setKind] = useState(() => fromUrl("kind"));
   const [items, setItems] = useState<Item[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const initialLoadingPhase = useDelayedLoading(items === null);
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [status, setStatus] = useState(() => fromUrl("status"));
   const [order, setOrder] = useState<GalleryOrder>(() => (fromUrl("sort") as GalleryOrder) || "latest");
@@ -161,6 +164,8 @@ export function Gallery() {
   useEffect(() => {
     let alive = true;
     queryVersion.current += 1;
+    setLoadError(null);
+    setLoadMoreFailed(false);
     const t = window.setTimeout(() => {
       api
         .itemPage(pageQuery)
@@ -169,13 +174,17 @@ export function Gallery() {
           setItems(page.items);
           setNextCursor(page.next_cursor);
         })
-        .catch(() => alive && setItems([]));
+        .catch((error) => {
+          if (!alive) return;
+          setItems([]);
+          setLoadError((error as Error).message || "Request failed");
+        });
     }, 200); // debounce typing
     return () => {
       alive = false;
       window.clearTimeout(t);
     };
-  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude]);
+  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude, reloadNonce]);
 
   useEffect(() => {
     setSelectedIds(new Set());
@@ -306,6 +315,9 @@ export function Gallery() {
       if (version !== queryVersion.current) return; // filters changed mid-flight
       setItems((current) => [...(current ?? []), ...page.items]);
       setNextCursor(page.next_cursor);
+      setLoadMoreFailed(false);
+    } catch {
+      if (version === queryVersion.current) setLoadMoreFailed(true);
     } finally {
       loadingMoreRef.current = false;
       setLoadingMore(false);
@@ -774,6 +786,12 @@ export function Gallery() {
         </Grid>
       ) : !items ? (
         <div className="min-h-40" aria-busy="true" aria-label="Loading Gallery" />
+      ) : loadError !== null ? (
+        <EmptyState
+          icon={<ImageSquare size={40} />}
+          title="Couldn't load the Gallery"
+          hint={<>{loadError}<br /><Button size="sm" className="mt-3" onClick={() => setReloadNonce((n) => n + 1)}>Try again</Button></>}
+        />
       ) : !items.length ? (
         <EmptyState
           icon={<ImageSquare size={40} />}
@@ -790,8 +808,17 @@ export function Gallery() {
           />
           {nextCursor != null && (
             <div className="mt-6 flex items-center justify-center gap-2 py-3 text-xs text-ink-faint" aria-live="polite" aria-busy={loadingMore}>
-              <span aria-hidden="true" className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" />
-              <span>{loadingMore ? "Loading more favorites…" : "More favorites load as you scroll."}</span>
+              {loadMoreFailed && !loadingMore ? (
+                <>
+                  <span>Couldn't load more — scroll or press to retry.</span>
+                  <Button variant="ghost" size="xs" onClick={() => loadMoreRef.current?.()}>Retry</Button>
+                </>
+              ) : (
+                <>
+                  <span aria-hidden="true" className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" />
+                  <span>{loadingMore ? "Loading more favorites…" : "More favorites load as you scroll."}</span>
+                </>
+              )}
             </div>
           )}
         </>

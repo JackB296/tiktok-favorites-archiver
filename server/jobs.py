@@ -97,8 +97,20 @@ class JobManager:
                     self._broadcaster.publish({"event": "complete"})
                     conn.close()
 
-            self._thread = threading.Thread(target=run, name=f"job-{kind}", daemon=True)
-            self._thread.start()
+            # Persist "running" before start() returns so controls issued
+            # immediately after Start are not rejected while the thread spins up.
+            conn = self._conn()
+            try:
+                store.set_run_state(conn, state="running", phase=kind)
+                self._thread = threading.Thread(target=run, name=f"job-{kind}", daemon=True)
+                try:
+                    self._thread.start()
+                except Exception:
+                    # A failed spawn must not leave a phantom "running" row.
+                    store.set_run_state(conn, state="idle", phase=None)
+                    raise
+            finally:
+                conn.close()
             return True
 
     def run_when_idle(self, operation):

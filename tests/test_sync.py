@@ -223,6 +223,22 @@ def test_pause_then_continue():
     assert store.get_item(conn, 2)["status"] == "done"
 
 
+def test_concurrent_sync_processes_all_items():
+    """Locks in the ThreadPoolExecutor branch of _drive (every other test uses concurrency=1)."""
+    conn = store.init_db(store.connect(":memory:"))
+    links = [f"v{n}" for n in range(8)]
+    _seed(conn, links)  # ids 1..8
+    results = {link: cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel") for link in links}
+
+    with tempfile.TemporaryDirectory() as dl:
+        counts = _run_sync(conn, dl, deps=_fake_deps(results), concurrency=3)
+
+    assert counts.get("done") == len(links)
+    for item_id in range(1, len(links) + 1):
+        assert store.get_item(conn, item_id)["status"] == "done"
+    assert store.get_run_state(conn)["state"] == "idle"
+
+
 def test_items_needing_backfill_skips_offloaded_and_ignored_items():
     conn = store.init_db(store.connect(":memory:"))
     _seed(conn, ["a", "b", "c"])  # ids 1..3, kind unknown, no assets

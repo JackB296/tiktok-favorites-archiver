@@ -36,7 +36,7 @@ def load_all_favorites(file_path):
                 break
 
     return [
-        (re.sub(r"tiktokv.com", "tiktok.com", item["Link"]), item.get("Date"))
+        (re.sub(r"tiktokv\.com", "tiktok.com", item["Link"]), item.get("Date"))
         for item in item_favorite_list if "Link" in item
     ][::-1]
 

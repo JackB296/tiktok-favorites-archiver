@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import type { Item } from "../lib/types";
 import { PostMedia } from "../components/PostMedia";
 import { PlaybackSession, usePlayback } from "../components/playback";
-import { EmptyState, Skeleton } from "../components/ui";
+import { Button, EmptyState, Skeleton } from "../components/ui";
 import { viewerShortcut } from "../lib/viewerShortcuts";
 import { isFeedItem } from "../lib/feedItems";
 import { useDelayedLoading } from "../lib/useDelayedLoading";
@@ -19,6 +19,8 @@ const KEEP_BEHIND = 5;
 export function Viewer() {
   const [searchParams] = useSearchParams();
   const [items, setItems] = useState<Item[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const initialLoadingPhase = useDelayedLoading(items === null);
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -49,6 +51,12 @@ export function Viewer() {
 
   useEffect(() => {
     let alive = true;
+    setLoadError(null);
+    const failLoad = (error: unknown) => {
+      if (!alive) return;
+      setItems([]);
+      setLoadError((error as Error).message || "Request failed");
+    };
     const openLatest = () => api.itemPage({ limit: 50, order: "latest", feed: true }).then((page) => {
       if (!alive) return;
       const playable = page.items.filter(isFeedItem);
@@ -69,7 +77,7 @@ export function Viewer() {
           setNextCursor(null); // a curated queue ends at its final selected item
           setRandomMode(false);
         })
-        .catch(() => alive && setItems([]));
+        .catch(failLoad);
     } else if (requestedItemId != null) {
       setQueueReadyTotal(0);
       api.itemWindow(requestedItemId)
@@ -81,15 +89,15 @@ export function Viewer() {
           setActiveId(requestedItemId);
           setNextCursor(page.items[page.items.length - 1]?.id ?? null);
         })
-        .catch(() => openLatest().catch(() => alive && setItems([])));
+        .catch(() => openLatest().catch(failLoad));
     } else {
-      openLatest().catch(() => alive && setItems([]));
+      openLatest().catch(failLoad);
     }
 
     return () => {
       alive = false;
     };
-  }, [requestedItemId, requestedQueueKey]);
+  }, [requestedItemId, requestedQueueKey, reloadNonce]);
 
   const loadRandomBatch = useCallback(async (replace = false, generation = randomGeneration.current) => {
     if (generation !== randomGeneration.current || randomBatchGeneration.current === generation) return;
@@ -193,12 +201,15 @@ export function Viewer() {
       return;
     }
     if (nextCursor == null) return;
+    const generation = randomGeneration.current;
     setLoadingMore(true);
     api.itemPage({ limit: 50, cursor: nextCursor, order: "latest", feed: true })
       .then((page) => {
+        if (generation !== randomGeneration.current) return;
         setItems((current) => [...(current ?? []), ...page.items.filter(isFeedItem)]);
         setNextCursor(page.next_cursor);
       })
+      .catch(() => { /* transient — sentinel stays, next scroll retries */ })
       .finally(() => setLoadingMore(false));
   }, [activeId, items, loadRandomBatch, loadingMore, nextCursor, randomMode]);
 
@@ -288,6 +299,15 @@ export function Viewer() {
       <div className="mx-auto max-w-md p-4">
         <Skeleton className="h-[82dvh] w-full !rounded-[var(--radius-media)]" />
       </div>
+    );
+  }
+  if (loadError !== null) {
+    return (
+      <EmptyState
+        icon={<FilmReel size={40} />}
+        title="Couldn't load the Feed"
+        hint={<>{loadError}<br /><Button size="sm" className="mt-3" onClick={() => setReloadNonce((n) => n + 1)}>Try again</Button></>}
+      />
     );
   }
   if (!items.length) {
