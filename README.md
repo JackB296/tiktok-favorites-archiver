@@ -1,27 +1,51 @@
-# TikTok Favorites Archive
-
-Turn your TikTok data export into a self-hosted archive of everything you've favorited, then scroll it like TikTok itself. Videos download as-is. Photo slideshows are rebuilt into MP4s with their original sound. A local web app runs the downloads and browses the results, and Plex handles the TV.
-
-[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![React](https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB)](https://react.dev/)
-[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Cobalt](https://img.shields.io/badge/Powered%20by-Cobalt-8B5CF6)](https://github.com/imputnet/cobalt)
+<h1 align="center">TikTok Favorites Archive</h1>
 
 <p align="center">
-  <img src="screenshots/feed.png" alt="The Feed: a vertical, TikTok-style scroll of your saved favorites" width="820">
+  Turn your TikTok data export into a self-hosted archive of everything you've favorited, then scroll it like TikTok itself.
 </p>
 
-Everything runs on your own machine through a self-hosted [Cobalt](https://github.com/imputnet/cobalt) instance, so your favorites never pass through anyone else's server.
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12"></a>
+  <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI"></a>
+  <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB" alt="React"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <img src="https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white" alt="SQLite">
+  <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3FB950" alt="License: MIT"></a>
+</p>
+
+<p align="center">
+  <img src="screenshots/feed.png" alt="The Feed: a vertical, TikTok-style scroll of your saved favorites" width="880">
+</p>
+
+Videos download as-is. Photo slideshows are rebuilt into MP4s with their original sound. A local web app runs the downloads and browses the results, and Plex handles the TV. Everything runs on your own machine through a self-hosted [Cobalt](https://github.com/imputnet/cobalt) instance, so your favorites never pass through anyone else's server.
+
+## Architecture
+
+<p align="center">
+  <img src="screenshots/architecture.svg" alt="System architecture: a TikTok data export flows through a Python download engine and a self-hosted Cobalt resolver into a local SQLite-indexed archive, served by FastAPI to a React web app and to Plex." width="100%">
+</p>
+
+The app reads your export, records every favorite in a SQLite database, and works through them with a bounded pool of workers that stays under Cobalt's rate limit. Cobalt resolves each link to real media. Videos download directly. A photo post has its images and audio downloaded, rebuilt into a slideshow MP4 (each image centered on a black canvas sized to the largest image, with no downscaling), and its raw images kept so the web viewer can render them as a carousel.
+
+File numbering is stable: `147.mp4` stays archive item 147 in the database. Favorite chronology is stored separately, so a legacy migration can preserve old filenames without making Feed order wrong. A rerun never renumbers or overwrites what you already have, and Plex keeps its place.
+
+## Highlights
+
+- **Runs entirely on your machine.** The app and its own Cobalt resolver come up together with one `docker compose up`. Nothing you import or download touches a third-party server.
+- **Resilient download engine.** A bounded worker pool holds a configurable request rate and backs off on HTTP 429. Progress lives in SQLite, downloads stream to a `.part` file and are renamed into place only when complete, and a rerun resumes exactly where it stopped.
+- **Rebuilds photo slideshows.** TikTok photo posts are re-encoded into MP4s with their original audio (FFmpeg via MoviePy), each image centered on a canvas sized to the largest slide, with the raw images kept for the in-app carousel.
+- **Scales to a real library.** The Feed and Gallery stay responsive at 11,000+ favorites through row virtualization, media preloading, and range-based streaming from the backend.
+- **Built to be operated.** Live per-item progress over Server-Sent Events, an archive integrity check, a one-click recovery inbox, saved and shareable filters, and a portable CSV inventory.
+- **Tested and typed.** The download engine is a standalone Python package with a stdlib-only unit suite (24 files). The frontend talks to a small typed API and never reaches Cobalt directly.
 
 ## Quick start
 
 You need [Docker](https://www.docker.com/).
 
 ```bash
-git clone https://github.com/JackB296/tiktok-favorites-archiver.git
-cd tiktok-favorites-archiver
+git clone https://github.com/JackB296/tiktok-favorites-downloader.git
+cd tiktok-favorites-downloader
 docker compose up --build
 ```
 
@@ -35,51 +59,44 @@ Media is written to `./downloads` on your host. Point Plex at that folder and yo
 
 ## The app
 
-**Feed.** A vertical scroll of your favorites, one at a time. Videos autoplay as they come into view and expose play/pause and seeking controls on hover. Photo posts use a manual image carousel while their original audio keeps playing; slides never advance on their own. Opens at your newest favorite, remembers where you left off ("go to last watched"), and has a no-repeat shuffle mode. Desktop controls are built in: arrow keys change favorites, Space pauses, M toggles sound, and F enters or exits fullscreen; the on-screen keyboard button shows the same list. The next eight posts preload, and the previous video stops as soon as navigation begins, so the Feed stays responsive at 11,000+ favorites. Optional automatic loudness leveling is capped at 2.5× to avoid distorted amplification.
+### Feed
 
-**Gallery.** A comfortable thumbnail grid of everything, searchable by caption, hashtag, or author (pulled from TikTok's public oEmbed data), ranked best-match first. Beyond the basic All / Videos / Slideshows filter there's a full advanced panel — date range, duration, file size, resolution, orientation, codec, download status, download-attempt range, include/exclude author or tag lists, eleven repeatable sort orders (including missing audio first, creator A–Z, and recent download attempts) plus a fresh random shuffle. Confirmed silent videos are marked on their cards and in Feed. This makes it easy to isolate broken media or stubborn failures for recovery. Each Feed post has a settings button where its local MP4, custom JPEG/PNG/WebP thumbnail, or both can be replaced without changing its archive number, caption, creator, or source link; the previous video is kept in `downloads/.archive/replaced/` so a mistaken upload can be undone by hand. The one-click **Recovery** inbox first refreshes archive integrity, then shows failed downloads, scan-confirmed missing finished files, and untouched pending favorites; it can be saved or shared like every other Gallery filter. Save any full combination as a named preset or share it as a copyable link. Save reusable author/hashtag whitelist or blacklist lists too — for example, “No FYP” or “Gaming” — then apply them without replacing terms already entered. Inspect mode opens a favorite’s full archive metadata, including retry count and last attempt time, without leaving the grid. Select up to 100 favorites to start a temporary custom Feed queue, save it as a named queue for later, or target recovery. Failed favorites show their last error. As you browse, it loads the next page near the end of the current results and keeps only viewport-adjacent thumbnail rows mounted, so an 11,000-favorite library stays responsive.
+A vertical scroll of your favorites, one at a time. Videos autoplay as they come into view and expose play/pause and seeking controls on hover. Photo posts use a manual image carousel while their original audio keeps playing; slides never advance on their own.
 
-**Sync.** The control center. Upload your export, then start, pause, resume, or stop a run and watch per-item status update live over Server-Sent Events. It also keeps a durable local history of recent archive jobs and their final counts. The tab houses the library settings: Gallery indexing (thumbnails + media facts, with a quality choice), Sync worker count, a portable archive-inventory CSV, media-server metadata export, and an archive integrity check.
+It opens at your newest favorite, remembers where you left off ("go to last watched"), and has a no-repeat shuffle. Desktop controls are built in: arrow keys change favorites, Space pauses, M toggles sound, F enters or exits fullscreen. The next eight posts preload and the previous video stops the moment navigation begins, so the Feed stays smooth at 11,000+ favorites. Optional loudness leveling is capped at 2.5× to avoid distorted amplification.
+
+### Gallery
+
+A searchable thumbnail grid of everything, ranked best-match first.
+
+- **Search and filter.** Search by caption, hashtag, or author (from TikTok's public oEmbed data). Beyond the All / Videos / Slideshows filter, an advanced panel covers date range, duration, file size, resolution, orientation, codec, download status, and attempt count, plus include/exclude author and tag lists, eleven repeatable sort orders, and a fresh random shuffle.
+- **Presets and lists.** Save any filter combination as a named preset or share it as a copyable link. Save reusable author/hashtag allow or deny lists (for example "No FYP" or "Gaming") and apply them without clearing terms already entered.
+- **Recovery and repair.** The one-click Recovery inbox refreshes archive integrity, then surfaces failed downloads, scan-confirmed missing files, and untouched pending favorites. Confirmed-silent videos are flagged on their cards and in Feed. Each post can have its local MP4, thumbnail, or both replaced without changing its archive number, caption, creator, or source link; the previous file is kept in `downloads/.archive/replaced/` so a mistaken upload can be undone.
+- **Queues and inspect.** Select up to 100 favorites to start a temporary custom Feed queue, save it as a named queue, or target recovery. Inspect mode opens a favorite's full archive metadata, including retry count and last attempt time, without leaving the grid. Failed favorites show their last error.
+- **Performance.** The grid loads the next page near the end of the current results and keeps only viewport-adjacent thumbnail rows mounted, so an 11,000-favorite library stays responsive.
+
+### Sync
+
+The control center. Upload your export, then start, pause, resume, or stop a run and watch per-item status update live over Server-Sent Events. It keeps a durable local history of recent jobs and their final counts, and houses the library settings: Gallery indexing (thumbnails and media facts, with a quality choice), worker count, a portable archive-inventory CSV, media-server metadata export, and an archive integrity check.
 
 <p align="center">
-  <img src="screenshots/sync.png" alt="The Sync dashboard: upload, run controls, live per-item progress" width="820">
+  <img src="screenshots/sync.png" alt="The Sync dashboard: upload, run controls, live per-item progress" width="880">
 </p>
-
-## How it works
-
-```mermaid
-flowchart LR
-    A[TikTok export .json] --> B[Web app + SQLite]
-    B --> C[Cobalt]
-    C -->|video| D[MP4]
-    C -->|photo post| E[Rebuild slideshow<br/>keep raw images]
-    E --> D
-    D --> F[downloads/]
-    F --> G[Plex on TV]
-    F --> H[Web viewer]
-```
-
-The app reads your export, records every favorite in a SQLite database, and works through them with a bounded pool of workers that stays under Cobalt's rate limit. Cobalt resolves each link to real media. Videos download directly. For a photo post, the images and audio are downloaded, rebuilt into a slideshow MP4 (each image centered on a black canvas sized to the largest image, with no downscaling), and the raw images are kept so the web viewer can render them as a carousel.
-
-File numbering is stable: `147.mp4` remains archive item 147 in the database. Favorite chronology is stored separately, so a legacy migration can preserve old filenames without making Feed order incorrect. A rerun never renumbers or overwrites what you already have, and Plex keeps its place.
 
 ## Details worth knowing
 
-- **Resumable and crash-safe.** Progress lives in SQLite, so a rerun knows exactly which favorites still need work. Downloads stream to a `.part` file and are renamed into place only once complete, so a crash never leaves a half-written video behind.
 - **Dead links stay meaningful.** When TikTok reports that an original post is gone, the favorite becomes an unavailable archive marker instead of a recurring failure. Its number and position remain visible in Feed and Gallery, and automatic Sync runs do not retry it.
 - **Original slideshow audio.** Photo posts request the full original sound. If TikTok has already deleted it, a bundled default track fills in instead of failing the encode.
-- **Backfill.** Already downloaded favorites before this existed? The Sync tab's Backfill re-fetches the raw slideshow images for your existing files so they render in the viewer.
-- **Rate-limit aware.** The worker pool backs off on HTTP 429 and holds a configurable request rate, so a self-hosted Cobalt is not overwhelmed.
+- **Backfill.** Already had downloads before this existed? The Sync tab's Backfill re-fetches the raw slideshow images for your existing files so they render in the viewer.
 - **Provenance.** `downloads/manifest.csv` maps each file to its source link, type, and status alongside the database.
-- **Gallery index.** Sync automatically records duration, dimensions, codec, file size, and whether an audio stream exists, then renders a WebP thumbnail per favorite (480px or 320px, your choice), so the Gallery pages instantly instead of decoding video. Indexing runs on a small worker pool and can be rebuilt, paused, or turned off in the Sync tab.
-- **Search metadata.** The Sync tab can fetch missing captions and creator names from TikTok's public oEmbed endpoint. It runs at the configured rate limit, skips entries already enriched, and can be paused or stopped; this powers complete author, hashtag, and caption search.
-- **Random Gallery order.** Random mode makes a new shuffle whenever you enter it, as intended; use a saved filter or a shared link for repeatable searches and sorts.
-- **Media-server metadata.** One click writes a `.nfo` title file and `.jpg` poster next to every video — Plex, Jellyfin, and Kodi show real titles and artwork instead of bare numbers. Your media files are never modified.
-- **Integrity check.** The Sync tab can verify the whole archive: finished favorites missing their video (one click re-queues them), stray files no favorite claims, and leftover temp files from interrupted runs.
-- **Localhost only.** The app has no login, so Docker binds it to `127.0.0.1` — nothing else on your network can reach it. Plex reads `./downloads` from disk and is unaffected.
+- **Gallery index.** Sync records duration, dimensions, codec, file size, and whether an audio stream exists, then renders a WebP thumbnail per favorite (480px or 320px), so the Gallery pages instantly instead of decoding video. Indexing runs on a small worker pool and can be rebuilt, paused, or turned off.
+- **Search metadata.** Sync can fetch missing captions and creator names from TikTok's public oEmbed endpoint at the configured rate limit, skipping entries already enriched. This powers author, hashtag, and caption search.
+- **Media-server metadata.** One click writes a `.nfo` title file and `.jpg` poster next to every video, so Plex, Jellyfin, and Kodi show real titles and artwork instead of bare numbers. Your media files are never modified.
+- **Integrity check.** Sync can verify the whole archive: finished favorites missing their video (one click re-queues them), stray files no favorite claims, and leftover temp files from interrupted runs.
+- **Localhost only.** The app has no login, so Docker binds it to `127.0.0.1`; nothing else on your network can reach it. Plex reads `./downloads` from disk and is unaffected.
 - **Backups.** Two things hold your archive: the media in `./downloads` and the database at `./appdata/archive.db` (numbering, statuses, captions, saved filters). Copy both while the app is stopped and you can restore everything.
 
-## Architecture
+## Project layout
 
 ```
 core/     download engine: export parsing, Cobalt client, slideshow encoder,
@@ -90,9 +107,32 @@ web/      React + Vite + Tailwind SPA: Feed, Gallery, Sync
 Dockerfile + docker-compose.yml   the app plus an official Cobalt image
 ```
 
-The download engine is a standalone Python package with no web dependency, covered by a unit-test suite (run with `for f in tests/test_*.py; do python3 "$f"; done`). The backend wraps it with job control and live progress. The frontend talks to a small typed API and never reaches Cobalt directly.
+The download engine is a standalone Python package with no web dependency, covered by a stdlib-only unit suite. The backend wraps it with job control and live progress. The frontend talks to a small typed API and never reaches Cobalt directly.
+
+## Development
+
+Backend tests are stdlib-only, with nothing to install:
+
+```bash
+for f in tests/test_*.py; do python3 "$f"; done
+```
+
+`python3 tests/test_store.py` runs one file; every test file is independently runnable.
+
+The web app needs Node 20.19+ (see `web/.nvmrc`). `npm run dev` serves the SPA with hot reload and proxies `/api` and `/media` to a backend on `localhost:8080`, so start the Docker app (or `uvicorn server.main:app`) first:
+
+```bash
+cd web
+npm ci
+npm run dev     # SPA on http://localhost:5173, API proxied to :8080
+npm run build   # type-check + production bundle
+npm test        # six behavior scripts over the pure-logic modules in web/src/lib/
+```
 
 ## Configuration
+
+<details>
+<summary>Environment variables and Docker settings</summary>
 
 With Docker, set these on the `app` service in `docker-compose.yml`:
 
@@ -107,7 +147,12 @@ With Docker, set these on the `app` service in `docker-compose.yml`:
 
 If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATELIMIT_WINDOW` in the same file to match. If you change `APP_PORT`, update the `ports:` mapping too.
 
+</details>
+
 ## Getting your TikTok data
+
+<details>
+<summary>How to request and upload your export</summary>
 
 1. In TikTok, open **Settings and privacy → Account → Download your data**.
 2. Choose **All data** and the **JSON** format, then submit the request.
@@ -116,7 +161,12 @@ If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATEL
 
 Exports expire. If links stop resolving partway through a run, request a fresh one.
 
+</details>
+
 ## Upgrading an archive made by the original CLI
+
+<details>
+<summary>Guarded legacy bootstrap for numbered MP4s from the old CLI</summary>
 
 Use the guarded legacy bootstrap if you have numbered MP4s and
 `last_downloaded_link.txt`, but no `downloads/manifest.csv` or established
@@ -179,10 +229,12 @@ export JSON, or `last_downloaded_link.txt`: all are git-ignored local data. The
 Docker Compose bind mounts use those same folders on the host, so rebuilding
 the image does not copy the media into Docker or erase it.
 
+</details>
+
 ## Headless archive command
 
 <details>
-<summary>Run the Archive without the web app</summary>
+<summary>Run the archive without the web app</summary>
 
 The headless Archive command needs its own Cobalt instance (see Cobalt's [run-an-instance guide](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md)) and Python 3.9+ with FFmpeg on your `PATH`.
 
@@ -196,28 +248,6 @@ Flags: `--cobalt-url`, `--data-file`, `--download-dir`, `--db`, `--concurrency`.
 
 </details>
 
-## Development
-
-Backend tests are stdlib-only — no dependencies to install:
-
-```bash
-for f in tests/test_*.py; do python3 "$f"; done
-```
-
-`python3 tests/test_store.py` runs one file; every test file is independently runnable.
-
-The web app needs Node 20.19+ (see `web/.nvmrc`). `npm run dev` serves the SPA with hot reload and proxies `/api` and `/media` to a backend on `localhost:8080`, so start the Docker app (or `uvicorn server.main:app`) first:
-
-```bash
-cd web
-npm ci
-npm run dev     # SPA on http://localhost:5173, API proxied to :8080
-npm run build   # type-check + production bundle
-npm test        # six behavior scripts
-```
-
-The behavior scripts exercise the pure-logic modules in `web/src/lib/`.
-
 ## Built with
 
 Python · FastAPI · SQLite · MoviePy · React · Vite · TypeScript · Tailwind CSS · Docker · [Cobalt](https://github.com/imputnet/cobalt)
@@ -226,7 +256,7 @@ Python · FastAPI · SQLite · MoviePy · React · Vite · TypeScript · Tailwin
 
 Not affiliated with, endorsed by, or sponsored by TikTok or ByteDance Ltd. "TikTok" is a trademark of its respective owner and is used here only to describe what this tool works with.
 
-This is a tool for **privately archiving your own favorited content** from the data export TikTok provides to you. It runs entirely on your own machine — nothing you import or download is sent to any external service or to the author. You are responsible for complying with [TikTok's Terms of Service](https://www.tiktok.com/legal/) and with the copyright of the original creators; keep downloaded media for personal use and don't redistribute it. The software is provided "as is", without warranty, under the [MIT License](LICENSE).
+This is a tool for **privately archiving your own favorited content** from the data export TikTok provides to you. It runs entirely on your own machine; nothing you import or download is sent to any external service or to the author. You are responsible for complying with [TikTok's Terms of Service](https://www.tiktok.com/legal/) and with the copyright of the original creators. Keep downloaded media for personal use and don't redistribute it. The software is provided "as is", without warranty, under the [MIT License](LICENSE).
 
 ## License
 
