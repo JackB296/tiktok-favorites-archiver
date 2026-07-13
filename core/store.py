@@ -341,6 +341,28 @@ def _id_chunks(item_ids):
         yield ids[start:start + _MARK_CHUNK]
 
 
+def is_redownloadable(row):
+    """A Favorite whose media can be fetched again from its source link.
+
+    Synthetic ``local://`` items exist only to represent a file, and offloaded
+    items live outside this archive — neither has anything to re-download.
+    """
+    return not str(row["link"]).startswith("local://") and not row["offloaded"]
+
+
+def offloaded_ids(conn, item_ids):
+    """The subset of item_ids currently marked offloaded, in id order."""
+    found = []
+    for chunk in _id_chunks(item_ids):
+        placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(
+            f"SELECT id FROM item WHERE id IN ({placeholders}) AND offloaded = 1 ORDER BY id",
+            chunk,
+        ).fetchall()
+        found.extend(row["id"] for row in rows)
+    return found
+
+
 def set_offloaded(conn, item_ids, offloaded=True):
     """Mark media as archived externally (or clear the mark). Returns changed count."""
     now = _now()

@@ -21,7 +21,7 @@ export type MarkSelector =
   | { ids: number[] }
   | { range: { first_id: number; last_id: number } }
   | { filter: Record<string, string> };
-export type MarkResult = { matched: number; changed: number; dry_run?: boolean };
+export type MarkResult = { matched: number; changed: number; requeued?: number; dry_run?: boolean };
 
 export type OffloadSuggestion = {
   earliest_local: number | null;

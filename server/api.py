@@ -292,8 +292,11 @@ async def mark_items(request: Request):
             ids = store.item_ids_matching(conn, **value)
         if dry_run:
             return {"matched": len(ids), "changed": 0, "dry_run": True}
-        if action in ("offload", "unoffload"):
-            changed = store.set_offloaded(conn, ids, offloaded=(action == "offload"))
+        if action == "offload":
+            changed = store.set_offloaded(conn, ids, offloaded=True)
+        elif action == "unoffload":
+            result = verify.unoffload_items(conn, _download_dir(request), ids)
+            return {"matched": len(ids), **result}
         else:
             changed = store.set_ignored(conn, ids, ignored=(action == "ignore"))
         return {"matched": len(ids), "changed": changed}
@@ -458,6 +461,44 @@ async def import_export(request: Request, file: UploadFile = File(...)):
             _remove_temp_files([tmp_path])
 
 
+async def _run_legacy_bootstrap(
+    request,
+    old_export,
+    current_export,
+    checkpoint,
+    mapping_segments,
+    operation,
+    empty_library_conflict=False,
+):
+    """Stage the three legacy uploads, run `operation(plan)` when idle, clean up.
+
+    `operation` receives a zero-arg callable that builds the bootstrap plan from
+    the staged uploads. `empty_library_conflict` maps the "empty library"
+    LegacyBootstrapError to 409 instead of 400.
+    """
+    paths = []
+    try:
+        paths.append(await _stage_upload(old_export, "tiktok-old-export-", ".json"))
+        paths.append(await _stage_upload(current_export, "tiktok-current-export-", ".json"))
+        paths.append(await _stage_upload(checkpoint, "tiktok-checkpoint-", ".txt"))
+        segments = _legacy_mapping_segments(mapping_segments)
+
+        def plan():
+            return legacy_bootstrap.plan_bootstrap(
+                paths[0], paths[1], paths[2], _download_dir(request),
+                mapping_segments=segments,
+            )
+
+        return request.app.state.jobs.run_when_idle(lambda: operation(plan))
+    except JobBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except legacy_bootstrap.LegacyBootstrapError as exc:
+        conflict = empty_library_conflict and "empty library" in str(exc)
+        raise HTTPException(status_code=409 if conflict else 400, detail=str(exc))
+    finally:
+        _remove_temp_files(paths)
+
+
 @router.post("/import/legacy-preview")
 async def legacy_import_preview(
     request: Request,
@@ -466,35 +507,20 @@ async def legacy_import_preview(
     checkpoint: UploadFile = File(...),
     mapping_segments: str = Form(""),
 ):
-    paths = []
-    try:
-        paths.append(await _stage_upload(old_export, "tiktok-old-export-", ".json"))
-        paths.append(await _stage_upload(current_export, "tiktok-current-export-", ".json"))
-        paths.append(await _stage_upload(checkpoint, "tiktok-checkpoint-", ".txt"))
-        segments = _legacy_mapping_segments(mapping_segments)
+    def operation(plan):
+        conn = _open(request)
+        try:
+            if conn.execute("SELECT 1 FROM item LIMIT 1").fetchone() is not None:
+                raise legacy_bootstrap.LegacyBootstrapError(
+                    "Legacy bootstrap requires an empty library database."
+                )
+        finally:
+            conn.close()
+        return plan().preview()
 
-        def operation():
-            conn = _open(request)
-            try:
-                if conn.execute("SELECT 1 FROM item LIMIT 1").fetchone() is not None:
-                    raise legacy_bootstrap.LegacyBootstrapError(
-                        "Legacy bootstrap requires an empty library database."
-                    )
-            finally:
-                conn.close()
-            return legacy_bootstrap.plan_bootstrap(
-                paths[0], paths[1], paths[2], _download_dir(request),
-                mapping_segments=segments,
-            )
-
-        plan = request.app.state.jobs.run_when_idle(operation)
-        return plan.preview()
-    except JobBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    except legacy_bootstrap.LegacyBootstrapError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    finally:
-        _remove_temp_files(paths)
+    return await _run_legacy_bootstrap(
+        request, old_export, current_export, checkpoint, mapping_segments, operation
+    )
 
 
 @router.post("/import/legacy-apply")
@@ -509,32 +535,19 @@ async def legacy_import_apply(
 ):
     if confirmation != "MIGRATE":
         raise HTTPException(status_code=400, detail="Type MIGRATE to confirm legacy bootstrap.")
-    paths = []
-    try:
-        paths.append(await _stage_upload(old_export, "tiktok-old-export-", ".json"))
-        paths.append(await _stage_upload(current_export, "tiktok-current-export-", ".json"))
-        paths.append(await _stage_upload(checkpoint, "tiktok-checkpoint-", ".txt"))
-        segments = _legacy_mapping_segments(mapping_segments)
 
-        def operation():
-            plan = legacy_bootstrap.plan_bootstrap(
-                paths[0], paths[1], paths[2], _download_dir(request),
-                mapping_segments=segments,
-            )
-            conn = _open(request)
-            try:
-                return legacy_bootstrap.apply_bootstrap(conn, plan, preview_token)
-            finally:
-                conn.close()
+    def operation(plan):
+        built = plan()
+        conn = _open(request)
+        try:
+            return legacy_bootstrap.apply_bootstrap(conn, built, preview_token)
+        finally:
+            conn.close()
 
-        return request.app.state.jobs.run_when_idle(operation)
-    except JobBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    except legacy_bootstrap.LegacyBootstrapError as exc:
-        status_code = 409 if "empty library" in str(exc) else 400
-        raise HTTPException(status_code=status_code, detail=str(exc))
-    finally:
-        _remove_temp_files(paths)
+    return await _run_legacy_bootstrap(
+        request, old_export, current_export, checkpoint, mapping_segments, operation,
+        empty_library_conflict=True,
+    )
 
 
 @router.get("/status")

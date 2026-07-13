@@ -110,7 +110,7 @@ class JobManager:
         """
         with self._lock:
             if self.is_running():
-                raise JobBusyError("an Archive job is currently running")
+                raise JobBusyError("an Archive run is currently active")
             return operation()
 
     def _set_state(self, state):

@@ -48,7 +48,11 @@ def replace_item_media(
     inspect=media_index.inspect_media,
     make_thumbnail=media_index.make_thumbnail,
 ):
-    """Install validated staged files at paths derived only from ``item_id``."""
+    """Install validated staged files at paths derived only from ``item_id``.
+
+    A replaced video is not destroyed: the previous file moves to
+    ``.archive/replaced/<n>.mp4`` (most recent replacement only).
+    """
     if not staged_video and not staged_thumbnail:
         raise MediaReplacementError("at least one replacement file is required")
     if store.get_item(conn, item_id) is None:
@@ -76,11 +80,7 @@ def replace_item_media(
                 make_thumbnail(staged_video, generated_temp, width)
             except Exception as error:
                 raise MediaReplacementError("replacement MP4 thumbnail could not be created") from error
-            index = media_index.MediaIndex(
-                *facts[:5],
-                f".archive/thumbnails/{item_id}.webp",
-                facts.has_audio,
-            )._asdict()
+            index = facts.to_index(f".archive/thumbnails/{item_id}.webp")._asdict()
 
         if staged_thumbnail:
             extension = _image_extension(staged_thumbnail)
@@ -88,14 +88,24 @@ def replace_item_media(
             custom_target = os.path.join(download_dir, custom_relative)
             os.makedirs(os.path.dirname(custom_target), exist_ok=True)
 
+        target_video = os.path.join(download_dir, f"{item_id}.mp4")
         if staged_video:
-            os.replace(staged_video, os.path.join(download_dir, f"{item_id}.mp4"))
+            backup = None
+            if os.path.exists(target_video):
+                backup = os.path.join(download_dir, ".archive", "replaced", f"{item_id}.mp4")
+                os.makedirs(os.path.dirname(backup), exist_ok=True)
+                os.replace(target_video, backup)
+            try:
+                os.replace(staged_video, target_video)
+            except OSError:
+                if backup:
+                    os.replace(backup, target_video)
+                raise
             os.replace(generated_temp, os.path.join(download_dir, index["thumbnail_path"]))
             generated_temp = None
         if staged_thumbnail:
             os.replace(staged_thumbnail, custom_target)
 
-        target_video = os.path.join(download_dir, f"{item_id}.mp4")
         store.record_manual_media(
             conn,
             item_id,

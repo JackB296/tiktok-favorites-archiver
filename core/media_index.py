@@ -5,16 +5,31 @@ import subprocess
 from collections import namedtuple
 
 
-MediaFacts = namedtuple(
-    "MediaFacts",
-    "duration_s width height codec file_size has_audio",
-    defaults=(True,),
-)
 MediaIndex = namedtuple(
     "MediaIndex",
     "duration_s width height codec file_size thumbnail_path has_audio",
     defaults=(True,),
 )
+
+
+class MediaFacts(namedtuple(
+    "MediaFacts",
+    "duration_s width height codec file_size has_audio",
+    defaults=(True,),
+)):
+    __slots__ = ()
+
+    def to_index(self, thumbnail_path):
+        """Pair these inspected facts with their Gallery thumbnail path."""
+        return MediaIndex(
+            duration_s=self.duration_s,
+            width=self.width,
+            height=self.height,
+            codec=self.codec,
+            file_size=self.file_size,
+            thumbnail_path=thumbnail_path,
+            has_audio=self.has_audio,
+        )
 
 
 def inspect_media(path, runner=subprocess.run):
@@ -71,4 +86,4 @@ def index_media(download_dir, item_id, thumbnail_width, inspect=inspect_media, m
     source = os.path.join(raw_dir, images[0]) if images else movie
     relative_thumb = f".archive/thumbnails/{item_id}.webp"
     make_thumbnail(source, os.path.join(download_dir, relative_thumb), thumbnail_width)
-    return MediaIndex(*facts[:5], relative_thumb, facts.has_audio)
+    return facts.to_index(relative_thumb)

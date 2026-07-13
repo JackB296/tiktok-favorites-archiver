@@ -179,7 +179,7 @@ def run_sync(conn, download_dir, deps=None, concurrency=None, progress=None,
 
 
 def run_index(conn, download_dir, progress=None, wait=None, indexer=archive_indexer.rebuild_index):
-    """Rebuild the Gallery index as a controllable Archive job."""
+    """Rebuild the Gallery index as a controllable Archive run."""
     if wait is None:
         wait = lambda: time.sleep(0.1)  # noqa: E731
 
@@ -228,8 +228,7 @@ def items_needing_backfill(conn):
     return [
         row for row in store.all_items(conn)
         if row["has_assets"] == 0 and row["kind"] != "video"
-        and not str(row["link"]).startswith("local://")
-        and not row["offloaded"] and row["status"] != "ignored"
+        and store.is_redownloadable(row) and row["status"] != "ignored"
     ]
 
 
