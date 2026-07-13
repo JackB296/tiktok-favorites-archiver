@@ -98,6 +98,15 @@ def howto():
     return HOWTO
 
 
+@router.get("/suggest")
+def suggest(request: Request, q: str = ""):
+    conn = _open(request)
+    try:
+        return store.suggest(conn, q)
+    finally:
+        conn.close()
+
+
 @router.get("/gallery-presets")
 def list_gallery_presets(request: Request):
     conn = _open(request)

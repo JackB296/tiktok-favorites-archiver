@@ -1,19 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
-import { gridMetrics, visibleRows } from "../lib/virtualGrid";
-import type { GalleryDensity } from "../lib/virtualGrid";
+import { gridMetrics, visibleRows, autoFillColumns, sizeTarget } from "../lib/virtualGrid";
+import type { GallerySize } from "../lib/virtualGrid";
 
 const OVERSCAN_PX = 900;
 
-function gridClassName(density: GalleryDensity) {
-  return density === "compact"
-    ? "grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10"
-    : "grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5";
-}
-
 interface Layout {
   width: number;
-  viewportWidth: number;
   scrollTop: number;
   gridTop: number;
   viewportHeight: number;
@@ -22,14 +15,15 @@ interface Layout {
 /**
  * A fixed-aspect responsive grid that only mounts rows near the scroll viewport.
  * The full-height spacer preserves normal scrollbar length and scroll position.
+ * Each rendered card is handed its measured width so overlay text can scale with it.
  */
 export function VirtualGalleryGrid<T>({
-  items, density, scrollRef, renderItem,
+  items, size, scrollRef, renderItem,
 }: {
   items: T[];
-  density: GalleryDensity;
+  size: GallerySize;
   scrollRef: RefObject<HTMLDivElement>;
-  renderItem: (item: T) => ReactNode;
+  renderItem: (item: T, cardWidth: number) => ReactNode;
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<Layout | null>(null);
@@ -42,7 +36,6 @@ export function VirtualGalleryGrid<T>({
     const scrollRect = scroller.getBoundingClientRect();
     const next = {
       width: grid.clientWidth,
-      viewportWidth: window.innerWidth,
       scrollTop: scroller.scrollTop,
       gridTop: gridRect.top - scrollRect.top + scroller.scrollTop,
       viewportHeight: scroller.clientHeight,
@@ -67,8 +60,14 @@ export function VirtualGalleryGrid<T>({
     };
   }, [measure, scrollRef]);
 
-  const metrics = layout && layout.width > 0 ? gridMetrics(density, layout.width, layout.viewportWidth) : null;
-  if (!metrics || !layout) return <div ref={gridRef} className={gridClassName(density)}>{items.map(renderItem)}</div>;
+  const metrics = layout && layout.width > 0 ? gridMetrics(size, layout.width) : null;
+  if (!metrics || !layout) {
+    return (
+      <div ref={gridRef} style={{ display: "grid", gap: "12px", gridTemplateColumns: autoFillColumns(size) }}>
+        {items.map((item) => renderItem(item, sizeTarget(size)))}
+      </div>
+    );
+  }
 
   const rows = visibleRows({
     itemCount: items.length,
@@ -85,8 +84,17 @@ export function VirtualGalleryGrid<T>({
       {Array.from({ length: rows.end - rows.start }, (_, offset) => rows.start + offset).map((row) => {
         const first = row * metrics.columns;
         return (
-          <div key={row} className={`absolute left-0 w-full ${gridClassName(density)}`} style={{ top: `${row * metrics.rowStride}px` }}>
-            {items.slice(first, first + metrics.columns).map(renderItem)}
+          <div
+            key={row}
+            className="absolute left-0 w-full"
+            style={{
+              top: `${row * metrics.rowStride}px`,
+              display: "grid",
+              gridTemplateColumns: `repeat(${metrics.columns}, minmax(0, 1fr))`,
+              gap: `${metrics.gap}px`,
+            }}
+          >
+            {items.slice(first, first + metrics.columns).map((item) => renderItem(item, metrics.cardWidth))}
           </div>
         );
       })}

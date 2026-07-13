@@ -11,21 +11,21 @@ import {
   Trash,
   X,
   LinkSimple,
-  SquaresFour,
   Info,
   SpeakerSlash,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { MarkAction } from "../lib/api";
-import type { GalleryPreset, GalleryPresetFilters, GalleryTermList, Item, PlaybackQueue } from "../lib/types";
+import type { GalleryPreset, GalleryPresetFilters, GalleryTermList, Item, PlaybackQueue, SearchSuggestions } from "../lib/types";
 import { Button, ConfirmDialog, EmptyState, HelpLabel, Skeleton, cx, useDialogFocusTrap } from "../components/ui";
 import { VirtualGalleryGrid } from "../components/VirtualGalleryGrid";
-import { canLoadNextPage } from "../lib/virtualGrid";
+import { canLoadNextPage, autoFillColumns } from "../lib/virtualGrid";
+import type { GallerySize } from "../lib/virtualGrid";
 import { useDelayedLoading } from "../lib/useDelayedLoading";
 import { shouldLoadMore } from "../lib/galleryPaging.js";
 import { readGalleryDetails } from "../lib/galleryPresentation.js";
 import type { GalleryDetails } from "../lib/galleryPresentation.js";
-import { audioStatus, readGalleryDensity } from "../lib/mediaPresentation.js";
+import { audioStatus, readGallerySize } from "../lib/mediaPresentation.js";
 
 const FILTERS = [
   { key: "", label: "All", help: "Show every favorite that matches the search and advanced filters." },
@@ -33,7 +33,7 @@ const FILTERS = [
   { key: "slideshow", label: "Slideshows", help: "Show photo posts rebuilt as playable slideshows, with original assets when available." },
 ];
 
-type GalleryDensity = "compact" | "comfortable";
+const SIZE_LABELS: Record<GallerySize, string> = { s: "Small", m: "Medium", l: "Large", xl: "Extra large" };
 
 type GalleryOrder = "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "audio_missing" | "random";
 
@@ -67,6 +67,9 @@ export function Gallery() {
   const [searchParams, setSearchParams] = useSearchParams();
   const fromUrl = (name: string) => searchParams.get(name) ?? "";
   const [search, setSearch] = useState(() => fromUrl("q"));
+  const [suggestions, setSuggestions] = useState<SearchSuggestions | null>(null);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestActive, setSuggestActive] = useState(-1);
   const [kind, setKind] = useState(() => fromUrl("kind"));
   const [items, setItems] = useState<Item[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -115,7 +118,7 @@ export function Gallery() {
   const [selectedPlaybackQueueId, setSelectedPlaybackQueueId] = useState("");
   const [playbackQueueName, setPlaybackQueueName] = useState("");
   const [playbackQueueMessage, setPlaybackQueueMessage] = useState<string | null>(null);
-  const [density, setDensity] = useState<GalleryDensity>(() => readGalleryDensity(localStorage.getItem("gallery-density")));
+  const [size, setSize] = useState<GallerySize>(() => readGallerySize(localStorage.getItem("gallery-size")));
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [cardDetails, setCardDetails] = useState<GalleryDetails>(() => readGalleryDetails(localStorage.getItem("gallery-card-details")));
   const [selectionMode, setSelectionMode] = useState(false);
@@ -202,6 +205,19 @@ export function Gallery() {
   useEffect(() => {
     api.playbackQueues().then(setPlaybackQueues).catch(() => setPlaybackQueueMessage("Could not load saved playback queues."));
   }, []);
+
+  // Typeahead: debounce keystrokes, then ask the archive what it actually has.
+  useEffect(() => {
+    const q = search.trim();
+    if (!q) { setSuggestions(null); return; }
+    let alive = true;
+    const t = window.setTimeout(() => {
+      api.suggest(q).then((next) => { if (alive) setSuggestions(next); }).catch(() => { if (alive) setSuggestions(null); });
+    }, 150);
+    return () => { alive = false; window.clearTimeout(t); };
+  }, [search]);
+
+  useEffect(() => { setSuggestActive(-1); }, [suggestions]);
 
   function currentFilters(): GalleryPresetFilters {
     return { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude };
@@ -355,9 +371,9 @@ export function Gallery() {
     }
   }
 
-  function changeDensity(next: GalleryDensity) {
-    setDensity(next);
-    localStorage.setItem("gallery-density", next);
+  function changeSize(next: GallerySize) {
+    setSize(next);
+    localStorage.setItem("gallery-size", next);
   }
 
   function changeCardDetail(key: keyof GalleryDetails, shown: boolean) {
@@ -571,43 +587,106 @@ export function Gallery() {
   addFilter(codec, `Codec: ${codec}`, () => setCodec("")); addFilter(dateFrom, `After: ${dateFrom}`, () => setDateFrom("")); addFilter(dateTo, `Before: ${dateTo}`, () => setDateTo(""));
   addFilter(orientation, orientation, () => setOrientation("")); addFilter(assets, assets === "with" ? "Has raw assets" : "No raw assets", () => setAssets("")); addFilter(offloaded, offloaded === "with" ? "Offloaded" : "Stored locally", () => setOffloaded("")); addFilter(indexState, `Index: ${indexState}`, () => setIndexState("")); addFilter(include, `Include: ${include}`, () => setInclude("")); addFilter(exclude, `Exclude: ${exclude}`, () => setExclude(""));
 
+  const suggestItems = suggestions
+    ? [
+        ...suggestions.creators.map((c) => ({ value: c.value, kind: "Creator" })),
+        ...suggestions.hashtags.map((h) => ({ value: h.value, kind: "Hashtag" })),
+        ...suggestions.terms.map((t) => ({ value: t.value, kind: "Keyword" })),
+      ]
+    : [];
+  const showSuggest = suggestOpen && suggestItems.length > 0;
+  function pickSuggestion(value: string) {
+    setSearch(value);
+    setSuggestOpen(false);
+    setSuggestActive(-1);
+  }
+
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto">
-    <div className="mx-auto max-w-[1400px] px-4 py-6">
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-sm">
+    <div className="w-full px-[clamp(1rem,1.5vw,2.5rem)] py-6">
+      <div style={{ fontSize: "clamp(14px, 8.8px + 0.34vw, 22px)" }} className="mb-6 flex flex-col gap-[0.75em] lg:flex-row lg:items-start lg:gap-[1em]">
+        <div className="relative w-full lg:w-[34em] lg:shrink-0">
           <label htmlFor="gallery-search" className="sr-only">Search favorites</label>
-          <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint" />
+          <MagnifyingGlass size="1.2em" className="pointer-events-none absolute left-[0.9em] top-[1.35em] -translate-y-1/2 text-ink-faint" />
           <input
             id="gallery-search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onFocus={() => setSuggestOpen(true)}
+            onBlur={() => setSuggestOpen(false)}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown") { e.preventDefault(); setSuggestOpen(true); setSuggestActive((i) => Math.min(i + 1, suggestItems.length - 1)); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); setSuggestActive((i) => Math.max(i - 1, 0)); }
+              else if (e.key === "Enter" && showSuggest && suggestActive >= 0) { e.preventDefault(); pickSuggestion(suggestItems[suggestActive].value); }
+              else if (e.key === "Escape") { setSuggestOpen(false); setSuggestActive(-1); }
+            }}
+            role="combobox"
+            aria-expanded={showSuggest}
+            aria-controls="gallery-search-suggestions"
+            aria-autocomplete="list"
             placeholder="Search caption, hashtag, author"
             title="Searches indexed captions, hashtags, creator names, and source links. Best text matches appear first unless an advanced sort is selected."
-            className="h-10 w-full rounded-[var(--radius-control)] border border-line bg-surface pl-9 pr-3 text-sm text-ink placeholder:text-ink-faint focus:border-accent"
+            className="h-[2.7em] w-full rounded-[var(--radius-control)] border border-line bg-surface pl-[2.7em] pr-[1em] text-[1em] text-ink placeholder:text-ink-faint focus:border-accent"
           />
-          {search.trim() && <p className="mt-1 text-xs text-ink-faint">Best matches first. Choose an advanced sort to override relevance.</p>}
+          {search.trim() && !showSuggest && <p className="mt-[0.4em] text-[0.75em] text-ink-faint">Best matches first. Choose an advanced sort to override relevance.</p>}
+          {showSuggest && (
+            <ul id="gallery-search-suggestions" role="listbox" aria-label="Search suggestions" className="absolute left-0 right-0 top-full z-20 mt-[0.35em] max-h-[60vh] overflow-auto rounded-[var(--radius-control)] border border-line bg-elevated py-[0.3em] text-[0.9em] shadow-xl">
+              {suggestItems.map((opt, i) => {
+                const firstOfKind = i === 0 || suggestItems[i - 1].kind !== opt.kind;
+                return (
+                  <li key={opt.kind + opt.value} role="option" aria-selected={i === suggestActive}>
+                    {firstOfKind && <div className="px-[0.9em] pb-[0.1em] pt-[0.45em] text-[0.72em] font-semibold uppercase tracking-wide text-ink-faint">{opt.kind}</div>}
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onMouseEnter={() => setSuggestActive(i)}
+                      onClick={() => pickSuggestion(opt.value)}
+                      className={cx("flex w-full items-center gap-[0.5em] px-[0.9em] py-[0.35em] text-left", i === suggestActive ? "bg-accent/15 text-ink" : "text-ink-dim hover:text-ink")}
+                    >
+                      <MagnifyingGlass size="0.9em" className="shrink-0 text-ink-faint" />
+                      <span className="truncate">{opt.value}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
-        <div className="flex flex-wrap gap-1.5 sm:justify-end">
+        <div className="flex flex-wrap items-center gap-[0.4em] lg:flex-1 lg:justify-end">
           {FILTERS.map((f) => (
             <button
               key={f.key}
               onClick={() => setKind(f.key)}
               title={f.help}
               className={cx(
-                "rounded-full px-3 py-1.5 text-xs font-medium transition",
+                "rounded-full px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition",
                 kind === f.key ? "bg-accent text-on-accent" : "border border-line text-ink-dim hover:text-ink",
               )}
             >
               {f.label}
             </button>
           ))}
-          <button onClick={() => changeDensity(density === "compact" ? "comfortable" : "compact")} title={density === "compact" ? "Compact thumbnails (switch to comfortable)" : "Comfortable thumbnails (switch to compact)"} aria-label={density === "compact" ? "Use comfortable thumbnail density" : "Use compact thumbnail density"} aria-pressed={density === "compact"} className={cx("rounded-full border p-1.5 transition", density === "compact" ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}><SquaresFour size={16} /></button>
-          <button onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen} className={cx("rounded-full border px-3 py-1.5 text-xs font-medium transition", detailsOpen ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>Card details</button>
-          <button onClick={() => selectionMode ? leaveSelectionMode() : enterSelectionMode()} aria-pressed={selectionMode} className={cx("rounded-full border px-3 py-1.5 text-xs font-medium transition", selectionMode ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>{selectionMode ? "Done selecting" : "Select"}</button>
-          <button onClick={toggleRecoveryInbox} disabled={recoveryInboxBusy} aria-pressed={recovery} className={cx("rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:opacity-40", recovery ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>{recoveryInboxBusy ? "Checking…" : recovery ? "Recovery inbox" : "Recovery"}</button>
-          <button onClick={() => { if (inspectionMode) { setInspectionMode(false); setInspectedItem(null); } else { leaveSelectionMode(); setInspectionMode(true); } }} aria-pressed={inspectionMode} className={cx("rounded-full border p-1.5 transition", inspectionMode ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")} aria-label={inspectionMode ? "Leave inspect mode" : "Inspect Gallery metadata"}><Info size={16} /></button>
-          <button onClick={() => setAdvanced((value) => !value)} title="Open saved filters, whitelist and blacklist lists, playback queues, and detailed archive filters." aria-label="Toggle advanced filters" className="rounded-full border border-line p-1.5 text-ink-dim hover:text-ink"><SlidersHorizontal size={16} /></button>
+          <div role="group" aria-label="Thumbnail size" className="inline-flex items-center gap-[0.15em] rounded-full border border-line p-[0.2em]">
+            {(["s", "m", "l", "xl"] as GallerySize[]).map((opt) => (
+              <button
+                key={opt}
+                onClick={() => changeSize(opt)}
+                aria-pressed={size === opt}
+                title={`${SIZE_LABELS[opt]} thumbnails`}
+                className={cx(
+                  "rounded-full px-[0.6em] py-[0.25em] text-[0.72em] font-semibold uppercase leading-none transition",
+                  size === opt ? "bg-accent text-on-accent" : "text-ink-dim hover:text-ink",
+                )}
+              >
+                {opt}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen} className={cx("rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition", detailsOpen ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>Card details</button>
+          <button onClick={() => selectionMode ? leaveSelectionMode() : enterSelectionMode()} aria-pressed={selectionMode} className={cx("rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition", selectionMode ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>{selectionMode ? "Done selecting" : "Select"}</button>
+          <button onClick={toggleRecoveryInbox} disabled={recoveryInboxBusy} aria-pressed={recovery} className={cx("rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition disabled:opacity-40", recovery ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>{recoveryInboxBusy ? "Checking…" : recovery ? "Recovery inbox" : "Recovery"}</button>
+          <button onClick={() => { if (inspectionMode) { setInspectionMode(false); setInspectedItem(null); } else { leaveSelectionMode(); setInspectionMode(true); } }} aria-pressed={inspectionMode} className={cx("rounded-full border p-[0.5em] transition", inspectionMode ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")} aria-label={inspectionMode ? "Leave inspect mode" : "Inspect Gallery metadata"}><Info size="1.1em" /></button>
+          <button onClick={() => setAdvanced((value) => !value)} title="Open saved filters, whitelist and blacklist lists, playback queues, and detailed archive filters." aria-label="Toggle advanced filters" className="rounded-full border border-line p-[0.5em] text-ink-dim hover:text-ink"><SlidersHorizontal size="1.1em" /></button>
         </div>
       </div>
 
@@ -779,7 +858,7 @@ export function Gallery() {
       {!items && initialLoadingPhase === "quiet" ? (
         <div className="min-h-40" aria-busy="true" aria-label="Loading Gallery" />
       ) : initialLoadingPhase === "indicator" ? (
-        <Grid density={density}>
+        <Grid size={size}>
           {Array.from({ length: 10 }).map((_, i) => (
             <Skeleton key={i} className="aspect-[9/16] !rounded-[var(--radius-media)]" />
           ))}
@@ -802,9 +881,9 @@ export function Gallery() {
         <>
           <VirtualGalleryGrid
             items={items}
-            density={density}
+            size={size}
             scrollRef={scrollRef}
-            renderItem={(it) => <Thumb key={it.id} item={it} details={cardDetails} selecting={selectionMode} inspecting={inspectionMode} selected={selectedIds.has(it.id)} onClick={() => selectionMode ? toggleSelection(it.id) : inspectionMode ? setInspectedItem(it) : navigate(`/?item=${it.id}`)} />}
+            renderItem={(it, cardWidth) => <Thumb key={it.id} item={it} cardWidth={cardWidth} details={cardDetails} selecting={selectionMode} inspecting={inspectionMode} selected={selectedIds.has(it.id)} onClick={() => selectionMode ? toggleSelection(it.id) : inspectionMode ? setInspectedItem(it) : navigate(`/?item=${it.id}`)} />}
           />
           {nextCursor != null && (
             <div className="mt-6 flex items-center justify-center gap-2 py-3 text-xs text-ink-faint" aria-live="polite" aria-busy={loadingMore}>
@@ -837,8 +916,8 @@ export function Gallery() {
   );
 }
 
-function Grid({ children, density }: { children: ReactNode; density: GalleryDensity }) {
-  return <div className={cx("grid", density === "compact" ? "grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10" : "grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5")}>{children}</div>;
+function Grid({ children, size }: { children: ReactNode; size: GallerySize }) {
+  return <div className="grid" style={{ gap: "12px", gridTemplateColumns: autoFillColumns(size) }}>{children}</div>;
 }
 
 function formatDuration(seconds: number | null) {
@@ -853,13 +932,18 @@ function formatSize(bytes: number | null) {
   return bytes >= 1_000_000_000 ? `${(bytes / 1_000_000_000).toFixed(1)} GB` : `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
-function Thumb({ item, details, onClick, selecting = false, inspecting = false, selected = false }: { item: Item; details: GalleryDetails; onClick: () => void; selecting?: boolean; inspecting?: boolean; selected?: boolean }) {
+function Thumb({ item, details, cardWidth, onClick, selecting = false, inspecting = false, selected = false }: { item: Item; details: GalleryDetails; cardWidth: number; onClick: () => void; selecting?: boolean; inspecting?: boolean; selected?: boolean }) {
   const duration = formatDuration(item.duration_s);
   const resolution = item.media_width && item.media_height ? `${item.media_width}×${item.media_height}` : null;
   const size = formatSize(item.media_size);
+  // Card sets its own font size from its measured width, so every em-based badge,
+  // caption, and icon below scales with the chosen thumbnail size (floored so text
+  // stays legible on the smallest step, capped so it never dominates the largest).
+  const fontSize = `${Math.min(26, Math.max(9, Math.round(cardWidth * 0.062)))}px`;
   return (
     <button
       onClick={onClick}
+      style={{ fontSize }}
       aria-label={`${selecting ? selected ? "Unselect" : "Select" : inspecting ? "Inspect" : "Play"} favorite #${item.id}${item.caption ? `: ${item.caption}` : ""}`}
       aria-pressed={selecting ? selected : undefined}
       className={cx("group relative aspect-[9/16] overflow-hidden rounded-[var(--radius-media)] bg-black text-left", selected && "ring-2 ring-accent ring-offset-2 ring-offset-canvas")}
@@ -879,27 +963,27 @@ function Thumb({ item, details, onClick, selecting = false, inspecting = false, 
           className="h-full w-full object-cover opacity-90 transition group-hover:opacity-100"
         />
       ) : (
-        <div className="tabular flex h-full w-full items-center justify-center text-ink-faint">#{item.id}</div>
+        <div className="tabular flex h-full w-full items-center justify-center text-[1.1em] text-ink-faint">#{item.id}</div>
       )}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
-      {details.archiveNumber && <span className="tabular absolute left-2 top-2 rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white/80">
+      {details.archiveNumber && <span className="tabular absolute left-[0.55em] top-[0.55em] rounded bg-black/50 px-[0.4em] py-[0.15em] text-[0.78em] text-white/80">
         #{item.id}
       </span>}
-      {item.has_audio === false && <span title="FFprobe found no audio stream. You can replace this file from its Feed settings." className="absolute left-2 top-9 inline-flex items-center gap-1 rounded bg-bad/90 px-1.5 py-0.5 text-[11px] font-semibold text-white"><SpeakerSlash size={11} weight="fill" />{audioStatus(item.has_audio)}</span>}
-      {selecting && <span aria-hidden="true" className={cx("absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border", selected ? "border-accent bg-accent text-on-accent" : "border-white/70 bg-black/50 text-white/80")}>{selected ? <Check size={12} weight="bold" /> : null}</span>}
-      {inspecting && <span aria-hidden="true" className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border border-white/70 bg-black/50 text-xs text-white/80"><Info size={12} /></span>}
-      <div className={cx("absolute top-2 flex max-w-[65%] flex-col items-end gap-1 text-[11px] text-white/85", selecting || inspecting ? "right-9" : "right-2")}>
-        {((details.duration && duration) || (details.resolution && resolution)) && <span className="rounded bg-black/50 px-1.5 py-0.5">{[details.duration ? duration : null, details.resolution ? resolution : null].filter(Boolean).join(" · ")}</span>}
-        {!selecting && !inspecting && <span className="rounded-full bg-black/40 p-1 opacity-0 transition group-hover:opacity-100"><Play size={12} weight="fill" /></span>}
+      {item.has_audio === false && <span title="FFprobe found no audio stream. You can replace this file from its Feed settings." className="absolute left-[0.55em] top-[2.5em] inline-flex items-center gap-[0.3em] rounded bg-bad/90 px-[0.4em] py-[0.15em] text-[0.78em] font-semibold text-white"><SpeakerSlash size="1em" weight="fill" />{audioStatus(item.has_audio)}</span>}
+      {selecting && <span aria-hidden="true" className={cx("absolute right-[0.55em] top-[0.55em] flex h-[1.5em] w-[1.5em] items-center justify-center rounded-full border", selected ? "border-accent bg-accent text-on-accent" : "border-white/70 bg-black/50 text-white/80")}>{selected ? <Check size="1em" weight="bold" /> : null}</span>}
+      {inspecting && <span aria-hidden="true" className="absolute right-[0.55em] top-[0.55em] flex h-[1.5em] w-[1.5em] items-center justify-center rounded-full border border-white/70 bg-black/50 text-white/80"><Info size="1em" /></span>}
+      <div className={cx("absolute top-[0.55em] flex max-w-[65%] flex-col items-end gap-[0.3em] text-[0.78em] text-white/85", selecting || inspecting ? "right-[2.5em]" : "right-[0.55em]")}>
+        {((details.duration && duration) || (details.resolution && resolution)) && <span className="rounded bg-black/50 px-[0.4em] py-[0.15em]">{[details.duration ? duration : null, details.resolution ? resolution : null].filter(Boolean).join(" · ")}</span>}
+        {!selecting && !inspecting && <span className="rounded-full bg-black/40 p-[0.35em] opacity-0 transition group-hover:opacity-100"><Play size="1em" weight="fill" /></span>}
       </div>
-      <div className="absolute inset-x-0 bottom-0 p-2.5">
-        {item.status === "failed" && <p title={item.error ?? undefined} className="truncate text-[11px] font-medium text-bad">{item.error ?? "Download failed"}</p>}
-        {item.status === "expired" && <p title="TikTok no longer serves the original link. Its archive number is preserved and Sync will not retry it automatically." className="truncate text-[11px] font-medium text-white/60">Original unavailable</p>}
-        {item.status === "ignored" && <p title="Marked as don't-download. Its archive number is preserved and Sync will not attempt it." className="truncate text-[11px] font-medium text-white/60">Not downloading</p>}
-        {item.offloaded && <span title="Archived on external storage, so it is not flagged as missing here." className="mb-1 inline-block rounded bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white/80">offloaded</span>}
-        {details.author && item.author && <p className="truncate text-xs font-medium text-white">{item.author}</p>}
-        {details.caption && item.caption && <p className="truncate text-[11px] text-white/70">{item.caption}</p>}
-        {details.technical && (item.media_codec || size) && <p className="mt-0.5 truncate text-[11px] text-white/70 opacity-0 transition group-hover:opacity-100">{[item.media_codec, size].filter(Boolean).join(" · ")}</p>}
+      <div className="absolute inset-x-0 bottom-0 p-[0.7em]">
+        {item.status === "failed" && <p title={item.error ?? undefined} className="truncate text-[0.78em] font-medium text-bad">{item.error ?? "Download failed"}</p>}
+        {item.status === "expired" && <p title="TikTok no longer serves the original link. Its archive number is preserved and Sync will not retry it automatically." className="truncate text-[0.78em] font-medium text-white/60">Original unavailable</p>}
+        {item.status === "ignored" && <p title="Marked as don't-download. Its archive number is preserved and Sync will not attempt it." className="truncate text-[0.78em] font-medium text-white/60">Not downloading</p>}
+        {item.offloaded && <span title="Archived on external storage, so it is not flagged as missing here." className="mb-[0.3em] inline-block rounded bg-black/50 px-[0.4em] py-[0.15em] text-[0.78em] font-medium text-white/80">offloaded</span>}
+        {details.author && item.author && <p className="truncate text-[0.85em] font-medium text-white">{item.author}</p>}
+        {details.caption && item.caption && <p className="truncate text-[0.78em] text-white/70">{item.caption}</p>}
+        {details.technical && (item.media_codec || size) && <p className="mt-[0.15em] truncate text-[0.78em] text-white/70 opacity-0 transition group-hover:opacity-100">{[item.media_codec, size].filter(Boolean).join(" · ")}</p>}
       </div>
     </button>
   );

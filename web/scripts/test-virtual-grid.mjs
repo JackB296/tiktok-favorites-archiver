@@ -8,13 +8,29 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const grid = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 
-const wideGrid = grid.gridMetrics("compact", 1248, 1400);
-assert.equal(wideGrid.columns, 10);
-assert.equal(wideGrid.gap, 8);
-assert.equal(wideGrid.cardHeight.toFixed(2), "209.07");
-assert.equal(wideGrid.rowStride.toFixed(2), "217.07");
-assert.equal(grid.gridMetrics("compact", 900).columns, 6);
-assert.equal(grid.gridMetrics("comfortable", 1050).columns, 5);
+// Size steps fill the available width with as many portrait cards as fit.
+const large = grid.gridMetrics("l", 1236); // target 300, gap 12, floor 2
+assert.equal(large.columns, 4);
+assert.equal(large.gap, 12);
+assert.equal(large.cardWidth.toFixed(2), "300.00");
+assert.equal(large.cardHeight.toFixed(2), "533.33");
+assert.equal(large.rowStride.toFixed(2), "545.33");
+
+const extra = grid.gridMetrics("xl", 2156); // target 420, gap 14
+assert.equal(extra.columns, 5);
+assert.equal(extra.cardWidth.toFixed(2), "420.00");
+
+// Same step packs a laptop densely and a 4K far denser — no fixed breakpoints.
+assert.equal(grid.gridMetrics("s", 1450).columns, 9);
+assert.equal(grid.gridMetrics("s", 3800).columns, 24);
+
+// Never collapses below the per-size column floor on a narrow phone.
+assert.equal(grid.gridMetrics("xl", 430).columns, 2);
+assert.equal(grid.gridMetrics("s", 430).columns, 3);
+
+// Column helpers for unmeasured/skeleton grids.
+assert.equal(grid.sizeTarget("m"), 210);
+assert.equal(grid.autoFillColumns("m"), "repeat(auto-fill, minmax(210px, 1fr))");
 
 assert.deepEqual(
   grid.visibleRows({ itemCount: 11_000, columns: 10, rowStride: 250, scrollTop: 5_000, viewportHeight: 900, overscan: 500 }),

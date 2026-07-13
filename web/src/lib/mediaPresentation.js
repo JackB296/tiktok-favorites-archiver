@@ -4,8 +4,8 @@ export function audioStatus(hasAudio) {
   return "Not checked";
 }
 
-export function readGalleryDensity(raw) {
-  return raw === "compact" ? "compact" : "comfortable";
+export function readGallerySize(raw) {
+  return raw === "s" || raw === "m" || raw === "l" || raw === "xl" ? raw : "m";
 }
 
 export function formatMediaTime(seconds) {

@@ -1,4 +1,4 @@
-import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment } from "./types";
+import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -33,6 +33,8 @@ export type OffloadSuggestion = {
 
 export const api = {
   health: () => json<{ status: string; cobalt_reachable: boolean }>("/api/health"),
+
+  suggest: (q: string) => json<SearchSuggestions>(`/api/suggest?q=${encodeURIComponent(q)}`),
 
   galleryPresets: () => json<GalleryPreset[]>("/api/gallery-presets"),
   createGalleryPreset: (name: string, filters: GalleryPresetFilters) => json<GalleryPreset>("/api/gallery-presets", {

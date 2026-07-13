@@ -578,6 +578,56 @@ def search_items(conn, query=None, kinds=None, statuses=None):
     return conn.execute(sql, params).fetchall()
 
 
+_SUGGEST_STOPWORDS = frozenset({
+    "the", "and", "for", "you", "your", "this", "that", "with", "was", "are",
+    "day", "part", "how", "its", "out", "all", "not", "but", "one", "get",
+})
+
+
+def suggest(conn, q, limit=6):
+    """Typeahead suggestions grounded in the archive: creators and hashtags that
+    actually occur, plus a few caption keywords. Every candidate is matched
+    against the last word being typed and ranked by how many favorites contain
+    it, so the list only ever offers things the library really has."""
+    tokens = re.findall(r"[a-z0-9_]+", (q or "").lower())
+    if not tokens:
+        return {"creators": [], "hashtags": [], "terms": []}
+    match = " AND ".join(f'"{term}"*' for term in tokens)
+    try:
+        rows = conn.execute(
+            "SELECT item.author AS author, item.caption AS caption "
+            "FROM item_search JOIN item ON item_search.rowid = item.id "
+            "WHERE item_search MATCH ? LIMIT 1000",
+            (match,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {"creators": [], "hashtags": [], "terms": []}
+
+    needle = tokens[-1]
+    creators, hashtags, terms = {}, {}, {}
+    for row in rows:
+        author = row["author"]
+        if author and re.sub(r"[^a-z0-9_]", "", author.lower()).startswith(needle):
+            creators[author] = creators.get(author, 0) + 1
+        caption = (row["caption"] or "").lower()
+        for tag in re.findall(r"#(\w+)", caption):
+            if tag.startswith(needle):
+                hashtags["#" + tag] = hashtags.get("#" + tag, 0) + 1
+        for word in re.findall(r"(?<![#\w])([a-z][a-z0-9_]{2,})", caption):
+            if word.startswith(needle) and word not in _SUGGEST_STOPWORDS:
+                terms[word] = terms.get(word, 0) + 1
+
+    for word in list(terms):  # a word already offered as a hashtag is redundant
+        if "#" + word in hashtags:
+            del terms[word]
+
+    def top(counts, count):
+        ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        return [{"value": value, "count": total} for value, total in ranked[:count]]
+
+    return {"creators": top(creators, limit), "hashtags": top(hashtags, limit), "terms": top(terms, 3)}
+
+
 _PAGE_ORDERS = {
     "latest": ("favorite_order DESC, id DESC", "favorite_order", "DESC"),
     "archive": ("favorite_order ASC, id ASC", "favorite_order", "ASC"),

@@ -240,3 +240,14 @@ export interface RunHistoryEntry {
   finished_at: string | null;
   counts: Partial<Record<Status, number>>;
 }
+
+export interface SearchSuggestion {
+  value: string;
+  count: number;
+}
+
+export interface SearchSuggestions {
+  creators: SearchSuggestion[];
+  hashtags: SearchSuggestion[];
+  terms: SearchSuggestion[];
+}
