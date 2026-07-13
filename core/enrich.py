@@ -71,6 +71,8 @@ def enrich_items(conn, getter=None, limiter=None, progress=None, should_continue
         if caption is not None or author is not None:
             store.set_metadata(conn, item["id"], caption, author)
             enriched += 1
+        else:
+            unavailable += 1
         if progress:
             progress({
                 "event": "enrichment", "id": item["id"], "caption": caption,
