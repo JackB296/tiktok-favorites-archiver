@@ -7,6 +7,23 @@ import { cx } from "./ui";
 import { usePlayback } from "./playback";
 import { normalizationGain } from "../lib/playbackVolume.js";
 import { formatMediaTime } from "../lib/mediaPresentation.js";
+import { containedMediaBox } from "../lib/mediaLayout.js";
+
+/** Track an element's rendered size so overlays can align to letterboxed media. */
+function useElementSize() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setSize({ width: el.clientWidth, height: el.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, size] as const;
+}
 
 /**
  * Renders a post's media, letterboxed on black (matching the Plex/slideshow look):
@@ -45,6 +62,9 @@ function VideoMedia({ src, active, preload }: { src: string; active: boolean; pr
   const [loadError, setLoadError] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [boxRef, boxSize] = useElementSize();
+  const [mediaSize, setMediaSize] = useState({ w: 0, h: 0 });
+  const media = containedMediaBox(boxSize.width, boxSize.height, mediaSize.w, mediaSize.h);
 
   useEffect(() => {
     setReady(false);
@@ -93,7 +113,7 @@ function VideoMedia({ src, active, preload }: { src: string; active: boolean; pr
     setCurrentTime(media.currentTime);
   };
 
-  return <div className="group relative flex h-full w-full items-center justify-center bg-black" aria-busy={active && (!ready || waiting)}>
+  return <div ref={boxRef} className="group relative flex h-full w-full items-center justify-center bg-black" aria-busy={active && (!ready || waiting)}>
     <video
       ref={ref}
       src={src}
@@ -105,7 +125,7 @@ function VideoMedia({ src, active, preload }: { src: string; active: boolean; pr
       onCanPlay={() => { setReady(true); setWaiting(false); setLoadError(false); }}
       onPlaying={() => { setReady(true); setWaiting(false); }}
       onWaiting={() => active && setWaiting(true)}
-      onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+      onLoadedMetadata={(event) => { setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0); setMediaSize({ w: event.currentTarget.videoWidth, h: event.currentTarget.videoHeight }); }}
       onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
       onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
       onError={() => { setLoadError(true); setWaiting(false); }}
@@ -116,7 +136,7 @@ function VideoMedia({ src, active, preload }: { src: string; active: boolean; pr
     {active && !loadError && (!ready || waiting) && <MediaLoading />}
     {active && loadError && <div role="alert" className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-control)] border border-white/15 bg-black/70 px-4 py-3 text-sm text-white/80">Video could not be loaded.</div>}
     {active && autoplayBlocked && <button type="button" onClick={() => void playWithSound()} className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"><Play size={16} weight="fill" /> {muted ? "Play video" : "Play with sound"}</button>}
-    {active && ready && <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex translate-y-2 items-center gap-2 rounded-[var(--radius-control)] border border-white/10 bg-black/70 px-2.5 py-2 text-white opacity-0 shadow-lg backdrop-blur-md transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+    {active && ready && <div style={{ width: media.width ? `${Math.max(0, media.width - 24)}px` : undefined }} className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 translate-y-2 items-center gap-2 rounded-[var(--radius-control)] border border-white/10 bg-black/70 px-2.5 py-2 text-white opacity-0 shadow-lg backdrop-blur-md transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
       <button type="button" onClick={togglePaused} aria-label={paused ? "Play video" : "Pause video"} className="pointer-events-auto rounded-md p-1.5 hover:bg-white/15">{paused ? <Play size={16} weight="fill" /> : <Pause size={16} weight="fill" />}</button>
       <span className="tabular w-10 text-right text-[11px] text-white/75">{formatMediaTime(currentTime)}</span>
       <input type="range" min="0" max={Math.max(duration, 0.01)} step="0.1" value={Math.min(currentTime, Math.max(duration, 0.01))} onChange={(event) => seek(Number(event.target.value))} aria-label="Video progress" className="pointer-events-auto h-1 min-w-0 flex-1 cursor-pointer accent-white" />
@@ -137,6 +157,10 @@ function SlideMedia({ images, audio, active }: { images: string[]; audio: string
   const { muted, volume, autoLevel, setAutoGain, paused, togglePaused } = usePlayback();
   const [idx, setIdx] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const [boxRef, boxSize] = useElementSize();
+  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+  const media = containedMediaBox(boxSize.width, boxSize.height, imgSize.w, imgSize.h);
+  const edgeOffset = media.marginX + 8;
 
   useEffect(() => {
     const a = audioRef.current;
@@ -150,17 +174,28 @@ function SlideMedia({ images, audio, active }: { images: string[]; audio: string
   }, [active, muted, paused]);
   useMediaVolume(audioRef, active, volume, autoLevel, setAutoGain);
 
+  // Left/right arrow keys flip images while this slideshow is the active post.
+  useEffect(() => {
+    if (!active || images.length <= 1) return;
+    const onNav = (event: Event) => {
+      const delta = (event as CustomEvent<{ delta: number }>).detail?.delta ?? 0;
+      if (delta) setIdx((i) => (i + delta + images.length) % images.length);
+    };
+    window.addEventListener("viewer-slide-nav", onNav);
+    return () => window.removeEventListener("viewer-slide-nav", onNav);
+  }, [active, images.length]);
+
   const go = (delta: number) => setIdx((i) => (i + delta + images.length) % images.length);
 
   return (
-    <div className="relative flex h-full w-full items-center justify-center">
-      <img src={images[idx]} alt={`Slide ${idx + 1} of ${images.length}`} className="h-full w-full object-contain" />
+    <div ref={boxRef} className="relative flex h-full w-full items-center justify-center">
+      <img src={images[idx]} alt={`Slide ${idx + 1} of ${images.length}`} onLoad={(event) => setImgSize({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight })} className="h-full w-full object-contain" />
       {active && <button type="button" onClick={togglePaused} aria-label={paused ? "Resume slideshow audio" : "Pause slideshow audio"} className="absolute inset-0 z-[1] cursor-pointer"><span className="sr-only">{paused ? "Resume slideshow audio" : "Pause slideshow audio"}</span></button>}
       {audio && <audio ref={audioRef} src={audio} loop />}
       {images.length > 1 && (
         <>
-          <SlideNav side="left" onClick={() => go(-1)} />
-          <SlideNav side="right" onClick={() => go(1)} />
+          <SlideNav side="left" onClick={() => go(-1)} offset={edgeOffset} />
+          <SlideNav side="right" onClick={() => go(1)} offset={edgeOffset} />
           <div className="pointer-events-none absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 gap-1.5">
             {images.map((_, i) => (
               <span
@@ -304,16 +339,16 @@ function useMediaVolume(ref: RefObject<HTMLMediaElement>, active: boolean, volum
   }, [active, autoLevel, onAutoGain, ref, volume]);
 }
 
-function SlideNav({ side, onClick }: { side: "left" | "right"; onClick: () => void }) {
+function SlideNav({ side, onClick, offset }: { side: "left" | "right"; onClick: () => void; offset: number }) {
   const Icon = side === "left" ? CaretLeft : CaretRight;
   return (
     <button
       onClick={(event) => { event.stopPropagation(); onClick(); }}
       aria-label={side === "left" ? "Previous image" : "Next image"}
+      style={{ [side]: `${offset}px` }}
       className={cx(
         "absolute top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white backdrop-blur-sm",
         "transition hover:bg-black/60 active:translate-y-[calc(-50%+1px)]",
-        side === "left" ? "left-3" : "right-3",
       )}
     >
       <Icon size={20} weight="bold" />

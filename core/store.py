@@ -879,6 +879,45 @@ def page_items(conn, **query):
     return conn.execute(sql, params).fetchall()
 
 
+def feed_ids(conn, **query):
+    """Every matching item's id in the Gallery's chosen sort order, unpaged. Lets
+    a filtered Gallery view open a bounded Feed of exactly those favorites. Mirrors
+    ``page_items``'s filter + order construction, without cursor/limit paging."""
+    unknown = set(query) - set(PAGE_QUERY_DEFAULTS)
+    if unknown:
+        raise ValueError("unknown feed_ids filters: " + ", ".join(sorted(unknown)))
+    q = {**PAGE_QUERY_DEFAULTS, **query}
+    clauses, params = _item_filters(kinds=q["kinds"], statuses=q["statuses"])
+    fts_query = _fts_query(q["query"])
+    filter_clauses, filter_params = _page_filter_clauses(q)
+    clauses += filter_clauses
+    params += filter_params
+    order = q["order"]
+    seed = q["seed"]
+    if fts_query and order == "latest":
+        order = "relevance"
+    if order == "random":
+        if seed is None:
+            raise ValueError("random order requires a shuffle seed")
+        seed = int(seed) % _RANDOM_MODULUS
+        order_sql, field = f"{_random_key_sql(seed)} ASC, id ASC", None
+    elif order not in _PAGE_ORDERS:
+        raise ValueError(f"unknown item order: {order}")
+    else:
+        order_sql, field, _direction = _PAGE_ORDERS[order]
+    if field is not None:
+        clauses.append(f"{field} IS NOT NULL")
+    if fts_query:
+        sql = "WITH matched AS (SELECT item.*, bm25(item_search) AS rank FROM item_search JOIN item ON item_search.rowid = item.id WHERE item_search MATCH ?) SELECT id FROM matched"
+        params = [fts_query, *params]
+    else:
+        sql = "SELECT id FROM item"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += f" ORDER BY {order_sql}"
+    return [row["id"] for row in conn.execute(sql, params).fetchall()]
+
+
 def window_items(conn, item_id, limit=50):
     """Return the selected Favorite then its older archive neighbors."""
     selected = get_item(conn, item_id)

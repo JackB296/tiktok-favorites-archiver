@@ -31,6 +31,8 @@ export function Viewer() {
   const [randomPosition, setRandomPosition] = useState<number | null>(null);
   const [randomTotal, setRandomTotal] = useState(0);
   const [queueReadyTotal, setQueueReadyTotal] = useState(0);
+  const [filteredMode, setFilteredMode] = useState(false);
+  const [filteredTotal, setFilteredTotal] = useState(0);
   const resumeId = useRef<number | null>(Number(localStorage.getItem("last-watched-favorite")) || null);
   const containerRef = useRef<HTMLDivElement>(null);
   const randomQueue = useRef<number[]>([]);
@@ -38,6 +40,8 @@ export function Viewer() {
   const randomGeneration = useRef(0);
   const randomBatchGeneration = useRef<number | null>(null);
   const randomPositions = useRef(new Map<number, number>());
+  const feedListIds = useRef<number[]>([]);
+  const feedListOffset = useRef(0);
   const pendingTrim = useRef<{ removeCount: number; restoredScrollTop: number } | null>(null);
   const pendingWheelTargetId = useRef<number | null>(null);
   const wheelGestureReady = useRef(true);
@@ -46,6 +50,10 @@ export function Viewer() {
   const requestedItemId = Number(searchParams.get("item")) || null;
   const requestedQueueIds = Array.from(new Set((searchParams.get("queue") ?? "").split(",").map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))).slice(0, 100);
   const requestedQueueKey = requestedQueueIds.join(",");
+  const filterParams = new URLSearchParams(searchParams);
+  filterParams.delete("item");
+  filterParams.delete("queue");
+  const filterKey = filterParams.toString();
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
 
@@ -67,6 +75,7 @@ export function Viewer() {
     });
 
     if (requestedQueueIds.length) {
+      setFilteredMode(false);
       api.itemSelection(requestedQueueIds)
         .then((selected) => {
           if (!alive) return;
@@ -78,7 +87,30 @@ export function Viewer() {
           setRandomMode(false);
         })
         .catch(failLoad);
+    } else if (filterKey && requestedItemId != null) {
+      // Search/filter results become a bounded feed, opened at the clicked item.
+      setFilteredMode(true);
+      setRandomMode(false);
+      setQueueReadyTotal(0);
+      api.feedIds(filterParams)
+        .then(async (ids) => {
+          if (!alive) return;
+          feedListIds.current = ids;
+          setFilteredTotal(ids.length);
+          const clickedIndex = ids.indexOf(requestedItemId);
+          if (clickedIndex < 0) { void openLatest().catch(failLoad); return; }
+          const start = Math.max(0, clickedIndex - KEEP_BEHIND);
+          const slice = ids.slice(start, clickedIndex + 50).slice(0, 100);
+          feedListOffset.current = start + slice.length;
+          const selected = await api.itemSelection(slice);
+          if (!alive) return;
+          setItems(selected.filter(isFeedItem));
+          setActiveId(requestedItemId);
+          setNextCursor(null);
+        })
+        .catch(() => openLatest().catch(failLoad));
     } else if (requestedItemId != null) {
+      setFilteredMode(false);
       setQueueReadyTotal(0);
       api.itemWindow(requestedItemId)
         .then((page) => {
@@ -91,13 +123,14 @@ export function Viewer() {
         })
         .catch(() => openLatest().catch(failLoad));
     } else {
+      setFilteredMode(false);
       openLatest().catch(failLoad);
     }
 
     return () => {
       alive = false;
     };
-  }, [requestedItemId, requestedQueueKey, reloadNonce]);
+  }, [requestedItemId, requestedQueueKey, filterKey, reloadNonce]);
 
   const loadRandomBatch = useCallback(async (replace = false, generation = randomGeneration.current) => {
     if (generation !== randomGeneration.current || randomBatchGeneration.current === generation) return;
@@ -122,6 +155,22 @@ export function Viewer() {
       if (generation === randomGeneration.current) setLoadingMore(false);
     }
   }, []);
+
+  const loadFilteredBatch = useCallback(async () => {
+    if (loadingMore) return;
+    const ids = feedListIds.current.slice(feedListOffset.current, feedListOffset.current + 50);
+    if (!ids.length) return;
+    feedListOffset.current += ids.length;
+    setLoadingMore(true);
+    try {
+      const selected = await api.itemSelection(ids);
+      setItems((current) => [...(current ?? []), ...selected.filter(isFeedItem)]);
+    } catch {
+      /* transient — the sentinel stays and the next scroll retries */
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore]);
 
   useEffect(() => {
     const root = containerRef.current;
@@ -200,6 +249,10 @@ export function Viewer() {
       void loadRandomBatch();
       return;
     }
+    if (filteredMode) {
+      void loadFilteredBatch();
+      return;
+    }
     if (nextCursor == null) return;
     const generation = randomGeneration.current;
     setLoadingMore(true);
@@ -211,7 +264,7 @@ export function Viewer() {
       })
       .catch(() => { /* transient — sentinel stays, next scroll retries */ })
       .finally(() => setLoadingMore(false));
-  }, [activeId, items, loadRandomBatch, loadingMore, nextCursor, randomMode]);
+  }, [activeId, items, loadRandomBatch, loadFilteredBatch, loadingMore, nextCursor, randomMode, filteredMode]);
 
   useEffect(() => {
     const root = containerRef.current;
@@ -245,6 +298,7 @@ export function Viewer() {
     if (!page?.items.length) return;
     randomGeneration.current += 1;
     setRandomMode(false);
+    setFilteredMode(false);
     setRandomTotal(0);
     setItems(page.items.filter(isFeedItem));
     setActiveId(resumeId.current);
@@ -268,6 +322,7 @@ export function Viewer() {
       randomQueue.current = ids;
       randomPositions.current = new Map(ids.map((id, index) => [id, index]));
       randomOffset.current = 0;
+      setFilteredMode(false);
       setRandomMode(true);
       setRandomTotal(ids.length);
       setNextCursor(null);
@@ -282,6 +337,7 @@ export function Viewer() {
   async function returnToOrderedFeed() {
     randomGeneration.current += 1;
     setRandomMode(false);
+    setFilteredMode(false);
     setRandomPosition(null);
     setRandomTotal(0);
     const page = await api.itemPage({ limit: 50, order: "latest", feed: true }).catch(() => null);
@@ -322,12 +378,12 @@ export function Viewer() {
 
   return (
     <PlaybackSession initiallyMuted={false}>
-      <ViewerFeed items={items} activeId={activeId} transitionTargetId={transitionTargetId} containerRef={containerRef} onActiveChange={setActiveId} onItemUpdated={(updated) => setItems((current) => current?.map((item) => item.id === updated.id ? updated : item) ?? null)} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} randomizing={randomizing} randomMode={randomMode} randomPosition={randomPosition} randomTotal={randomTotal} queueTotal={requestedQueueIds.length} queueReadyTotal={queueReadyTotal} onOrdered={returnToOrderedFeed} />
+      <ViewerFeed items={items} activeId={activeId} transitionTargetId={transitionTargetId} containerRef={containerRef} onActiveChange={setActiveId} onItemUpdated={(updated) => setItems((current) => current?.map((item) => item.id === updated.id ? updated : item) ?? null)} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} randomizing={randomizing} randomMode={randomMode} randomPosition={randomPosition} randomTotal={randomTotal} filteredMode={filteredMode} filteredTotal={filteredTotal} queueTotal={requestedQueueIds.length} queueReadyTotal={queueReadyTotal} onOrdered={returnToOrderedFeed} />
     </PlaybackSession>
   );
 }
 
-function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiveChange, onItemUpdated, onGoToLastWatched, onRandom, randomizing, randomMode, randomPosition, randomTotal, queueTotal, queueReadyTotal, onOrdered }: { items: Item[]; activeId: number | null; transitionTargetId: number | null; containerRef: React.RefObject<HTMLDivElement>; onActiveChange: (id: number) => void; onItemUpdated: (item: Item) => void; onGoToLastWatched?: () => void; onRandom: () => void; randomizing: boolean; randomMode: boolean; randomPosition: number | null; randomTotal: number; queueTotal: number; queueReadyTotal: number; onOrdered: () => void }) {
+function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiveChange, onItemUpdated, onGoToLastWatched, onRandom, randomizing, randomMode, randomPosition, randomTotal, filteredMode, filteredTotal, queueTotal, queueReadyTotal, onOrdered }: { items: Item[]; activeId: number | null; transitionTargetId: number | null; containerRef: React.RefObject<HTMLDivElement>; onActiveChange: (id: number) => void; onItemUpdated: (item: Item) => void; onGoToLastWatched?: () => void; onRandom: () => void; randomizing: boolean; randomMode: boolean; randomPosition: number | null; randomTotal: number; filteredMode: boolean; filteredTotal: number; queueTotal: number; queueReadyTotal: number; onOrdered: () => void }) {
   const { muted, toggleMuted, volume, setVolume, autoLevel, toggleAutoLevel, autoGain, setAutoGain, paused, togglePaused, setPaused } = usePlayback();
   const Speaker = muted ? SpeakerSimpleX : SpeakerSimpleHigh;
   const activeIndex = items.findIndex((item) => item.id === activeId);
@@ -367,6 +423,11 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
       if (shortcut === "pause") { event.preventDefault(); togglePaused(); return; }
       if (shortcut === "mute") { event.preventDefault(); toggleMuted(); return; }
       if (shortcut === "fullscreen") { event.preventDefault(); void toggleFullscreen(); return; }
+      if (shortcut === "prevImage" || shortcut === "nextImage") {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent("viewer-slide-nav", { detail: { delta: shortcut === "nextImage" ? 1 : -1 } }));
+        return;
+      }
       const delta = shortcut === "next" ? 1 : -1;
       const nextIndex = Math.max(0, Math.min(items.length - 1, (activeIndex < 0 ? 0 : activeIndex) + delta));
       if (nextIndex === activeIndex) return;
@@ -390,7 +451,8 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
       </div>
       {randomMode && <div className="absolute left-3 top-16 z-20 flex items-center gap-2 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">Random · {randomPosition == null ? "…" : randomPosition + 1} / {randomTotal}<button onClick={onOrdered} className="text-white/70 underline underline-offset-2 hover:text-white">Ordered feed</button></div>}
       {!randomMode && queueTotal > 0 && <div className="absolute left-3 top-16 z-20 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">Gallery queue · {queueReadyTotal} ready of {queueTotal} selected</div>}
-      {showShortcuts && <div className={`absolute left-3 z-20 rounded-xl border border-white/10 bg-black/70 px-3 py-2 text-xs leading-5 text-white shadow-xl backdrop-blur-md ${randomMode || queueTotal > 0 ? "top-28" : "top-16"}`}>↑ ↓ / ← →: previous or next<br />Space or video click: play or pause<br />M: mute or unmute<br />F: enter or exit fullscreen</div>}
+      {!randomMode && queueTotal === 0 && filteredMode && <div className="absolute left-3 top-16 z-20 flex items-center gap-2 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">Search results · {filteredTotal}<Link to="/" className="text-white/70 underline underline-offset-2 hover:text-white">Full feed</Link></div>}
+      {showShortcuts && <div className={`absolute left-3 z-20 rounded-xl border border-white/10 bg-black/70 px-3 py-2 text-xs leading-5 text-white shadow-xl backdrop-blur-md ${randomMode || queueTotal > 0 || filteredMode ? "top-28" : "top-16"}`}>↑ ↓: previous or next post<br />← →: slideshow image<br />Space or video click: play or pause<br />M: mute or unmute<br />F: enter or exit fullscreen</div>}
       {items.map((item, index) => (
         <section
           key={item.id}

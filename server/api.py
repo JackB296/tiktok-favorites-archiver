@@ -244,6 +244,23 @@ def item_ids(request: Request):
         conn.close()
 
 
+@router.get("/feed/ids")
+def feed_ids(request: Request):
+    """Ordered ids for every favorite matching a Gallery filter, so the Feed can
+    play through exactly that filtered set. Same query vocabulary as /items/page."""
+    try:
+        query = archive_items.parse_page_query(request.query_params)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    for key in ("limit", "cursor", "feed"):
+        query.pop(key, None)
+    conn = _open(request)
+    try:
+        return store.feed_ids(conn, **query)
+    finally:
+        conn.close()
+
+
 @router.post("/items/selection")
 async def item_selection(request: Request):
     body = await request.json()

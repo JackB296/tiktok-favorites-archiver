@@ -502,6 +502,17 @@ export function Gallery() {
     }
   }
 
+  /** Open a favorite in the Feed. With an active search/filter, scope the Feed to
+      the whole matching set in the current sort order; otherwise open the archive. */
+  function openInFeed(itemId: number) {
+    const params = new URLSearchParams(currentFilterSelector());
+    if (order !== "latest") params.set("order", order);
+    if (order === "random") params.set("seed", String(randomSeed));
+    const scoped = Array.from(params.keys()).length > 0;
+    params.set("item", String(itemId));
+    navigate(scoped ? `/?${params.toString()}` : `/?item=${itemId}`);
+  }
+
   /** The current page filters as the same key/value strings `api.itemPage` sends. */
   function currentFilterSelector(): Record<string, string> {
     const excluded = new Set(["order", "seed", "limit", "cursor"]);
@@ -883,7 +894,7 @@ export function Gallery() {
             items={items}
             size={size}
             scrollRef={scrollRef}
-            renderItem={(it, cardWidth) => <Thumb key={it.id} item={it} cardWidth={cardWidth} details={cardDetails} selecting={selectionMode} inspecting={inspectionMode} selected={selectedIds.has(it.id)} onClick={() => selectionMode ? toggleSelection(it.id) : inspectionMode ? setInspectedItem(it) : navigate(`/?item=${it.id}`)} />}
+            renderItem={(it, cardWidth) => <Thumb key={it.id} item={it} cardWidth={cardWidth} details={cardDetails} selecting={selectionMode} inspecting={inspectionMode} selected={selectedIds.has(it.id)} onClick={() => selectionMode ? toggleSelection(it.id) : inspectionMode ? setInspectedItem(it) : openInFeed(it.id)} />}
           />
           {nextCursor != null && (
             <div className="mt-6 flex items-center justify-center gap-2 py-3 text-xs text-ink-faint" aria-live="polite" aria-busy={loadingMore}>

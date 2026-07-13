@@ -12,6 +12,9 @@ assert.equal(shortcuts.viewerShortcut({ key: "f", code: "KeyF", repeat: false, e
 assert.equal(shortcuts.viewerShortcut({ key: "F", code: "KeyF", repeat: true, editing: false }), null);
 assert.equal(shortcuts.viewerShortcut({ key: " ", code: "Space", repeat: false, editing: false }), "pause");
 assert.equal(shortcuts.viewerShortcut({ key: "m", code: "KeyM", repeat: false, editing: true }), null);
-assert.equal(shortcuts.viewerShortcut({ key: "ArrowRight", code: "ArrowRight", repeat: false, editing: false }), "next");
+assert.equal(shortcuts.viewerShortcut({ key: "ArrowDown", code: "ArrowDown", repeat: false, editing: false }), "next");
+assert.equal(shortcuts.viewerShortcut({ key: "ArrowUp", code: "ArrowUp", repeat: false, editing: false }), "previous");
+assert.equal(shortcuts.viewerShortcut({ key: "ArrowRight", code: "ArrowRight", repeat: false, editing: false }), "nextImage");
+assert.equal(shortcuts.viewerShortcut({ key: "ArrowLeft", code: "ArrowLeft", repeat: false, editing: false }), "prevImage");
 
 console.log("PASS viewer keyboard shortcut mapping");

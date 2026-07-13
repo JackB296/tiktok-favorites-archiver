@@ -36,6 +36,8 @@ export const api = {
 
   suggest: (q: string) => json<SearchSuggestions>(`/api/suggest?q=${encodeURIComponent(q)}`),
 
+  feedIds: (params: URLSearchParams | string) => json<number[]>(`/api/feed/ids?${params}`),
+
   galleryPresets: () => json<GalleryPreset[]>("/api/gallery-presets"),
   createGalleryPreset: (name: string, filters: GalleryPresetFilters) => json<GalleryPreset>("/api/gallery-presets", {
     method: "POST",
