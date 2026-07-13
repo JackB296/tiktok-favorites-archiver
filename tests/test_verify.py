@@ -139,6 +139,38 @@ def test_requeue_selected_skips_offloaded_items():
     assert store.get_item(conn, 2)["status"] == "pending"
 
 
+def test_unoffload_requeues_only_cleared_items_without_a_local_file():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/a", status="pending")  # marked, no file -> pending again
+    store.insert_item(conn, 2, "https://tiktok.com/b", status="done")     # marked, file present -> stays done
+    store.insert_item(conn, 3, "https://tiktok.com/c", status="failed")   # never marked -> untouched
+    store.insert_item(conn, 4, "local://4.mp4", status="done")            # marked, synthetic -> stays done
+    store.set_offloaded(conn, [1, 2, 4])
+
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "2.mp4"), "w").close()
+        result = verify.unoffload_items(conn, dl, [1, 2, 3, 4])
+
+    assert result == {"changed": 3, "requeued": 1}
+    assert store.get_item(conn, 1)["status"] == "pending"
+    assert store.get_item(conn, 2)["status"] == "done"
+    assert store.get_item(conn, 3)["status"] == "failed"
+    assert store.get_item(conn, 4)["status"] == "done"
+    for item_id in (1, 2, 4):
+        assert store.get_item(conn, item_id)["offloaded"] == 0
+
+
+def test_unoffload_of_unmarked_items_changes_nothing():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/a", status="failed")
+
+    with tempfile.TemporaryDirectory() as dl:
+        result = verify.unoffload_items(conn, dl, [1])
+
+    assert result == {"changed": 0, "requeued": 0}
+    assert store.get_item(conn, 1)["status"] == "failed"
+
+
 def test_offload_suggestion_targets_ids_below_the_earliest_local_file():
     conn = _db()
     store.insert_item(conn, 1, "a", status="done")     # already offloaded

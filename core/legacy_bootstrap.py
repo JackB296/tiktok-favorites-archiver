@@ -10,7 +10,7 @@ import os
 import re
 from typing import Optional
 
-from core import export, store
+from core import export, media, store
 
 
 class LegacyBootstrapError(ValueError):
@@ -44,11 +44,7 @@ def _numeric_mp4_ids(download_dir):
         names = os.listdir(download_dir)
     except OSError as exc:
         raise LegacyBootstrapError(f"Could not scan the downloads directory: {exc}") from exc
-    ids = sorted({
-        int(name[:-4])
-        for name in names
-        if name.endswith(".mp4") and name[:-4].isdigit()
-    })
+    ids = media.finished_movie_ids(names)
     if not ids:
         raise LegacyBootstrapError("No numeric MP4 files were found in the downloads directory.")
     if ids[0] < 1:
@@ -56,7 +52,8 @@ def _numeric_mp4_ids(download_dir):
     return tuple(ids)
 
 
-def _range(first, last):
+def _bounds_or_none(first, last):
+    """The inclusive bounds of an id span, or (None, None) when the span is empty."""
     return (first, last) if first <= last else (None, None)
 
 
@@ -306,12 +303,12 @@ def plan_bootstrap(
     gap_ids = tuple(item_id for item_id in range(local_first, local_last + 1) if item_id not in local_set)
     offloaded_count = mapped_first - 1
     pending_count = len(current_favorites) - current_position
-    offloaded_first, offloaded_last = _range(local_last + 1, local_last + offloaded_count)
-    reused_first, reused_last = _range(
+    offloaded_first, offloaded_last = _bounds_or_none(local_last + 1, local_last + offloaded_count)
+    reused_first, reused_last = _bounds_or_none(
         local_last + offloaded_count + 1,
         local_last + offloaded_count + len(reused_positions),
     )
-    pending_first, pending_last = _range(
+    pending_first, pending_last = _bounds_or_none(
         local_last + offloaded_count + len(reused_positions) + 1,
         local_last + offloaded_count + len(reused_positions) + pending_count,
     )

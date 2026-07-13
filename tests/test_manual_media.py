@@ -68,6 +68,57 @@ def test_invalid_video_never_replaces_existing_media():
         assert open(target, "rb").read() == b"healthy video"
 
 
+def test_replacement_keeps_only_the_most_recent_previous_video_as_backup():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 9, "https://tiktok.com/original", kind="video", status="done")
+
+    def replace(payload):
+        staged = os.path.join(download_dir, ".replacement.upload")
+        _write(staged, _mp4_bytes(payload))
+        manual_media.replace_item_media(
+            conn,
+            download_dir,
+            9,
+            staged_video=staged,
+            inspect=lambda _path: media_index.MediaFacts(1.0, 10, 20, "h264", 5, True),
+            make_thumbnail=lambda _source, thumbnail, _width: _write(thumbnail, b"thumb"),
+        )
+
+    with tempfile.TemporaryDirectory() as download_dir:
+        target = os.path.join(download_dir, "9.mp4")
+        backup = os.path.join(download_dir, ".archive", "replaced", "9.mp4")
+        _write(target, b"original video")
+
+        replace(b"first replacement")
+        assert open(target, "rb").read() == _mp4_bytes(b"first replacement")
+        assert open(backup, "rb").read() == b"original video"
+
+        replace(b"second replacement")
+        assert open(target, "rb").read() == _mp4_bytes(b"second replacement")
+        assert open(backup, "rb").read() == _mp4_bytes(b"first replacement")
+
+
+def test_replacement_without_an_existing_video_creates_no_backup():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 4, "https://tiktok.com/original", kind="video", status="failed")
+
+    with tempfile.TemporaryDirectory() as download_dir:
+        staged = os.path.join(download_dir, ".replacement.upload")
+        _write(staged, _mp4_bytes())
+
+        manual_media.replace_item_media(
+            conn,
+            download_dir,
+            4,
+            staged_video=staged,
+            inspect=lambda _path: media_index.MediaFacts(1.0, 10, 20, "h264", 5, True),
+            make_thumbnail=lambda _source, thumbnail, _width: _write(thumbnail, b"thumb"),
+        )
+
+        assert open(os.path.join(download_dir, "4.mp4"), "rb").read() == _mp4_bytes()
+        assert not os.path.exists(os.path.join(download_dir, ".archive", "replaced", "4.mp4"))
+
+
 def test_custom_thumbnail_is_projected_and_survives_generated_index_updates():
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 5, "https://tiktok.com/original", kind="video", status="done")

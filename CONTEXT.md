@@ -21,3 +21,15 @@ Favorites. A run can be running, paused, stopping, stopped, or idle.
 
 The finished MP4 and, for a slideshow, the raw images and audio stored for an
 Archive item.
+
+## Offloaded
+
+A mark on an Archive item whose media is archived externally (for example on
+another drive). An offloaded item counts as done and is never re-downloaded or
+flagged missing, but its row, archive number, and metadata stay in the archive.
+
+## Ignored
+
+A user-set "never download" lifecycle state for a pending or failed Favorite.
+An ignored item is skipped by Sync but keeps its row and archive number as a
+position marker; clearing the mark returns it to pending.

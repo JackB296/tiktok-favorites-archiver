@@ -113,7 +113,7 @@ def _write_one(download_dir, item, make_poster):
 
 
 def run_sidecars(conn, download_dir, progress=None, wait=None):
-    """Write metadata sidecars as a controllable Archive job."""
+    """Write metadata sidecars as a controllable Archive run."""
     if wait is None:
         wait = lambda: time.sleep(0.1)  # noqa: E731
 

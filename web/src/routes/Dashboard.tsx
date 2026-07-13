@@ -11,10 +11,10 @@ import {
   CaretDown,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
-import { parseLegacyMappingText } from "../lib/legacyBootstrap";
-import type { OffloadSuggestion } from "../lib/api";
-import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyMappingSegment } from "../lib/types";
-import { Button, StatusBadge, cx } from "../components/ui";
+import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport, RunHistoryEntry, SyncSettings } from "../lib/types";
+import { Button, Stat, StatusBadge, cx } from "../components/ui";
+import { LegacyBootstrapPanel } from "../components/LegacyBootstrapPanel";
+import { OffloadPanel } from "../components/OffloadPanel";
 import { progressLabel } from "../lib/progressPresentation.js";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "ignored", "expired"];
@@ -44,23 +44,10 @@ export function Dashboard() {
   const [runActionError, setRunActionError] = useState<string | null>(null);
   const [verifyReport, setVerifyReport] = useState<VerifyReport | null>(null);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
-  const [offloadInfo, setOffloadInfo] = useState<OffloadSuggestion | null>(null);
-  const [offloadFrom, setOffloadFrom] = useState("");
-  const [offloadTo, setOffloadTo] = useState("");
-  const [offloadMsg, setOffloadMsg] = useState<string | null>(null);
-  const [offloadBusy, setOffloadBusy] = useState(false);
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
   const [syncSettings, setSyncSettings] = useState<SyncSettings | null>(null);
   const [metadataOpen, setMetadataOpen] = useState(false);
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
-  const [legacyOldExport, setLegacyOldExport] = useState<File | null>(null);
-  const [legacyCurrentExport, setLegacyCurrentExport] = useState<File | null>(null);
-  const [legacyCheckpoint, setLegacyCheckpoint] = useState<File | null>(null);
-  const [legacyMappingText, setLegacyMappingText] = useState("");
-  const [legacyPreview, setLegacyPreview] = useState<LegacyBootstrapPreview | null>(null);
-  const [legacyVerified, setLegacyVerified] = useState(false);
-  const [legacyBusy, setLegacyBusy] = useState(false);
-  const [legacyMsg, setLegacyMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => api.status().then(setStatus).catch(() => {});
@@ -117,83 +104,6 @@ export function Dashboard() {
     }
   }
 
-  function resetLegacyPreview() {
-    setLegacyPreview(null);
-    setLegacyVerified(false);
-    setLegacyMsg(null);
-  }
-
-  async function previewLegacyBootstrap() {
-    if (!legacyOldExport || !legacyCurrentExport || !legacyCheckpoint) {
-      setLegacyMsg("Choose the old export, current export, and last-downloaded-link file first.");
-      return;
-    }
-    let segments: LegacyMappingSegment[] | undefined;
-    try {
-      segments = parseLegacyMappingText(legacyMappingText);
-    } catch (err) {
-      setLegacyMsg((err as Error).message);
-      return;
-    }
-    setLegacyBusy(true);
-    setLegacyMsg("Validating exports and local archive numbers…");
-    setLegacyPreview(null);
-    setLegacyVerified(false);
-    try {
-      const preview = await api.legacyBootstrapPreview(
-        legacyOldExport, legacyCurrentExport, legacyCheckpoint, segments,
-      );
-      setLegacyPreview(preview);
-      setLegacyMsg("Preview passed every safety check. Verify the sample mappings before applying it.");
-    } catch (err) {
-      setLegacyMsg(`Preview failed: ${(err as Error).message}`);
-    } finally {
-      setLegacyBusy(false);
-    }
-  }
-
-  async function applyLegacyBootstrap() {
-    if (!legacyOldExport || !legacyCurrentExport || !legacyCheckpoint || !legacyPreview || !legacyVerified) return;
-    const allocation = legacyPreview.allocation;
-    let segments: LegacyMappingSegment[] | undefined;
-    try {
-      segments = parseLegacyMappingText(legacyMappingText);
-    } catch (err) {
-      setLegacyMsg((err as Error).message);
-      return;
-    }
-    if (!window.confirm(
-      `Create ${allocation.total_rows.toLocaleString()} library records? ` +
-      `Only ${allocation.new_pending.toLocaleString()} newer favorites will be queued for download. ` +
-      "No media files will be changed.",
-    )) return;
-    setLegacyBusy(true);
-    setLegacyMsg("Creating the legacy library database…");
-    try {
-      const result = await api.legacyBootstrapApply(
-        legacyOldExport,
-        legacyCurrentExport,
-        legacyCheckpoint,
-        legacyPreview.token,
-        segments,
-      );
-      setLegacyMsg(
-        `Bootstrap complete: ${result.local_done.toLocaleString()} local videos matched, ` +
-        `${result.physical_gaps_ignored.toLocaleString()} missing filenames and ` +
-        `${result.reused_number_markers.toLocaleString()} reused-number marker preserved, ` +
-        `${result.offloaded.toLocaleString()} older favorites marked offloaded, and ` +
-        `${result.new_pending.toLocaleString()} newer favorites queued.`,
-      );
-      setLegacyPreview(null);
-      setLegacyVerified(false);
-      await Promise.all([refresh(), refreshLibrary(), refreshStatistics(), refreshRunHistory()]);
-    } catch (err) {
-      setLegacyMsg(`Bootstrap failed: ${(err as Error).message}`);
-    } finally {
-      setLegacyBusy(false);
-    }
-  }
-
   async function updateLibrary(settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480 }) {
     const next = await api.updateLibrarySettings(settings).catch(() => null);
     if (next) setLibrary(next);
@@ -209,7 +119,7 @@ export function Dashboard() {
     if (a === "enrich") setEnrichmentProgress(null);
     try {
       const result = await api.syncAction(a);
-      if ("started" in result && result.started === false) setRunActionError("Another archive job is already running.");
+      if ("started" in result && result.started === false) setRunActionError("Another Archive run is already active.");
     } catch (error) {
       setRunActionError((error as Error).message);
     } finally {
@@ -235,58 +145,6 @@ export function Dashboard() {
       refresh();
     } catch (err) {
       setVerifyMsg((err as Error).message);
-    }
-  }
-
-  async function refreshOffloadSuggestion(prefillRange = false) {
-    const info = await api.offloadSuggestion();
-    setOffloadInfo(info);
-    if (prefillRange && info.suggested) {
-      setOffloadFrom(String(info.suggested.first_id));
-      setOffloadTo(String(info.suggested.last_id));
-    }
-  }
-
-  async function checkOffloadSuggestion() {
-    setOffloadMsg("Checking…");
-    try {
-      await refreshOffloadSuggestion(true);
-      setOffloadMsg(null);
-    } catch (err) {
-      setOffloadMsg((err as Error).message);
-    }
-  }
-
-  async function markOffloadRange(action: "offload" | "unoffload") {
-    const first = Number(offloadFrom);
-    const last = Number(offloadTo);
-    if (!Number.isInteger(first) || !Number.isInteger(last) || first < 1 || last < first) {
-      setOffloadMsg("Enter a valid range (from ≤ to).");
-      return;
-    }
-    setOffloadBusy(true);
-    setOffloadMsg(null);
-    try {
-      const range = { first_id: first, last_id: last };
-      const preview = await api.markItems(action, { range }, true);
-      if (!preview.matched) {
-        setOffloadMsg("No favorites in that range need changing.");
-        return;
-      }
-      const verb = action === "offload" ? "mark" : "unmark";
-      if (!window.confirm(`This will ${verb} ${preview.matched} favorite${preview.matched === 1 ? "" : "s"} ${action === "offload" ? "as offloaded" : "as no longer offloaded"} — proceed?`)) return;
-      const result = await api.markItems(action, { range });
-      await Promise.all([
-        refreshOffloadSuggestion(),
-        verifyReport ? api.verify().then(setVerifyReport) : Promise.resolve(),
-        refreshStatistics(),
-      ]);
-      setOffloadMsg(`${result.changed} favorite${result.changed === 1 ? "" : "s"} updated.`);
-      refresh();
-    } catch (err) {
-      setOffloadMsg((err as Error).message);
-    } finally {
-      setOffloadBusy(false);
     }
   }
 
@@ -336,147 +194,10 @@ export function Dashboard() {
           {importMsg && <p className="mt-3 text-sm text-ink-dim">{importMsg}</p>}
         </section>
 
-        <details className="group mb-4 rounded-[var(--radius-media)] border border-line bg-surface">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-semibold text-ink">
-            <span>First-time setup from the old CLI</span>
-            <CaretDown size={16} className="text-ink-faint transition group-open:rotate-180" />
-          </summary>
-          <div className="border-t border-line px-5 py-5">
-            <p className="text-sm leading-relaxed text-ink-dim">
-              Use this once if your numbered videos were downloaded before this app had a database. It compares your old
-              export, latest export, checkpoint, and the MP4 numbers already in <code>downloads</code>. Preview is read-only;
-              apply creates database records only. It never renames, deletes, moves, indexes, or downloads media, and it does
-              not need your NAS to be connected.
-            </p>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
-              <LegacyFileInput
-                label="Old export"
-                hint="From the last CLI run"
-                accept="application/json,.json"
-                file={legacyOldExport}
-                onChange={(file) => { setLegacyOldExport(file); resetLegacyPreview(); }}
-              />
-              <LegacyFileInput
-                label="Current export"
-                hint="Latest favorites export"
-                accept="application/json,.json"
-                file={legacyCurrentExport}
-                onChange={(file) => { setLegacyCurrentExport(file); resetLegacyPreview(); }}
-              />
-              <LegacyFileInput
-                label="Checkpoint"
-                hint="last_downloaded_link.txt"
-                accept="text/plain,.txt"
-                file={legacyCheckpoint}
-                onChange={(file) => { setLegacyCheckpoint(file); resetLegacyPreview(); }}
-              />
-            </div>
-
-            <label className="mt-4 block text-sm text-ink-dim">
-              <span className="font-medium text-ink">Mapping segments</span>
-              <span className="mt-0.5 block text-xs leading-relaxed text-ink-faint">
-                Leave blank for one uninterrupted CLI run. If verified samples show a restart changed numbering, enter each run as <code>first-file:offset</code>, separated by commas. Example: <code>20968:5833, 22315:5832</code>.
-              </span>
-              <input
-                value={legacyMappingText}
-                onChange={(event) => { setLegacyMappingText(event.target.value); resetLegacyPreview(); }}
-                placeholder="Automatically infer one segment"
-                spellCheck={false}
-                className="mt-2 h-10 w-full rounded border border-line bg-elevated px-3 font-mono text-sm text-ink placeholder:text-ink-faint"
-              />
-            </label>
-
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <Button
-                variant="ghost"
-                disabled={running || legacyBusy || !legacyOldExport || !legacyCurrentExport || !legacyCheckpoint}
-                onClick={previewLegacyBootstrap}
-              >
-                <ArrowClockwise size={16} /> Preview mapping
-              </Button>
-              {legacyMsg && <p role="status" aria-live="polite" className="text-sm text-ink-dim">{legacyMsg}</p>}
-            </div>
-
-            {legacyPreview && (
-              <div className="mt-5 rounded-[var(--radius-control)] border border-line bg-elevated p-4">
-                <h3 className="text-sm font-semibold text-ink">Validated migration preview</h3>
-                <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <Stat
-                    label={legacyPreview.segments.length > 1 ? "Mapping segments" : "Inferred offset"}
-                    value={legacyPreview.segments.length > 1 ? legacyPreview.segments.length : legacyPreview.offset.toLocaleString()}
-                    hint={legacyPreview.segments.map((segment) => segment.offset.toLocaleString()).join(" → ")}
-                  />
-                  <Stat label="Local videos" value={legacyPreview.inventory.local_files.toLocaleString()} hint={`#${legacyPreview.inventory.lowest_number}–#${legacyPreview.inventory.highest_number}`} />
-                  <Stat label="Legacy gaps" value={legacyPreview.inventory.gaps.toLocaleString()} hint={`${legacyPreview.inventory.physical_gaps} filenames + ${legacyPreview.inventory.reused_number_markers} reused`} />
-                  <Stat label="New downloads" value={legacyPreview.allocation.new_pending.toLocaleString()} hint="after the checkpoint" />
-                </div>
-
-                <div className="mt-4 grid gap-2 text-sm text-ink-dim sm:grid-cols-2">
-                  <p>Old export: <strong className="text-ink">{legacyPreview.exports.old_favorites.toLocaleString()}</strong> favorites</p>
-                  <p>Current export: <strong className="text-ink">{legacyPreview.exports.current_favorites.toLocaleString()}</strong> favorites</p>
-                  <p>Reserved NAS namespace: <strong className="text-ink">#{legacyPreview.allocation.reserved_physical_first}–#{legacyPreview.allocation.reserved_physical_last}</strong></p>
-                  <p>Older offloaded records: <strong className="text-ink">{legacyPreview.allocation.offloaded.toLocaleString()}</strong></p>
-                  <p>Local mapped positions: <strong className="text-ink">{legacyPreview.inventory.mapped_old_position_first.toLocaleString()}–{legacyPreview.inventory.mapped_old_position_last.toLocaleString()}</strong></p>
-                  <p>Next archive number: <strong className="text-ink">#{legacyPreview.allocation.next_archive_number.toLocaleString()}</strong></p>
-                </div>
-
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full min-w-[36rem] text-left text-xs">
-                    <thead className="text-ink-faint">
-                      <tr><th className="pb-2 pr-3 font-medium">Physical files</th><th className="pb-2 pr-3 font-medium">Export positions</th><th className="pb-2 font-medium">Offset</th></tr>
-                    </thead>
-                    <tbody className="text-ink-dim">
-                      {legacyPreview.segments.map((segment) => (
-                        <tr key={segment.start_id} className="border-t border-line">
-                          <td className="py-2 pr-3 text-ink">#{segment.start_id}–#{segment.end_id}</td>
-                          <td className="py-2 pr-3">{segment.first_position.toLocaleString()}–{segment.last_position.toLocaleString()}</td>
-                          <td className="py-2">{segment.offset.toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full min-w-[36rem] text-left text-xs">
-                    <thead className="text-ink-faint">
-                      <tr><th className="pb-2 pr-3 font-medium">Local file</th><th className="pb-2 pr-3 font-medium">Old export position</th><th className="pb-2 font-medium">Favorite link</th></tr>
-                    </thead>
-                    <tbody className="text-ink-dim">
-                      {legacyPreview.samples.map((sample) => (
-                        <tr key={sample.archive_number} className="border-t border-line">
-                          <td className="py-2 pr-3 text-ink">
-                            <a className="text-active hover:underline" href={`/media/${sample.archive_number}.mp4`} target="_blank" rel="noreferrer">#{sample.archive_number}.mp4</a>
-                          </td>
-                          <td className="py-2 pr-3">#{sample.old_export_position}</td>
-                          <td className="max-w-md truncate py-2">
-                            <a className="text-active hover:underline" href={sample.link} target="_blank" rel="noreferrer">{sample.link}</a>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <label className="mt-4 flex cursor-pointer items-start gap-2 text-sm text-ink-dim">
-                  <input
-                    className="mt-0.5"
-                    type="checkbox"
-                    checked={legacyVerified}
-                    onChange={(event) => setLegacyVerified(event.target.checked)}
-                  />
-                  <span>I verified that the sample links match those numbered local videos and understand this requires an empty library database.</span>
-                </label>
-                <div className="mt-4">
-                  <Button disabled={running || legacyBusy || !legacyVerified} onClick={applyLegacyBootstrap}>
-                    Apply legacy bootstrap
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        </details>
+        <LegacyBootstrapPanel
+          running={running}
+          onApplied={() => Promise.all([refresh(), refreshLibrary(), refreshStatistics(), refreshRunHistory()]).then(() => {})}
+        />
 
         <details open={metadataOpen} onToggle={(event) => setMetadataOpen(event.currentTarget.open)} className="group mb-4 rounded-[var(--radius-media)] border border-line bg-surface">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-semibold text-ink"><span>Gallery search metadata{running && status?.phase === "enrich" ? <span className="ml-2 text-xs font-normal text-active">running</span> : null}</span><CaretDown size={16} className="text-ink-faint transition group-open:rotate-180" /></summary>
@@ -577,40 +298,14 @@ export function Dashboard() {
           )}
         </section>
 
-        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-ink">Offloaded media</h2>
-              <p className="mt-1 text-sm text-ink-dim">If older favorites live on external storage (a NAS or drive), mark them offloaded so Sync and integrity checks stop treating them as missing. The external storage does not need to be connected, and nothing is downloaded or deleted.</p>
-            </div>
-            <Button variant="ghost" disabled={offloadBusy} onClick={checkOffloadSuggestion}>
-              <ArrowClockwise size={16} /> Check
-            </Button>
-          </div>
-          {offloadInfo && (
-            <div className="mt-3 space-y-3 text-sm text-ink-dim">
-              {offloadInfo.suggested ? (
-                <p>
-                  Your earliest local video is #{offloadInfo.earliest_local}. Mark favorites {offloadInfo.suggested.first_id}–{offloadInfo.suggested.last_id} as offloaded?
-                  {" "}({offloadInfo.range_undownloaded} of {offloadInfo.range_total} in the range are pending or failed{offloadInfo.range_already_offloaded ? `, ${offloadInfo.range_already_offloaded} already marked` : ""}.)
-                </p>
-              ) : (
-                <p>No offload range to suggest{offloadInfo.earliest_local != null ? ` — your earliest local video is #${offloadInfo.earliest_local}` : ""}.</p>
-              )}
-              <div className="flex flex-wrap items-end gap-2">
-                <label className="text-xs text-ink-dim">From #
-                  <input value={offloadFrom} onChange={(e) => setOffloadFrom(e.target.value)} type="number" min="1" className="mt-1 block h-9 w-28 rounded border border-line bg-elevated px-2 text-sm text-ink" />
-                </label>
-                <label className="text-xs text-ink-dim">To #
-                  <input value={offloadTo} onChange={(e) => setOffloadTo(e.target.value)} type="number" min="1" className="mt-1 block h-9 w-28 rounded border border-line bg-elevated px-2 text-sm text-ink" />
-                </label>
-                <Button disabled={running || offloadBusy || !offloadFrom || !offloadTo} onClick={() => markOffloadRange("offload")}>Mark range offloaded</Button>
-                <Button variant="ghost" disabled={running || offloadBusy || !offloadFrom || !offloadTo} onClick={() => markOffloadRange("unoffload")}>Unmark range</Button>
-              </div>
-            </div>
-          )}
-          {offloadMsg && <p className="mt-2 text-sm text-ink-dim">{offloadMsg}</p>}
-        </section>
+        <OffloadPanel
+          running={running}
+          onChanged={() => Promise.all([
+            verifyReport ? api.verify().then(setVerifyReport) : Promise.resolve(),
+            refreshStatistics(),
+            refresh(),
+          ]).then(() => {})}
+        />
 
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -734,34 +429,3 @@ export function Dashboard() {
   );
 }
 
-function Stat({ label, value, hint }: { label: string; value: string | number; hint: string }) {
-  return <div className="rounded-[var(--radius-control)] border border-line bg-elevated px-3 py-3"><p className="text-xs text-ink-faint">{label}</p><p className="mt-1 truncate text-lg font-semibold text-ink">{value}</p><p className="mt-0.5 truncate text-xs text-ink-dim">{hint}</p></div>;
-}
-
-function LegacyFileInput({
-  label,
-  hint,
-  accept,
-  file,
-  onChange,
-}: {
-  label: string;
-  hint: string;
-  accept: string;
-  file: File | null;
-  onChange: (file: File | null) => void;
-}) {
-  return (
-    <label className="block rounded-[var(--radius-control)] border border-line bg-elevated p-3 text-sm">
-      <span className="font-medium text-ink">{label}</span>
-      <span className="mt-0.5 block text-xs text-ink-faint">{hint}</span>
-      <input
-        type="file"
-        accept={accept}
-        className="mt-3 block w-full min-w-0 text-xs text-ink-dim file:mr-2 file:rounded file:border-0 file:bg-surface file:px-2 file:py-1.5 file:text-xs file:text-ink"
-        onChange={(event) => onChange(event.target.files?.[0] ?? null)}
-      />
-      {file && <span className="mt-2 block truncate text-xs text-ok">{file.name}</span>}
-    </label>
-  );
-}

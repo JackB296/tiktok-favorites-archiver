@@ -463,7 +463,8 @@ export function Gallery() {
       setItems(page.items);
       setNextCursor(page.next_cursor);
       setSelectedIds(new Set());
-      setRecoveryMessage(`${result.changed} favorite${result.changed === 1 ? "" : "s"} updated.`);
+      const requeued = result.requeued ? ` ${result.requeued} had no local video and returned to the download queue.` : "";
+      setRecoveryMessage(`${result.changed} favorite${result.changed === 1 ? "" : "s"} updated.${requeued}`);
     } catch (error) {
       setRecoveryMessage((error as Error).message);
     } finally {

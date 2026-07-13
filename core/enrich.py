@@ -83,7 +83,7 @@ def enrich_items(conn, getter=None, limiter=None, progress=None, should_continue
 
 
 def run_enrichment(conn, download_dir, progress=None, wait=None, getter=None, limiter=None):
-    """Fetch missing Gallery search metadata as a pausable Archive job."""
+    """Fetch missing Gallery search metadata as a pausable Archive run."""
     if wait is None:
         wait = lambda: time.sleep(0.1)  # noqa: E731
 

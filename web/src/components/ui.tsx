@@ -56,6 +56,10 @@ export function StatusBadge({ status }: { status: Status }) {
   );
 }
 
+export function Stat({ label, value, hint }: { label: string; value: string | number; hint: string }) {
+  return <div className="rounded-[var(--radius-control)] border border-line bg-elevated px-3 py-3"><p className="text-xs text-ink-faint">{label}</p><p className="mt-1 truncate text-lg font-semibold text-ink">{value}</p><p className="mt-0.5 truncate text-xs text-ink-dim">{hint}</p></div>;
+}
+
 export function Skeleton({ className }: { className?: string }) {
   return <div className={cx("animate-pulse rounded-[var(--radius-control)] bg-elevated", className)} />;
 }

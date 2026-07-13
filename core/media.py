@@ -9,6 +9,15 @@ import shutil
 import tempfile
 
 
+def finished_movie_ids(names):
+    """Sorted archive numbers of finished ``<n>.mp4`` files among directory entries."""
+    return sorted(
+        int(name[:-4])
+        for name in names
+        if name.endswith(".mp4") and name[:-4].isdigit()
+    )
+
+
 def recover_slideshow_assets(deps, download_dir, item_id, result, on_ready):
     """Recover raw slideshow assets, then call ``on_ready(images, audio)``.
 

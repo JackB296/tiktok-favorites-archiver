@@ -14,11 +14,10 @@ import { formatMediaTime } from "../lib/mediaPresentation.js";
  * audio. Nothing plays unless `active`.
  */
 export function PostMedia({ item, active, preload = false }: { item: Item; active: boolean; preload?: boolean }) {
-  const { muted, setMuted, volume, autoLevel, setAutoGain, paused, togglePaused } = usePlayback();
   if (!active && !preload) return <MediaPlaceholder />;
   switch (feedMediaKind(item)) {
-    case "video": return <VideoMedia src={item.video_url!} active={active} muted={muted} onAutoplayFallback={() => setMuted(true)} volume={volume} autoLevel={autoLevel} onAutoGain={setAutoGain} paused={paused} onTogglePaused={togglePaused} preload={preload} />;
-    case "slideshow": return <SlideMedia images={item.images} audio={item.audio} active={active} muted={muted} volume={volume} autoLevel={autoLevel} onAutoGain={setAutoGain} paused={paused} onTogglePaused={togglePaused} />;
+    case "video": return <VideoMedia src={item.video_url!} active={active} preload={preload} />;
+    case "slideshow": return <SlideMedia images={item.images} audio={item.audio} active={active} />;
     case "offloaded": return <OffloadedExternally />;
     case "expired": return <UnavailableOriginal />;
     default: return <div className="flex h-full w-full items-center justify-center text-sm text-ink-faint">no media yet</div>;
@@ -37,7 +36,8 @@ function MediaPlaceholder() {
   return <div aria-hidden="true" className="h-full w-full bg-black" />;
 }
 
-function VideoMedia({ src, active, muted, onAutoplayFallback, volume, autoLevel, onAutoGain, paused, onTogglePaused, preload }: { src: string; active: boolean; muted: boolean; onAutoplayFallback: () => void; volume: number; autoLevel: boolean; onAutoGain: (gain: number) => void; paused: boolean; onTogglePaused: () => void; preload: boolean }) {
+function VideoMedia({ src, active, preload }: { src: string; active: boolean; preload: boolean }) {
+  const { muted, setMuted, volume, autoLevel, setAutoGain, paused, togglePaused } = usePlayback();
   const ref = useRef<HTMLVideoElement>(null);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [ready, setReady] = useState(false);
@@ -70,7 +70,7 @@ function VideoMedia({ src, active, muted, onAutoplayFallback, volume, autoLevel,
   useEffect(() => {
     if (ref.current) ref.current.muted = muted;
   }, [muted]);
-  useMediaVolume(ref, active, volume, autoLevel, onAutoGain);
+  useMediaVolume(ref, active, volume, autoLevel, setAutoGain);
   const playWithSound = async () => {
     const media = ref.current;
     if (!media) return;
@@ -80,7 +80,7 @@ function VideoMedia({ src, active, muted, onAutoplayFallback, volume, autoLevel,
       setAutoplayBlocked(false);
     } catch {
       if (muted) return;
-      onAutoplayFallback();
+      setMuted(true);
       media.muted = true;
       await media.play().then(() => setAutoplayBlocked(false)).catch(() => {});
     }
@@ -101,7 +101,7 @@ function VideoMedia({ src, active, muted, onAutoplayFallback, volume, autoLevel,
       loop
       playsInline
       muted
-      onClick={active ? onTogglePaused : undefined}
+      onClick={active ? togglePaused : undefined}
       onCanPlay={() => { setReady(true); setWaiting(false); setLoadError(false); }}
       onPlaying={() => { setReady(true); setWaiting(false); }}
       onWaiting={() => active && setWaiting(true)}
@@ -117,7 +117,7 @@ function VideoMedia({ src, active, muted, onAutoplayFallback, volume, autoLevel,
     {active && loadError && <div role="alert" className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-control)] border border-white/15 bg-black/70 px-4 py-3 text-sm text-white/80">Video could not be loaded.</div>}
     {active && autoplayBlocked && <button type="button" onClick={() => void playWithSound()} className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"><Play size={16} weight="fill" /> {muted ? "Play video" : "Play with sound"}</button>}
     {active && ready && <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex translate-y-2 items-center gap-2 rounded-[var(--radius-control)] border border-white/10 bg-black/70 px-2.5 py-2 text-white opacity-0 shadow-lg backdrop-blur-md transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
-      <button type="button" onClick={onTogglePaused} aria-label={paused ? "Play video" : "Pause video"} className="pointer-events-auto rounded-md p-1.5 hover:bg-white/15">{paused ? <Play size={16} weight="fill" /> : <Pause size={16} weight="fill" />}</button>
+      <button type="button" onClick={togglePaused} aria-label={paused ? "Play video" : "Pause video"} className="pointer-events-auto rounded-md p-1.5 hover:bg-white/15">{paused ? <Play size={16} weight="fill" /> : <Pause size={16} weight="fill" />}</button>
       <span className="tabular w-10 text-right text-[10px] text-white/75">{formatMediaTime(currentTime)}</span>
       <input type="range" min="0" max={Math.max(duration, 0.01)} step="0.1" value={Math.min(currentTime, Math.max(duration, 0.01))} onChange={(event) => seek(Number(event.target.value))} aria-label="Video progress" className="pointer-events-auto h-1 min-w-0 flex-1 cursor-pointer accent-white" />
       <span className="tabular w-10 text-[10px] text-white/75">{formatMediaTime(duration)}</span>
@@ -133,27 +133,8 @@ function MediaLoading() {
   </div>;
 }
 
-function SlideMedia({
-  images,
-  audio,
-  active,
-  muted,
-  volume,
-  autoLevel,
-  onAutoGain,
-  paused,
-  onTogglePaused,
-}: {
-  images: string[];
-  audio: string | null;
-  active: boolean;
-  muted: boolean;
-  volume: number;
-  autoLevel: boolean;
-  onAutoGain: (gain: number) => void;
-  paused: boolean;
-  onTogglePaused: () => void;
-}) {
+function SlideMedia({ images, audio, active }: { images: string[]; audio: string | null; active: boolean }) {
+  const { muted, volume, autoLevel, setAutoGain, paused, togglePaused } = usePlayback();
   const [idx, setIdx] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -167,14 +148,14 @@ function SlideMedia({
       a.currentTime = 0;
     }
   }, [active, muted, paused]);
-  useMediaVolume(audioRef, active, volume, autoLevel, onAutoGain);
+  useMediaVolume(audioRef, active, volume, autoLevel, setAutoGain);
 
   const go = (delta: number) => setIdx((i) => (i + delta + images.length) % images.length);
 
   return (
     <div className="relative flex h-full w-full items-center justify-center">
       <img src={images[idx]} alt={`Slide ${idx + 1} of ${images.length}`} className="h-full w-full object-contain" />
-      {active && <button type="button" onClick={onTogglePaused} aria-label={paused ? "Resume slideshow audio" : "Pause slideshow audio"} className="absolute inset-0 z-[1] cursor-pointer"><span className="sr-only">{paused ? "Resume slideshow audio" : "Pause slideshow audio"}</span></button>}
+      {active && <button type="button" onClick={togglePaused} aria-label={paused ? "Resume slideshow audio" : "Pause slideshow audio"} className="absolute inset-0 z-[1] cursor-pointer"><span className="sr-only">{paused ? "Resume slideshow audio" : "Pause slideshow audio"}</span></button>}
       {audio && <audio ref={audioRef} src={audio} loop />}
       {images.length > 1 && (
         <>
