@@ -63,6 +63,7 @@ export interface ProgressEvent {
   completed?: number;
   total?: number;
   enriched?: number;
+  unavailable?: number;
 }
 
 export interface ImportResult {

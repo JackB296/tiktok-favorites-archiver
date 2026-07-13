@@ -10,6 +10,7 @@
     "lint": "tsc --noEmit",
     "test:virtual-grid": "node scripts/test-virtual-grid.mjs",
     "test:viewer-shortcuts": "node scripts/test-viewer-shortcuts.mjs",
+    "test:ui-behavior": "node scripts/test-ui-behavior.mjs",
     "test:feed-items": "node scripts/test-feed-items.mjs",
     "test:loading-presentation": "node scripts/test-loading-presentation.mjs",
     "test:legacy-bootstrap": "node scripts/test-legacy-bootstrap.mjs"

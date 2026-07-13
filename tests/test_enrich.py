@@ -68,10 +68,24 @@ def test_enrichment_job_reports_progress_and_stops_between_items():
     assert result == 1
     assert store.get_item(conn, 1)["caption"] == "first caption"
     assert store.get_item(conn, 2)["caption"] is None
-    assert events[0] == {"event": "enrichment", "completed": 0, "total": 2, "enriched": 0}
+    assert events[0] == {"event": "enrichment", "completed": 0, "total": 2, "enriched": 0, "unavailable": 0}
     assert events[-1]["event"] == "enrichment"
     assert events[-1]["completed"] == 1
     assert events[-1]["enriched"] == 1
+    assert events[-1]["unavailable"] == 0
+
+
+def test_enrichment_progress_counts_links_that_return_no_metadata():
+    conn = store.init_db(store.connect(":memory:"))
+    store.upsert_link(conn, "https://tiktok.com/a")
+    events = []
+    limiter = cobalt.RateLimiter(1000, 1000, now=lambda: 0.0, sleep=lambda s: None)
+
+    enrich.enrich_items(conn, getter=lambda _link: None, limiter=limiter, progress=events.append)
+
+    assert events[-1]["completed"] == 1
+    assert events[-1]["enriched"] == 0
+    assert events[-1]["unavailable"] == 1
 
 
 if __name__ == "__main__":

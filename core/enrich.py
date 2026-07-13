@@ -60,8 +60,9 @@ def enrich_items(conn, getter=None, limiter=None, progress=None, should_continue
         limiter = RateLimiter(config.RATE_MAX_CALLS, config.RATE_PERIOD)
     items = items_needing_enrichment(conn)
     enriched = 0
+    unavailable = 0
     if progress:
-        progress({"event": "enrichment", "completed": 0, "total": len(items), "enriched": 0})
+        progress({"event": "enrichment", "completed": 0, "total": len(items), "enriched": 0, "unavailable": 0})
     for completed, item in enumerate(items, start=1):
         if should_continue and not should_continue():
             break
@@ -74,7 +75,7 @@ def enrich_items(conn, getter=None, limiter=None, progress=None, should_continue
             progress({
                 "event": "enrichment", "id": item["id"], "caption": caption,
                 "author": author, "completed": completed, "total": len(items),
-                "enriched": enriched,
+                "enriched": enriched, "unavailable": unavailable,
             })
     return enriched
 
@@ -106,6 +107,8 @@ def run_cli(argv=None):
     conn = store.init_db(store.connect(args.db))
 
     def progress(event):
+        if "id" not in event:
+            return
         got = "caption" if event.get("caption") else "no metadata"
         logging.info(f"[{event['id']}] {got}")
 

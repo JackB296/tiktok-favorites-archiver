@@ -20,6 +20,9 @@ import { EmptyState, HelpLabel, Skeleton, cx } from "../components/ui";
 import { VirtualGalleryGrid } from "../components/VirtualGalleryGrid";
 import { canLoadNextPage } from "../lib/virtualGrid";
 import { useDelayedLoading } from "../lib/useDelayedLoading";
+import { shouldLoadMore } from "../lib/galleryPaging.js";
+import { readGalleryDetails } from "../lib/galleryPresentation.js";
+import type { GalleryDetails } from "../lib/galleryPresentation.js";
 
 const FILTERS = [
   { key: "", label: "All", help: "Show every favorite that matches the search and advanced filters." },
@@ -56,7 +59,6 @@ function filtersToSearchParams(filters: GalleryPresetFilters) {
 export function Gallery() {
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<() => void>(() => {});
   const loadingMoreRef = useRef(false);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -108,6 +110,8 @@ export function Gallery() {
   const [playbackQueueName, setPlaybackQueueName] = useState("");
   const [playbackQueueMessage, setPlaybackQueueMessage] = useState<string | null>(null);
   const [density, setDensity] = useState<GalleryDensity>(() => localStorage.getItem("gallery-density") === "comfortable" ? "comfortable" : "compact");
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [cardDetails, setCardDetails] = useState<GalleryDetails>(() => readGalleryDetails(localStorage.getItem("gallery-card-details")));
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
@@ -309,18 +313,22 @@ export function Gallery() {
   });
 
   useEffect(() => {
-    const sentinel = loadMoreSentinelRef.current;
     const scroller = scrollRef.current;
-    if (!sentinel || !scroller || nextCursor == null || !("IntersectionObserver" in window)) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) loadMoreRef.current();
-      },
-      { root: scroller, rootMargin: "800px 0px" },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [nextCursor, loadingMore]);
+    if (!scroller || nextCursor == null) return;
+    let frame = 0;
+    const maybeLoad = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        if (shouldLoadMore(scroller.scrollTop, scroller.clientHeight, scroller.scrollHeight, 1_600)) loadMoreRef.current();
+      });
+    };
+    scroller.addEventListener("scroll", maybeLoad, { passive: true });
+    maybeLoad();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      scroller.removeEventListener("scroll", maybeLoad);
+    };
+  }, [items?.length, loadingMore, nextCursor]);
 
   async function copyFilteredLink() {
     try {
@@ -334,6 +342,14 @@ export function Gallery() {
   function changeDensity(next: GalleryDensity) {
     setDensity(next);
     localStorage.setItem("gallery-density", next);
+  }
+
+  function changeCardDetail(key: keyof GalleryDetails, shown: boolean) {
+    setCardDetails((current) => {
+      const next = { ...current, [key]: shown };
+      localStorage.setItem("gallery-card-details", JSON.stringify(next));
+      return next;
+    });
   }
 
   function clearAllFilters() {
@@ -561,6 +577,7 @@ export function Gallery() {
             </button>
           ))}
           <button onClick={() => changeDensity(density === "compact" ? "comfortable" : "compact")} title={density === "compact" ? "Compact thumbnails (switch to comfortable)" : "Comfortable thumbnails (switch to compact)"} aria-label={density === "compact" ? "Use comfortable thumbnail density" : "Use compact thumbnail density"} aria-pressed={density === "compact"} className={cx("rounded-full border p-1.5 transition", density === "compact" ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}><SquaresFour size={16} /></button>
+          <button onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen} className={cx("rounded-full border px-3 py-1.5 text-xs font-medium transition", detailsOpen ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>Card details</button>
           <button onClick={() => selectionMode ? leaveSelectionMode() : enterSelectionMode()} aria-pressed={selectionMode} className={cx("rounded-full border px-3 py-1.5 text-xs font-medium transition", selectionMode ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>{selectionMode ? "Done selecting" : "Select"}</button>
           <button onClick={toggleRecoveryInbox} disabled={recoveryInboxBusy} aria-pressed={recovery} className={cx("rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:opacity-40", recovery ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>{recoveryInboxBusy ? "Checking…" : recovery ? "Recovery inbox" : "Recovery"}</button>
           <button onClick={() => { if (inspectionMode) { setInspectionMode(false); setInspectedItem(null); } else { leaveSelectionMode(); setInspectionMode(true); } }} aria-pressed={inspectionMode} className={cx("rounded-full border p-1.5 transition", inspectionMode ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")} aria-label={inspectionMode ? "Leave inspect mode" : "Inspect Gallery metadata"}><Info size={16} /></button>
@@ -569,6 +586,20 @@ export function Gallery() {
       </div>
 
       {recoveryInboxMessage && <p className="mb-5 rounded-[var(--radius-control)] border border-line bg-surface px-3 py-2.5 text-sm text-ink-dim" role="status">{recoveryInboxMessage}</p>}
+
+      {detailsOpen && <section className="mb-5 rounded-[var(--radius-control)] border border-line bg-surface px-3 py-3" aria-label="Gallery card details">
+        <p className="mb-2 text-xs text-ink-dim">Choose what appears over Gallery previews. Resolution is hidden by default.</p>
+        <div className="flex flex-wrap gap-x-5 gap-y-2">
+          {([
+            ["archiveNumber", "Favorite number"],
+            ["duration", "Duration"],
+            ["resolution", "Resolution"],
+            ["author", "Creator"],
+            ["caption", "Caption"],
+            ["technical", "Codec & file size"],
+          ] as Array<[keyof GalleryDetails, string]>).map(([key, label]) => <label key={key} className="flex items-center gap-2 text-xs text-ink"><input type="checkbox" checked={cardDetails[key]} onChange={(event) => changeCardDetail(key, event.target.checked)} /> {label}</label>)}
+        </div>
+      </section>}
 
       {selectionMode && <section className="mb-5 flex flex-wrap items-center gap-3 rounded-[var(--radius-control)] border border-line bg-surface px-3 py-2.5 text-sm text-ink-dim" aria-live="polite">
         <span>{selectedIds.size} selected (up to 100)</span>
@@ -717,18 +748,12 @@ export function Gallery() {
             items={items}
             density={density}
             scrollRef={scrollRef}
-            renderItem={(it) => <Thumb key={it.id} item={it} selecting={selectionMode} inspecting={inspectionMode} selected={selectedIds.has(it.id)} onClick={() => selectionMode ? toggleSelection(it.id) : inspectionMode ? setInspectedItem(it) : navigate(`/?item=${it.id}`)} />}
+            renderItem={(it) => <Thumb key={it.id} item={it} details={cardDetails} selecting={selectionMode} inspecting={inspectionMode} selected={selectedIds.has(it.id)} onClick={() => selectionMode ? toggleSelection(it.id) : inspectionMode ? setInspectedItem(it) : navigate(`/?item=${it.id}`)} />}
           />
           {nextCursor != null && (
-            <div ref={loadMoreSentinelRef} className="mt-6 flex flex-col items-center gap-2" aria-live="polite">
-              <button
-                onClick={loadMore}
-                disabled={loadingMore}
-                className="rounded-[var(--radius-control)] border border-line px-4 py-2 text-sm text-ink-dim transition hover:text-ink disabled:opacity-50"
-              >
-                {loadingMore ? "Loading…" : "Load more"}
-              </button>
-              <p className="text-xs text-ink-faint">More favorites load automatically as you scroll.</p>
+            <div className="mt-6 flex items-center justify-center gap-2 py-3 text-xs text-ink-faint" aria-live="polite" aria-busy={loadingMore}>
+              <span aria-hidden="true" className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" />
+              <span>{loadingMore ? "Loading more favorites…" : "More favorites load as you scroll."}</span>
             </div>
           )}
         </>
@@ -755,7 +780,7 @@ function formatSize(bytes: number | null) {
   return bytes >= 1_000_000_000 ? `${(bytes / 1_000_000_000).toFixed(1)} GB` : `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
-function Thumb({ item, onClick, selecting = false, inspecting = false, selected = false }: { item: Item; onClick: () => void; selecting?: boolean; inspecting?: boolean; selected?: boolean }) {
+function Thumb({ item, details, onClick, selecting = false, inspecting = false, selected = false }: { item: Item; details: GalleryDetails; onClick: () => void; selecting?: boolean; inspecting?: boolean; selected?: boolean }) {
   const duration = formatDuration(item.duration_s);
   const resolution = item.media_width && item.media_height ? `${item.media_width}×${item.media_height}` : null;
   const size = formatSize(item.media_size);
@@ -784,13 +809,13 @@ function Thumb({ item, onClick, selecting = false, inspecting = false, selected 
         <div className="tabular flex h-full w-full items-center justify-center text-ink-faint">#{item.id}</div>
       )}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
-      <span className="tabular absolute left-2 top-2 rounded bg-black/50 px-1.5 py-0.5 text-[10px] text-white/80">
+      {details.archiveNumber && <span className="tabular absolute left-2 top-2 rounded bg-black/50 px-1.5 py-0.5 text-[10px] text-white/80">
         #{item.id}
-      </span>
+      </span>}
       {selecting && <span aria-hidden="true" className={cx("absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border text-xs", selected ? "border-accent bg-accent text-on-accent" : "border-white/70 bg-black/50 text-white/80")}>{selected ? "✓" : ""}</span>}
       {inspecting && <span aria-hidden="true" className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border border-white/70 bg-black/50 text-xs text-white/80"><Info size={12} /></span>}
       <div className={cx("absolute top-2 flex max-w-[65%] flex-col items-end gap-1 text-[10px] text-white/85", selecting || inspecting ? "right-9" : "right-2")}>
-        {(duration || resolution) && <span className="rounded bg-black/50 px-1.5 py-0.5">{[duration, resolution].filter(Boolean).join(" · ")}</span>}
+        {((details.duration && duration) || (details.resolution && resolution)) && <span className="rounded bg-black/50 px-1.5 py-0.5">{[details.duration ? duration : null, details.resolution ? resolution : null].filter(Boolean).join(" · ")}</span>}
         {!selecting && !inspecting && <span className="rounded-full bg-black/40 p-1 opacity-0 transition group-hover:opacity-100"><Play size={12} weight="fill" /></span>}
       </div>
       <div className="absolute inset-x-0 bottom-0 p-2.5">
@@ -798,9 +823,9 @@ function Thumb({ item, onClick, selecting = false, inspecting = false, selected 
         {item.status === "expired" && <p title="TikTok no longer serves the original link. Its archive number is preserved and Sync will not retry it automatically." className="truncate text-[11px] font-medium text-white/60">Original unavailable</p>}
         {item.status === "ignored" && <p title="Marked as don't-download. Its archive number is preserved and Sync will not attempt it." className="truncate text-[11px] font-medium text-white/60">Not downloading</p>}
         {item.offloaded && <span title="Archived on external storage, so it is not flagged as missing here." className="mb-1 inline-block rounded bg-black/50 px-1.5 py-0.5 text-[10px] font-medium text-white/80">offloaded</span>}
-        {item.author && <p className="truncate text-xs font-medium text-white">{item.author}</p>}
-        {item.caption && <p className="truncate text-[11px] text-white/70">{item.caption}</p>}
-        {(item.media_codec || size) && <p className="mt-0.5 truncate text-[10px] text-white/55 opacity-0 transition group-hover:opacity-100">{[item.media_codec, size].filter(Boolean).join(" · ")}</p>}
+        {details.author && item.author && <p className="truncate text-xs font-medium text-white">{item.author}</p>}
+        {details.caption && item.caption && <p className="truncate text-[11px] text-white/70">{item.caption}</p>}
+        {details.technical && (item.media_codec || size) && <p className="mt-0.5 truncate text-[10px] text-white/55 opacity-0 transition group-hover:opacity-100">{[item.media_codec, size].filter(Boolean).join(" · ")}</p>}
       </div>
     </button>
   );

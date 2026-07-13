@@ -15,6 +15,7 @@ import { parseLegacyMappingText } from "../lib/legacyBootstrap";
 import type { OffloadSuggestion } from "../lib/api";
 import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyMappingSegment } from "../lib/types";
 import { Button, StatusBadge, cx } from "../components/ui";
+import { progressLabel } from "../lib/progressPresentation.js";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "ignored", "expired"];
 
@@ -40,6 +41,7 @@ export function Dashboard() {
   const [indexProgress, setIndexProgress] = useState<ProgressEvent | null>(null);
   const [sidecarsProgress, setSidecarsProgress] = useState<ProgressEvent | null>(null);
   const [enrichmentProgress, setEnrichmentProgress] = useState<ProgressEvent | null>(null);
+  const [runActionError, setRunActionError] = useState<string | null>(null);
   const [verifyReport, setVerifyReport] = useState<VerifyReport | null>(null);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
   const [offloadInfo, setOffloadInfo] = useState<OffloadSuggestion | null>(null);
@@ -203,8 +205,16 @@ export function Dashboard() {
   }
 
   async function act(a: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "pause" | "continue" | "stop") {
-    await api.syncAction(a).catch(() => {});
-    refresh();
+    setRunActionError(null);
+    if (a === "enrich") setEnrichmentProgress(null);
+    try {
+      const result = await api.syncAction(a);
+      if ("started" in result && result.started === false) setRunActionError("Another archive job is already running.");
+    } catch (error) {
+      setRunActionError((error as Error).message);
+    } finally {
+      refresh();
+    }
   }
 
   async function runVerify() {
@@ -479,9 +489,10 @@ export function Dashboard() {
             </Button>
           {enrichmentProgress?.event === "enrichment" && (
             <p className="mt-3 text-sm text-ink-dim">
-              {`Checking ${enrichmentProgress.completed ?? 0} of ${enrichmentProgress.total ?? 0} · ${enrichmentProgress.enriched ?? 0} updated`}
+              {`Checking ${enrichmentProgress.completed ?? 0} of ${enrichmentProgress.total ?? 0} · ${enrichmentProgress.enriched ?? 0} updated · ${enrichmentProgress.unavailable ?? 0} returned no metadata`}
             </p>
           )}
+          {runActionError && <p className="mt-3 text-sm text-bad" role="alert">{runActionError}</p>}
           </div>
         </details>
 
@@ -702,7 +713,7 @@ export function Dashboard() {
                 {events.map((e, i) => (
                   <li key={i} className="flex items-center justify-between px-4 py-2 text-sm">
                     {e.event ? (
-                      <span className="text-ink-dim">{e.event === "complete" ? "Run complete" : e.event === "indexing" ? `Indexing ${e.completed ?? 0}/${e.total ?? 0}` : `Error: ${e.error}`}</span>
+                      <span className={e.event === "error" ? "text-bad" : "text-ink-dim"}>{progressLabel(e) ?? e.event}</span>
                     ) : (
                       <>
                         <span className="tabular text-ink-dim">#{e.id}</span>
