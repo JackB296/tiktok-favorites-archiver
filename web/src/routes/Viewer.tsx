@@ -380,7 +380,7 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
           <PostMedia item={item} active={item.id === effectivePlaybackId} preload={shouldPreloadItem(index, activeIndex, item.id, transitionTargetId)} />
 
           <div className="absolute right-4 top-4 flex items-center gap-2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm">
-            {item.has_audio === false && <span title="FFprobe found no audio stream" className="inline-flex items-center gap-1 rounded-full bg-bad/90 px-2 py-1 text-[10px] font-semibold"><SpeakerSlash size={13} weight="fill" />{audioStatus(item.has_audio)}</span>}
+            {item.has_audio === false && <span title="FFprobe found no audio stream" className="inline-flex items-center gap-1 rounded-full bg-bad/90 px-2 py-1 text-[11px] font-semibold"><SpeakerSlash size={13} weight="fill" />{audioStatus(item.has_audio)}</span>}
             <button
               onClick={toggleMuted}
               aria-label={muted ? "Unmute" : "Mute"}
@@ -388,7 +388,7 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
             >
               <Speaker size={20} weight="fill" />
             </button>
-            <label className="flex items-center gap-2 text-[10px] text-white/75">
+            <label className="flex items-center gap-2 text-[11px] text-white/75">
               <span className="sr-only">Playback volume</span>
               <input
                 aria-label="Playback volume"
@@ -406,7 +406,7 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
               aria-label={autoLevel ? "Disable automatic loudness leveling" : "Enable automatic loudness leveling"}
               aria-pressed={autoLevel}
               title="Automatically balances quiet and loud videos"
-              className={`min-w-[72px] rounded-full px-2 py-1 text-[10px] font-semibold tabular-nums transition ${autoLevel ? "bg-white text-black" : "text-white/70 hover:bg-white/15"}`}
+              className={`min-w-[72px] rounded-full px-2 py-1 text-[11px] font-semibold tabular-nums transition ${autoLevel ? "bg-white text-black" : "text-white/75 hover:bg-white/15"}`}
             >
               {autoLevel ? formatAutoGain(autoGain) : "Auto off"}
             </button>
@@ -416,10 +416,10 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
           <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent px-4 pb-16 pt-28 sm:px-6">
             <div className="mx-auto max-w-2xl">
               {(cleanMetadataText(item.author) || cleanMetadataText(item.caption)) && <div className="rounded-[var(--radius-media)] border border-white/20 bg-black/70 p-4 text-white shadow-xl shadow-black/25 backdrop-blur-md">
-                {cleanMetadataText(item.author) && <div className="mb-2 flex items-center gap-2"><span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/55">Creator</span><span className="truncate text-sm font-semibold text-white">{cleanMetadataText(item.author)}</span></div>}
+                {cleanMetadataText(item.author) && <div className="mb-2 flex items-center gap-2"><span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-white/70">Creator</span><span className="truncate text-sm font-semibold text-white">{cleanMetadataText(item.author)}</span></div>}
                 {cleanMetadataText(item.caption) && <CaptionDescription caption={cleanMetadataText(item.caption)} />}
               </div>}
-              <div className="mt-2 flex items-center gap-2 px-1 text-xs text-white/55">
+              <div className="mt-2 flex items-center gap-2 px-1 text-xs text-white/70">
                 <span className="tabular">#{item.id}</span>
                 {/^https?:\/\//i.test(item.link) && <a href={item.link} target="_blank" rel="noreferrer" className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full px-2 py-1 transition hover:bg-white/10 hover:text-white"><ArrowSquareOut size={13} />Open on TikTok</a>}
               </div>

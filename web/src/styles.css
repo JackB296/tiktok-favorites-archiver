@@ -5,7 +5,9 @@
 /* ---- Design tokens (see /design-taste-frontend read) --------------------
    Dark is the default (media viewing). Light via [data-theme="light"].
    ONE accent (coral) locked across the app; status hues are separate.
-   ONE radius system: media 16px, controls 10px, chips pill.               */
+   ONE radius system: media 16px, controls 10px, chips pill.
+   Exception: on-video overlay clusters nest 12px outer / 8px inner
+   (outer = inner + padding) and tiny non-interactive badges stay 4px.    */
 :root {
   --canvas: #0a0a0b;
   --surface: #141416;
@@ -63,6 +65,14 @@
 
   --radius-media: 16px;
   --radius-control: 10px;
+
+  --default-transition-timing-function: var(--ease);
+}
+
+/* One focus signal everywhere: instant (never animated), same on both themes. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 html,

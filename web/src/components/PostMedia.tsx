@@ -118,9 +118,9 @@ function VideoMedia({ src, active, preload }: { src: string; active: boolean; pr
     {active && autoplayBlocked && <button type="button" onClick={() => void playWithSound()} className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"><Play size={16} weight="fill" /> {muted ? "Play video" : "Play with sound"}</button>}
     {active && ready && <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex translate-y-2 items-center gap-2 rounded-[var(--radius-control)] border border-white/10 bg-black/70 px-2.5 py-2 text-white opacity-0 shadow-lg backdrop-blur-md transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
       <button type="button" onClick={togglePaused} aria-label={paused ? "Play video" : "Pause video"} className="pointer-events-auto rounded-md p-1.5 hover:bg-white/15">{paused ? <Play size={16} weight="fill" /> : <Pause size={16} weight="fill" />}</button>
-      <span className="tabular w-10 text-right text-[10px] text-white/75">{formatMediaTime(currentTime)}</span>
+      <span className="tabular w-10 text-right text-[11px] text-white/75">{formatMediaTime(currentTime)}</span>
       <input type="range" min="0" max={Math.max(duration, 0.01)} step="0.1" value={Math.min(currentTime, Math.max(duration, 0.01))} onChange={(event) => seek(Number(event.target.value))} aria-label="Video progress" className="pointer-events-auto h-1 min-w-0 flex-1 cursor-pointer accent-white" />
-      <span className="tabular w-10 text-[10px] text-white/75">{formatMediaTime(duration)}</span>
+      <span className="tabular w-10 text-[11px] text-white/75">{formatMediaTime(duration)}</span>
     </div>}
   </div>;
 }

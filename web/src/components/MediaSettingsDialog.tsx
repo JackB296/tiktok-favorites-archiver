@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { UploadSimple, X } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
+import { useDialogFocusTrap } from "./ui";
 
 function fileSummary(file: File | null) {
   if (!file) return "No file selected";
@@ -14,6 +15,8 @@ function fileSummary(file: File | null) {
 
 export function MediaSettingsDialog({ item, onClose, onSaved }: { item: Item; onClose: () => void; onSaved: (item: Item) => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLFormElement>(null);
+  useDialogFocusTrap(panelRef);
   const [video, setVideo] = useState<File | null>(null);
   const [thumbnail, setThumbnail] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
@@ -46,7 +49,7 @@ export function MediaSettingsDialog({ item, onClose, onSaved }: { item: Item; on
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-labelledby="media-settings-title">
-      <form onSubmit={(event) => void submit(event)} className="w-full max-w-lg rounded-[var(--radius-media)] border border-white/15 bg-surface p-5 text-ink shadow-2xl">
+      <form ref={panelRef} onSubmit={(event) => void submit(event)} className="w-full max-w-lg rounded-[var(--radius-media)] border border-white/15 bg-surface p-5 text-ink shadow-2xl">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="tabular text-xs text-ink-faint">Favorite #{item.id}</p>

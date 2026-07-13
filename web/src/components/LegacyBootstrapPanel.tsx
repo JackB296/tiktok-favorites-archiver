@@ -3,7 +3,7 @@ import { ArrowClockwise, CaretDown } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import { parseLegacyMappingText } from "../lib/legacyBootstrap";
 import type { LegacyBootstrapPreview, LegacyMappingSegment } from "../lib/types";
-import { Button, Stat } from "./ui";
+import { Button, ConfirmDialog, Stat } from "./ui";
 
 /** One-time migration wizard for archives numbered by the pre-database CLI. */
 export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean; onApplied: () => Promise<void> }) {
@@ -15,6 +15,7 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
   const [verified, setVerified] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [confirmingApply, setConfirmingApply] = useState(false);
 
   function resetPreview() {
     setPreview(null);
@@ -51,7 +52,6 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
 
   async function applyBootstrap() {
     if (!oldExport || !currentExport || !checkpoint || !preview || !verified) return;
-    const allocation = preview.allocation;
     let segments: LegacyMappingSegment[] | undefined;
     try {
       segments = parseLegacyMappingText(mappingText);
@@ -59,11 +59,7 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
       setMsg((err as Error).message);
       return;
     }
-    if (!window.confirm(
-      `Create ${allocation.total_rows.toLocaleString()} library records? ` +
-      `Only ${allocation.new_pending.toLocaleString()} newer favorites will be queued for download. ` +
-      "No media files will be changed.",
-    )) return;
+    setConfirmingApply(false);
     setBusy(true);
     setMsg("Creating the legacy library database…");
     try {
@@ -133,7 +129,7 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
             onChange={(event) => { setMappingText(event.target.value); resetPreview(); }}
             placeholder="Automatically infer one segment"
             spellCheck={false}
-            className="mt-2 h-10 w-full rounded border border-line bg-elevated px-3 font-mono text-sm text-ink placeholder:text-ink-faint"
+            className="mt-2 h-10 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-3 font-mono text-sm text-ink placeholder:text-ink-faint"
           />
         </label>
 
@@ -157,7 +153,7 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
                 value={preview.segments.length > 1 ? preview.segments.length : preview.offset.toLocaleString()}
                 hint={preview.segments.map((segment) => segment.offset.toLocaleString()).join(" → ")}
               />
-              <Stat label="Local videos" value={preview.inventory.local_files.toLocaleString()} hint={`#${preview.inventory.lowest_number}–#${preview.inventory.highest_number}`} />
+              <Stat label="Local videos" value={preview.inventory.local_files.toLocaleString()} hint={`#${preview.inventory.lowest_number}-#${preview.inventory.highest_number}`} />
               <Stat label="Legacy gaps" value={preview.inventory.gaps.toLocaleString()} hint={`${preview.inventory.physical_gaps} filenames + ${preview.inventory.reused_number_markers} reused`} />
               <Stat label="New downloads" value={preview.allocation.new_pending.toLocaleString()} hint="after the checkpoint" />
             </div>
@@ -165,9 +161,9 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
             <div className="mt-4 grid gap-2 text-sm text-ink-dim sm:grid-cols-2">
               <p>Old export: <strong className="text-ink">{preview.exports.old_favorites.toLocaleString()}</strong> favorites</p>
               <p>Current export: <strong className="text-ink">{preview.exports.current_favorites.toLocaleString()}</strong> favorites</p>
-              <p>Reserved NAS namespace: <strong className="text-ink">#{preview.allocation.reserved_physical_first}–#{preview.allocation.reserved_physical_last}</strong></p>
+              <p>Reserved NAS namespace: <strong className="text-ink">#{preview.allocation.reserved_physical_first}-#{preview.allocation.reserved_physical_last}</strong></p>
               <p>Older offloaded records: <strong className="text-ink">{preview.allocation.offloaded.toLocaleString()}</strong></p>
-              <p>Local mapped positions: <strong className="text-ink">{preview.inventory.mapped_old_position_first.toLocaleString()}–{preview.inventory.mapped_old_position_last.toLocaleString()}</strong></p>
+              <p>Local mapped positions: <strong className="text-ink">{preview.inventory.mapped_old_position_first.toLocaleString()}-{preview.inventory.mapped_old_position_last.toLocaleString()}</strong></p>
               <p>Next archive number: <strong className="text-ink">#{preview.allocation.next_archive_number.toLocaleString()}</strong></p>
             </div>
 
@@ -179,8 +175,8 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
                 <tbody className="text-ink-dim">
                   {preview.segments.map((segment) => (
                     <tr key={segment.start_id} className="border-t border-line">
-                      <td className="py-2 pr-3 text-ink">#{segment.start_id}–#{segment.end_id}</td>
-                      <td className="py-2 pr-3">{segment.first_position.toLocaleString()}–{segment.last_position.toLocaleString()}</td>
+                      <td className="py-2 pr-3 text-ink">#{segment.start_id}-#{segment.end_id}</td>
+                      <td className="py-2 pr-3">{segment.first_position.toLocaleString()}-{segment.last_position.toLocaleString()}</td>
                       <td className="py-2">{segment.offset.toLocaleString()}</td>
                     </tr>
                   ))}
@@ -219,12 +215,20 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
               <span>I verified that the sample links match those numbered local videos and understand this requires an empty library database.</span>
             </label>
             <div className="mt-4">
-              <Button disabled={running || busy || !verified} onClick={applyBootstrap}>
+              <Button disabled={running || busy || !verified} onClick={() => setConfirmingApply(true)}>
                 Apply legacy bootstrap
               </Button>
             </div>
           </div>
         )}
+        {confirmingApply && preview && <ConfirmDialog
+          title="Apply legacy bootstrap?"
+          message={`This creates ${preview.allocation.total_rows.toLocaleString()} library records. Only ${preview.allocation.new_pending.toLocaleString()} newer favorites will be queued for download, and no media files are changed.`}
+          confirmLabel="Apply bootstrap"
+          busy={busy}
+          onConfirm={() => void applyBootstrap()}
+          onCancel={() => setConfirmingApply(false)}
+        />}
       </div>
     </details>
   );

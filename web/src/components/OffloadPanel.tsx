@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ArrowClockwise } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { OffloadSuggestion } from "../lib/api";
-import { Button } from "./ui";
+import { Button, ConfirmDialog } from "./ui";
 
 /** Mark favorite ranges as archived on external storage (or clear the mark). */
 export function OffloadPanel({ running, onChanged }: { running: boolean; onChanged: () => Promise<void> }) {
@@ -11,6 +11,7 @@ export function OffloadPanel({ running, onChanged }: { running: boolean; onChang
   const [to, setTo] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState<{ action: "offload" | "unoffload"; matched: number; range: { first_id: number; last_id: number } } | null>(null);
 
   async function refreshSuggestion(prefillRange = false) {
     const next = await api.offloadSuggestion();
@@ -47,15 +48,26 @@ export function OffloadPanel({ running, onChanged }: { running: boolean; onChang
         setMsg("No favorites in that range need changing.");
         return;
       }
-      const verb = action === "offload" ? "mark" : "unmark";
-      if (!window.confirm(`This will ${verb} ${preview.matched} favorite${preview.matched === 1 ? "" : "s"} ${action === "offload" ? "as offloaded" : "as no longer offloaded"} — proceed?`)) return;
-      const result = await api.markItems(action, { range });
+      setPending({ action, matched: preview.matched, range });
+    } catch (err) {
+      setMsg((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmMarkRange() {
+    if (!pending || busy) return;
+    setBusy(true);
+    try {
+      const result = await api.markItems(pending.action, { range: pending.range });
       await Promise.all([refreshSuggestion(), onChanged()]);
       const requeued = result.requeued ? ` ${result.requeued} had no local video and returned to the download queue.` : "";
       setMsg(`${result.changed} favorite${result.changed === 1 ? "" : "s"} updated.${requeued}`);
     } catch (err) {
       setMsg((err as Error).message);
     } finally {
+      setPending(null);
       setBusy(false);
     }
   }
@@ -75,18 +87,18 @@ export function OffloadPanel({ running, onChanged }: { running: boolean; onChang
         <div className="mt-3 space-y-3 text-sm text-ink-dim">
           {info.suggested ? (
             <p>
-              Your earliest local video is #{info.earliest_local}. Mark favorites {info.suggested.first_id}–{info.suggested.last_id} as offloaded?
+              Your earliest local video is #{info.earliest_local}. Mark favorites {info.suggested.first_id}-{info.suggested.last_id} as offloaded?
               {" "}({info.range_undownloaded} of {info.range_total} in the range are pending or failed{info.range_already_offloaded ? `, ${info.range_already_offloaded} already marked` : ""}.)
             </p>
           ) : (
-            <p>No offload range to suggest{info.earliest_local != null ? ` — your earliest local video is #${info.earliest_local}` : ""}.</p>
+            <p>No offload range to suggest.{info.earliest_local != null ? ` Your earliest local video is #${info.earliest_local}.` : ""}</p>
           )}
           <div className="flex flex-wrap items-end gap-2">
             <label className="text-xs text-ink-dim">From #
-              <input value={from} onChange={(e) => setFrom(e.target.value)} type="number" min="1" className="mt-1 block h-9 w-28 rounded border border-line bg-elevated px-2 text-sm text-ink" />
+              <input value={from} onChange={(e) => setFrom(e.target.value)} type="number" min="1" className="mt-1 block h-9 w-28 rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
             </label>
             <label className="text-xs text-ink-dim">To #
-              <input value={to} onChange={(e) => setTo(e.target.value)} type="number" min="1" className="mt-1 block h-9 w-28 rounded border border-line bg-elevated px-2 text-sm text-ink" />
+              <input value={to} onChange={(e) => setTo(e.target.value)} type="number" min="1" className="mt-1 block h-9 w-28 rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
             </label>
             <Button disabled={running || busy || !from || !to} onClick={() => markRange("offload")}>Mark range offloaded</Button>
             <Button variant="ghost" disabled={running || busy || !from || !to} onClick={() => markRange("unoffload")}>Unmark range</Button>
@@ -94,6 +106,14 @@ export function OffloadPanel({ running, onChanged }: { running: boolean; onChang
         </div>
       )}
       {msg && <p className="mt-2 text-sm text-ink-dim">{msg}</p>}
+      {pending && <ConfirmDialog
+        title={pending.action === "offload" ? "Mark range offloaded?" : "Unmark range?"}
+        message={`This will ${pending.action === "offload" ? "mark" : "unmark"} ${pending.matched} favorite${pending.matched === 1 ? "" : "s"} (#${pending.range.first_id}-#${pending.range.last_id}) ${pending.action === "offload" ? "as offloaded" : "as no longer offloaded"}. Nothing is downloaded or deleted.`}
+        confirmLabel={pending.action === "offload" ? "Mark offloaded" : "Unmark range"}
+        busy={busy}
+        onConfirm={() => void confirmMarkRange()}
+        onCancel={() => setPending(null)}
+      />}
     </section>
   );
 }

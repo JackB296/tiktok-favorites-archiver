@@ -210,7 +210,7 @@ export function Dashboard() {
             </Button>
           {enrichmentProgress?.event === "enrichment" && (
             <p className="mt-3 text-sm text-ink-dim">
-              {`Checking ${enrichmentProgress.completed ?? 0} of ${enrichmentProgress.total ?? 0} · ${enrichmentProgress.enriched ?? 0} updated · ${enrichmentProgress.unavailable ?? 0} returned no metadata`}
+              {`Checking ${enrichmentProgress.completed ?? 0} of ${enrichmentProgress.total ?? 0}: ${enrichmentProgress.enriched ?? 0} updated, ${enrichmentProgress.unavailable ?? 0} returned no metadata`}
             </p>
           )}
           {runActionError && <p className="mt-3 text-sm text-bad" role="alert">{runActionError}</p>}
@@ -242,15 +242,15 @@ export function Dashboard() {
           <div className="mt-4">
             <label className="block text-sm font-medium text-ink" htmlFor="thumbnail-quality">Thumbnail quality</label>
             <select id="thumbnail-quality" disabled={library?.index_enabled !== 1} value={library?.thumbnail_width ?? 480} onChange={(e) => updateLibrary({ thumbnail_width: Number(e.target.value) as 320 | 480 })} className="mt-1 h-10 rounded-[var(--radius-control)] border border-line bg-elevated px-3 text-sm text-ink disabled:opacity-50">
-              <option value={480}>High — 480px WebP (about 275–825 MB / 11,000)</option>
-              <option value={320}>Standard — 320px WebP (about 165–550 MB / 11,000)</option>
+              <option value={480}>High: 480px WebP (about 275-825 MB / 11,000)</option>
+              <option value={320}>Standard: 320px WebP (about 165-550 MB / 11,000)</option>
             </select>
           </div>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
             <p className="text-sm text-ink-dim">
               {indexProgress?.event === "indexing"
                 ? `Indexing ${indexProgress.completed ?? 0} of ${indexProgress.total ?? 0} · ${indexProgress.failed ?? 0} failed`
-                : `${library?.index.indexed ?? 0} of ${library?.index.total ?? 0} local favorites indexed${library?.index.pending ? ` · ${library.index.pending} pending` : ""}${library?.index.failed ? ` · ${library.index.failed} failed` : ""}`}
+                : `${library?.index.indexed ?? 0} of ${library?.index.total ?? 0} local favorites indexed${library?.index.pending ? `, ${library.index.pending} pending` : ""}${library?.index.failed ? `, ${library.index.failed} failed` : ""}`}
             </p>
             <Button variant="ghost" disabled={running || library?.index_enabled !== 1} onClick={() => act("reindex")}>
               <ArrowClockwise size={16} /> Rebuild index
@@ -275,7 +275,7 @@ export function Dashboard() {
               <h2 className="text-sm font-semibold text-ink">Archive inventory</h2>
               <p className="mt-1 text-sm text-ink-dim">Download a compact CSV of every favorite and its source link, status, retry history, file health, and indexed media facts. It is useful for backup records or spreadsheet analysis; media files are not copied.</p>
             </div>
-            <a href="/api/archive-inventory.csv" download className="inline-flex h-9 items-center rounded border border-line px-3 text-sm text-ink-dim hover:text-ink">Download CSV</a>
+            <a href="/api/archive-inventory.csv" download className="inline-flex h-9 items-center rounded-[var(--radius-control)] border border-line px-3 text-sm font-medium text-ink-dim transition-[background,color] duration-150 hover:bg-elevated hover:text-ink">Download CSV</a>
           </div>
         </section>
 
@@ -331,7 +331,7 @@ export function Dashboard() {
                     </p>
                   )}
                   {verifyReport.orphans.count > 0 && (
-                    <p>{verifyReport.orphans.count} video files on disk have no matching favorite — re-import your export to adopt them.</p>
+                    <p>{verifyReport.orphans.count} video files on disk have no matching favorite. Re-import your export to adopt them.</p>
                   )}
                   {verifyReport.leftovers.count > 0 && (
                     <p>{verifyReport.leftovers.count} leftover temp files from interrupted work (safe to delete): {verifyReport.leftovers.examples.slice(0, 3).join(", ")}{verifyReport.leftovers.count > 3 ? ", …" : ""}</p>
@@ -347,7 +347,7 @@ export function Dashboard() {
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
           <h2 className="text-sm font-semibold text-ink">Recent archive runs</h2>
           <p className="mt-1 text-sm text-ink-dim">Stored locally so you can see what finished after the live activity log has cleared.</p>
-          {runHistory.length ? <ul className="mt-3 divide-y divide-line text-sm">{runHistory.slice(0, 8).map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><span className="capitalize text-ink">{run.kind}</span><span className="text-ink-dim">{run.outcome ?? "running"} · {run.counts.done ?? 0} ready · {run.counts.failed ?? 0} failed</span><time className="text-xs text-ink-faint" dateTime={run.started_at}>{new Date(run.started_at).toLocaleString()}</time></li>)}</ul> : <p className="mt-3 text-sm text-ink-faint">No completed archive runs yet.</p>}
+          {runHistory.length ? <ul className="mt-3 divide-y divide-line text-sm">{runHistory.slice(0, 8).map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><span className="capitalize text-ink">{run.kind}</span><span className="text-ink-dim">{run.outcome ?? "running"}: {run.counts.done ?? 0} ready, {run.counts.failed ?? 0} failed</span><time className="text-xs text-ink-faint" dateTime={run.started_at}>{new Date(run.started_at).toLocaleString()}</time></li>)}</ul> : <p className="mt-3 text-sm text-ink-faint">No completed archive runs yet.</p>}
         </section>
           </div>
         </details>

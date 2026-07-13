@@ -24,7 +24,7 @@ export function App() {
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <div className="flex h-[100dvh] flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-canvas/80 px-4 backdrop-blur">
-          <Link to="/gallery" aria-label="Open Gallery" title="Open Gallery" className="flex items-center gap-2 rounded-[var(--radius-control)] text-ink transition hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent">
+          <Link to="/gallery" aria-label="Open Gallery" title="Open Gallery" className="flex items-center gap-2 rounded-[var(--radius-control)] text-ink transition hover:text-accent">
             <BookmarkSimple size={18} weight="fill" className="text-accent" />
             <span className="text-sm font-semibold">Favorites Archive</span>
           </Link>
@@ -42,7 +42,7 @@ export function App() {
                 }
               >
                 <Icon size={16} />
-                <span className="hidden sm:inline">{label}</span>
+                <span className="sr-only sm:not-sr-only">{label}</span>
               </NavLink>
             ))}
             <button

@@ -7,6 +7,7 @@ import {
   ImageSquare,
   SlidersHorizontal,
   BookmarkSimple,
+  Check,
   Trash,
   X,
   LinkSimple,
@@ -17,7 +18,7 @@ import {
 import { api } from "../lib/api";
 import type { MarkAction } from "../lib/api";
 import type { GalleryPreset, GalleryPresetFilters, GalleryTermList, Item, PlaybackQueue } from "../lib/types";
-import { EmptyState, HelpLabel, Skeleton, cx } from "../components/ui";
+import { Button, ConfirmDialog, EmptyState, HelpLabel, Skeleton, cx, useDialogFocusTrap } from "../components/ui";
 import { VirtualGalleryGrid } from "../components/VirtualGalleryGrid";
 import { canLoadNextPage } from "../lib/virtualGrid";
 import { useDelayedLoading } from "../lib/useDelayedLoading";
@@ -120,6 +121,7 @@ export function Gallery() {
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [filterActionBusy, setFilterActionBusy] = useState(false);
   const [filterActionMessage, setFilterActionMessage] = useState<string | null>(null);
+  const [pendingFilterAction, setPendingFilterAction] = useState<{ action: "offload" | "ignore"; matched: number } | null>(null);
   const [inspectionMode, setInspectionMode] = useState(false);
   const [inspectedItem, setInspectedItem] = useState<Item | null>(null);
 
@@ -488,18 +490,24 @@ export function Gallery() {
     setFilterActionBusy(true);
     setFilterActionMessage(null);
     try {
-      const filter = currentFilterSelector();
-      const preview = await api.markItems(action, { filter }, true);
+      const preview = await api.markItems(action, { filter: currentFilterSelector() }, true);
       if (!preview.matched) {
         setFilterActionMessage("No favorites match the current filters.");
         return;
       }
-      const verb = action === "offload" ? "mark" : "ignore";
-      if (!window.confirm(`This will ${verb} ${preview.matched} favorite${preview.matched === 1 ? "" : "s"}${action === "offload" ? " as offloaded" : ""} — proceed?`)) {
-        setFilterActionMessage("Cancelled.");
-        return;
-      }
-      const result = await api.markItems(action, { filter });
+      setPendingFilterAction({ action, matched: preview.matched });
+    } catch (error) {
+      setFilterActionMessage((error as Error).message);
+    } finally {
+      setFilterActionBusy(false);
+    }
+  }
+
+  async function confirmMarkMatching() {
+    if (!pendingFilterAction || filterActionBusy) return;
+    setFilterActionBusy(true);
+    try {
+      const result = await api.markItems(pendingFilterAction.action, { filter: currentFilterSelector() });
       const page = await api.itemPage(pageQuery);
       queryVersion.current += 1;
       setItems(page.items);
@@ -508,6 +516,7 @@ export function Gallery() {
     } catch (error) {
       setFilterActionMessage((error as Error).message);
     } finally {
+      setPendingFilterAction(null);
       setFilterActionBusy(false);
     }
   }
@@ -555,13 +564,15 @@ export function Gallery() {
     <div className="mx-auto max-w-[1400px] px-4 py-6">
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative w-full sm:max-w-sm">
+          <label htmlFor="gallery-search" className="sr-only">Search favorites</label>
           <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint" />
           <input
+            id="gallery-search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search caption, hashtag, author"
             title="Searches indexed captions, hashtags, creator names, and source links. Best text matches appear first unless an advanced sort is selected."
-            className="h-10 w-full rounded-[var(--radius-control)] border border-line bg-surface pl-9 pr-3 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
+            className="h-10 w-full rounded-[var(--radius-control)] border border-line bg-surface pl-9 pr-3 text-sm text-ink placeholder:text-ink-faint focus:border-accent"
           />
           {search.trim() && <p className="mt-1 text-xs text-ink-faint">Best matches first. Choose an advanced sort to override relevance.</p>}
         </div>
@@ -607,12 +618,12 @@ export function Gallery() {
       {selectionMode && <section className="mb-5 flex flex-wrap items-center gap-3 rounded-[var(--radius-control)] border border-line bg-surface px-3 py-2.5 text-sm text-ink-dim" aria-live="polite">
         <span>{selectedIds.size} selected (up to 100)</span>
         <button type="button" onClick={() => setSelectedIds(new Set())} disabled={!selectedIds.size || recoveryBusy} className="text-ink underline underline-offset-2 disabled:opacity-40">Clear</button>
-        <button type="button" onClick={playSelected} disabled={!selectedIds.size || recoveryBusy} className="rounded border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-elevated disabled:opacity-40"><Play size={14} weight="fill" /> Play selection</button>
-        <input value={playbackQueueName} onChange={(event) => setPlaybackQueueName(event.target.value)} maxLength={80} placeholder="Save as queue…" className="h-8 rounded border border-line bg-elevated px-2 text-xs text-ink placeholder:text-ink-faint" />
-        <button type="button" onClick={savePlaybackQueue} disabled={!selectedIds.size || !playbackQueueName.trim() || recoveryBusy} className="rounded border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-elevated disabled:opacity-40"><BookmarkSimple size={14} /> Save queue</button>
-        <button type="button" onClick={() => markSelected(allSelectedOffloaded ? "unoffload" : "offload")} disabled={!selectedIds.size || recoveryBusy} title="Offloaded favorites are archived on external storage, so Sync and integrity checks stop flagging them as missing." className="rounded border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-elevated disabled:opacity-40">{allSelectedOffloaded ? "Unmark offloaded" : "Mark offloaded"}</button>
-        <button type="button" onClick={() => markSelected(allSelectedIgnored ? "unignore" : "ignore")} disabled={!selectedIds.size || recoveryBusy} title="Ignored favorites keep their place in the archive but Sync never downloads them." className="rounded border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-elevated disabled:opacity-40">{allSelectedIgnored ? "Allow downloading" : "Don't download"}</button>
-        <button type="button" onClick={requeueSelected} disabled={!selectedIds.size || recoveryBusy} className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-on-accent disabled:opacity-40">{recoveryBusy ? "Queuing…" : "Queue selected for Sync"}</button>
+        <Button variant="ghost" size="xs" onClick={playSelected} disabled={!selectedIds.size || recoveryBusy}><Play size={14} weight="fill" /> Play selection</Button>
+        <input value={playbackQueueName} onChange={(event) => setPlaybackQueueName(event.target.value)} maxLength={80} placeholder="Save as queue…" className="h-8 rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-xs text-ink placeholder:text-ink-faint" />
+        <Button variant="ghost" size="xs" onClick={savePlaybackQueue} disabled={!selectedIds.size || !playbackQueueName.trim() || recoveryBusy}><BookmarkSimple size={14} /> Save queue</Button>
+        <Button variant="ghost" size="xs" onClick={() => markSelected(allSelectedOffloaded ? "unoffload" : "offload")} disabled={!selectedIds.size || recoveryBusy} title="Offloaded favorites are archived on external storage, so Sync and integrity checks stop flagging them as missing.">{allSelectedOffloaded ? "Unmark offloaded" : "Mark offloaded"}</Button>
+        <Button variant="ghost" size="xs" onClick={() => markSelected(allSelectedIgnored ? "unignore" : "ignore")} disabled={!selectedIds.size || recoveryBusy} title="Ignored favorites keep their place in the archive but Sync never downloads them.">{allSelectedIgnored ? "Allow downloading" : "Don't download"}</Button>
+        <Button size="xs" onClick={requeueSelected} disabled={!selectedIds.size || recoveryBusy}>{recoveryBusy ? "Queuing…" : "Queue selected for Sync"}</Button>
         <span className="text-xs text-ink-faint">Only failed favorites and finished favorites missing their file will be queued.</span>
         {recoveryMessage && <span className="w-full text-xs text-ink-dim">{recoveryMessage}</span>}
         {playbackQueueMessage && <span className="w-full text-xs text-ink-dim">{playbackQueueMessage}</span>}
@@ -627,104 +638,128 @@ export function Gallery() {
         <button type="button" onClick={copyFilteredLink} className="inline-flex items-center gap-1 px-1 text-xs text-ink-dim underline underline-offset-2 hover:text-ink"><LinkSimple size={13} /> Copy link</button>
       </div>}
 
-      {advanced && <section className="mb-5 grid gap-3 rounded-[var(--radius-media)] border border-line bg-surface p-4 sm:grid-cols-2 lg:grid-cols-3">
-        <div className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:col-span-3">
-          <label className="min-w-48 flex-1 text-xs text-ink-dim"><HelpLabel help="Applies a named snapshot of every current Gallery search, filter, and sort setting.">Saved filters</HelpLabel>
-            <select value={selectedPresetId} onChange={(e) => { const preset = presets.find((item) => item.id === Number(e.target.value)); setSelectedPresetId(e.target.value); if (preset) applyPreset(preset.filters); }} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Apply a saved filter…</option>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select>
-          </label>
-          <label className="min-w-48 flex-1 text-xs text-ink-dim"><HelpLabel help="Names and saves the complete filter setup currently shown, including whitelist and blacklist terms.">Save current filters as</HelpLabel>
-            <input value={presetName} onChange={(e) => setPresetName(e.target.value)} maxLength={80} placeholder="e.g. Games without fyp" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" />
-          </label>
-          <button type="button" onClick={savePreset} disabled={!presetName.trim()} className="inline-flex h-9 items-center gap-1 rounded border border-line px-3 text-sm text-ink-dim hover:text-ink disabled:opacity-40"><BookmarkSimple size={15} /> Save</button>
-          {selectedPresetId && <button type="button" onClick={deletePreset} className="inline-flex h-9 items-center gap-1 rounded border border-line px-3 text-sm text-ink-dim hover:text-bad"><Trash size={15} /> Delete</button>}
-          {presetMessage && <span className="text-xs text-ink-faint">{presetMessage}</span>}
+      {advanced && <section className="mb-5 grid gap-4 rounded-[var(--radius-media)] border border-line bg-surface p-4">
+        <div>
+          <p className="text-xs font-semibold text-ink">Saved filters</p>
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            <label className="min-w-48 flex-1 text-xs text-ink-dim"><HelpLabel help="Applies a named snapshot of every current Gallery search, filter, and sort setting.">Saved filters</HelpLabel>
+              <select value={selectedPresetId} onChange={(e) => { const preset = presets.find((item) => item.id === Number(e.target.value)); setSelectedPresetId(e.target.value); if (preset) applyPreset(preset.filters); }} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Apply a saved filter…</option>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select>
+            </label>
+            <label className="min-w-48 flex-1 text-xs text-ink-dim"><HelpLabel help="Names and saves the complete filter setup currently shown, including whitelist and blacklist terms.">Save current filters as</HelpLabel>
+              <input value={presetName} onChange={(e) => setPresetName(e.target.value)} maxLength={80} placeholder="e.g. Games without fyp" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" />
+            </label>
+            <Button variant="ghost" size="sm" onClick={savePreset} disabled={!presetName.trim()}><BookmarkSimple size={15} /> Save</Button>
+            {selectedPresetId && <Button variant="danger" size="sm" onClick={deletePreset}><Trash size={15} /> Delete</Button>}
+            {presetMessage && <span className="text-xs text-ink-faint">{presetMessage}</span>}
+          </div>
         </div>
-        <div className="grid gap-3 border-t border-line pt-3 sm:col-span-2 sm:grid-cols-2 lg:col-span-3 lg:grid-cols-4">
-          <label className="text-xs text-ink-dim sm:col-span-2"><HelpLabel help="Reusable groups of creators, hashtags, or words. Applying a list adds its terms to the matching whitelist or blacklist field.">Saved creator / tag lists</HelpLabel>
-            <select value={selectedTermListId} onChange={(e) => setSelectedTermListId(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Choose a list…</option>{termLists.map((list) => <option key={list.id} value={list.id}>{list.name} · {list.mode === "include" ? "whitelist" : "blacklist"}</option>)}</select>
-          </label>
-          <label className="text-xs text-ink-dim"><HelpLabel help="A descriptive name for this reusable group of whitelist or blacklist terms.">List name</HelpLabel>
-            <input value={termListName} onChange={(e) => setTermListName(e.target.value)} maxLength={80} placeholder="e.g. No FYP" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" />
-          </label>
-          <label className="text-xs text-ink-dim"><HelpLabel help="Whitelist keeps only favorites matching every applied whitelist group. Blacklist removes favorites matching any applied blacklist term. You can save and use both kinds together.">List behavior</HelpLabel>
-            <select value={termListMode} onChange={(e) => setTermListMode(e.target.value as "include" | "exclude")} className="mt-1 h-9 rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="exclude">Blacklist</option><option value="include">Whitelist</option></select>
-          </label>
-          <label className="text-xs text-ink-dim sm:col-span-2 lg:col-span-4"><HelpLabel help="Creators, hashtags, or words separated by commas. Hashtags may be entered with or without the # symbol.">Creators, tags, or words</HelpLabel>
-            <input value={termListTerms} onChange={(e) => setTermListTerms(e.target.value)} placeholder="#fyp, foryou" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" />
-          </label>
-          <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-4"><button type="button" onClick={applyTermList} disabled={!selectedTermListId} className="inline-flex h-9 items-center rounded border border-line px-3 text-sm text-ink-dim hover:text-ink disabled:opacity-40">Apply selected list</button>{selectedTermListId && <button type="button" onClick={deleteTermList} className="inline-flex h-9 items-center gap-1 rounded border border-line px-3 text-sm text-ink-dim hover:text-bad"><Trash size={15} /> Delete</button>}<button type="button" onClick={saveTermList} disabled={!termListName.trim() || !parsedTerms(termListTerms).length} className="inline-flex h-9 items-center gap-1 rounded border border-line px-3 text-sm text-ink-dim hover:text-ink disabled:opacity-40"><BookmarkSimple size={15} /> Save new list</button>{termListMessage && <span className="text-xs text-ink-faint">{termListMessage}</span>}</div>
+        <div className="border-t border-line pt-3">
+          <p className="text-xs font-semibold text-ink">Creator &amp; tag lists</p>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="text-xs text-ink-dim sm:col-span-2"><HelpLabel help="Reusable groups of creators, hashtags, or words. Applying a list adds its terms to the matching whitelist or blacklist field.">Saved creator / tag lists</HelpLabel>
+              <select value={selectedTermListId} onChange={(e) => setSelectedTermListId(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Choose a list…</option>{termLists.map((list) => <option key={list.id} value={list.id}>{list.name} · {list.mode === "include" ? "whitelist" : "blacklist"}</option>)}</select>
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="A descriptive name for this reusable group of whitelist or blacklist terms.">List name</HelpLabel>
+              <input value={termListName} onChange={(e) => setTermListName(e.target.value)} maxLength={80} placeholder="e.g. No FYP" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Whitelist keeps only favorites matching every applied whitelist group. Blacklist removes favorites matching any applied blacklist term. You can save and use both kinds together.">List behavior</HelpLabel>
+              <select value={termListMode} onChange={(e) => setTermListMode(e.target.value as "include" | "exclude")} className="mt-1 h-9 rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="exclude">Blacklist</option><option value="include">Whitelist</option></select>
+            </label>
+            <label className="text-xs text-ink-dim sm:col-span-2 lg:col-span-4"><HelpLabel help="Creators, hashtags, or words separated by commas. Hashtags may be entered with or without the # symbol.">Creators, tags, or words</HelpLabel>
+              <input value={termListTerms} onChange={(e) => setTermListTerms(e.target.value)} placeholder="#fyp, foryou" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" />
+            </label>
+            <div className="flex flex-wrap items-center gap-2 sm:col-span-2 lg:col-span-4"><Button variant="ghost" size="sm" onClick={applyTermList} disabled={!selectedTermListId}>Apply selected list</Button>{selectedTermListId && <Button variant="danger" size="sm" onClick={deleteTermList}><Trash size={15} /> Delete</Button>}<Button variant="ghost" size="sm" onClick={saveTermList} disabled={!termListName.trim() || !parsedTerms(termListTerms).length}><BookmarkSimple size={15} /> Save new list</Button>{termListMessage && <span className="text-xs text-ink-faint">{termListMessage}</span>}</div>
+          </div>
         </div>
-        <div className="flex flex-wrap items-end gap-2 border-t border-line pt-3 sm:col-span-2 lg:col-span-3">
-          <label className="min-w-48 flex-1 text-xs text-ink-dim"><HelpLabel help="A saved ordered selection of up to 100 favorites that can be reopened in Feed later.">Saved playback queues</HelpLabel>
-            <select value={selectedPlaybackQueueId} onChange={(e) => setSelectedPlaybackQueueId(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Choose a queue…</option>{playbackQueues.map((queue) => <option key={queue.id} value={queue.id}>{queue.name} · {queue.item_ids.length} favorites</option>)}</select>
-          </label>
-          <button type="button" onClick={playSavedQueue} disabled={!selectedPlaybackQueueId} className="inline-flex h-9 items-center gap-1 rounded border border-line px-3 text-sm text-ink-dim hover:text-ink disabled:opacity-40"><Play size={15} weight="fill" /> Play queue</button>
-          {selectedPlaybackQueueId && <button type="button" onClick={deletePlaybackQueue} className="inline-flex h-9 items-center gap-1 rounded border border-line px-3 text-sm text-ink-dim hover:text-bad"><Trash size={15} /> Delete</button>}
-          {playbackQueueMessage && <span className="text-xs text-ink-faint">{playbackQueueMessage}</span>}
+        <div className="border-t border-line pt-3">
+          <p className="text-xs font-semibold text-ink">Playback queues</p>
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            <label className="min-w-48 flex-1 text-xs text-ink-dim"><HelpLabel help="A saved ordered selection of up to 100 favorites that can be reopened in Feed later.">Saved playback queues</HelpLabel>
+              <select value={selectedPlaybackQueueId} onChange={(e) => setSelectedPlaybackQueueId(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Choose a queue…</option>{playbackQueues.map((queue) => <option key={queue.id} value={queue.id}>{queue.name} · {queue.item_ids.length} favorites</option>)}</select>
+            </label>
+            <Button variant="ghost" size="sm" onClick={playSavedQueue} disabled={!selectedPlaybackQueueId}><Play size={15} weight="fill" /> Play queue</Button>
+            {selectedPlaybackQueueId && <Button variant="danger" size="sm" onClick={deletePlaybackQueue}><Trash size={15} /> Delete</Button>}
+            {playbackQueueMessage && <span className="text-xs text-ink-faint">{playbackQueueMessage}</span>}
+          </div>
         </div>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Controls the order of matching favorites. Random creates a fresh temporary shuffle each time it is selected.">Sort order</HelpLabel>
-          <select value={order} onChange={(e) => changeOrder(e.target.value as GalleryOrder)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="latest">Latest imported favorite</option><option value="archive">Oldest imported favorite</option><option value="favorite_date_desc">Newest favorite date</option><option value="favorite_date_asc">Oldest favorite date</option><option value="author_asc">Creator A–Z</option><option value="audio_missing">Missing audio first</option><option value="size_desc">Largest file</option><option value="duration_desc">Longest video</option><option value="duration_asc">Shortest video</option><option value="attempts_desc">Most download attempts</option><option value="last_attempt_desc">Most recently attempted</option><option value="random">Random order</option></select>
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Ready has local media. Failed can be retried. Unavailable means TikTok reports the original is gone and it will not be retried automatically.">Archive status</HelpLabel>
-          <select value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any status</option><option value="done">Ready</option><option value="pending">Pending</option><option value="failed">Failed</option><option value="skipped">Skipped</option><option value="expired">Unavailable original</option><option value="ignored">Ignored</option></select>
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Shows favorites Sync has tried at least this many times, including successful and failed attempts.">Minimum download attempts</HelpLabel>
-          <input value={minAttempts} onChange={(e) => setMinAttempts(e.target.value)} type="number" min="0" step="1" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Shows favorites Sync has tried no more than this many times. Use 0 to find pending favorites never attempted.">Maximum download attempts</HelpLabel>
-          <input value={maxAttempts} onChange={(e) => setMaxAttempts(e.target.value)} type="number" min="0" step="1" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Filters indexed media by its frame shape: taller than wide, wider than tall, or equal width and height.">Orientation</HelpLabel>
-          <select value={orientation} onChange={(e) => setOrientation(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any orientation</option><option value="portrait">Portrait</option><option value="landscape">Landscape</option><option value="square">Square</option></select>
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Filters photo posts by whether their original downloaded images and audio are still stored beside the rebuilt video.">Raw slideshow assets</HelpLabel>
-          <select value={assets} onChange={(e) => setAssets(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any asset state</option><option value="with">Has original assets</option><option value="without">No original assets</option></select>
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Offloaded favorites are archived on external storage (like a NAS), so they have no local file here but are not missing.">External storage</HelpLabel>
-          <select value={offloaded} onChange={(e) => setOffloaded(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any</option><option value="with">Offloaded</option><option value="without">Local</option></select>
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Indexed favorites have a thumbnail and media facts. Missing has not been indexed yet. Failed means thumbnail or media inspection failed.">Gallery index health</HelpLabel>
-          <select value={indexState} onChange={(e) => setIndexState(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any index state</option><option value="indexed">Indexed</option><option value="missing">Not indexed</option><option value="failed">Index failed</option></select>
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and keeps videos at least this many seconds long.">Minimum duration (seconds)</HelpLabel>
-          <input value={minDuration} onChange={(e) => setMinDuration(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and keeps videos no longer than this many seconds.">Maximum duration (seconds)</HelpLabel>
-          <input value={maxDuration} onChange={(e) => setMaxDuration(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and keeps local video files at least this large.">Minimum file size (MB)</HelpLabel>
-          <input value={minSize} onChange={(e) => setMinSize(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and keeps local video files no larger than this value.">Maximum file size (MB)</HelpLabel>
-          <input value={maxSize} onChange={(e) => setMaxSize(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and filters by the encoded video frame width in pixels.">Minimum width (px)</HelpLabel>
-          <input value={minWidth} onChange={(e) => setMinWidth(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and excludes frames wider than this pixel value.">Maximum width (px)</HelpLabel>
-          <input value={maxWidth} onChange={(e) => setMaxWidth(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and filters by the encoded video frame height in pixels.">Minimum height (px)</HelpLabel>
-          <input value={minHeight} onChange={(e) => setMinHeight(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and excludes frames taller than this pixel value.">Maximum height (px)</HelpLabel>
-          <input value={maxHeight} onChange={(e) => setMaxHeight(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and matches encoded video formats such as h264, hevc, or vp9. Separate alternatives with commas.">Video codec</HelpLabel>
-          <input value={codec} onChange={(e) => setCodec(e.target.value)} placeholder="e.g. h264, hevc" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Uses the date recorded in your TikTok export and excludes favorites saved before this day.">Favorited on or after</HelpLabel>
-          <input value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} type="date" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Uses the date recorded in your TikTok export and excludes favorites saved after this day.">Favorited on or before</HelpLabel>
-          <input value={dateTo} onChange={(e) => setDateTo(e.target.value)} type="date" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink" />
-        </label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Whitelist: every comma-separated term must match the caption or creator. Use this to keep only specific creators, hashtags, or topics.">Whitelist creators / tags / words</HelpLabel><input value={include} onChange={(e) => setInclude(e.target.value)} placeholder="e.g. @creator, #games" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" /></label>
-        <label className="text-xs text-ink-dim"><HelpLabel help="Blacklist: any matching comma-separated term removes that favorite. Use this to hide creators, hashtags, or topics such as #fyp.">Blacklist creators / tags / words</HelpLabel><input value={exclude} onChange={(e) => setExclude(e.target.value)} placeholder="e.g. #fyp, spoilers" className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" /></label>
-        <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3 sm:col-span-2 lg:col-span-3">
+        <div className="border-t border-line pt-3">
+          <p className="text-xs font-semibold text-ink">Sort &amp; status</p>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="text-xs text-ink-dim"><HelpLabel help="Controls the order of matching favorites. Random creates a fresh temporary shuffle each time it is selected.">Sort order</HelpLabel>
+              <select value={order} onChange={(e) => changeOrder(e.target.value as GalleryOrder)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="latest">Latest imported favorite</option><option value="archive">Oldest imported favorite</option><option value="favorite_date_desc">Newest favorite date</option><option value="favorite_date_asc">Oldest favorite date</option><option value="author_asc">Creator A-Z</option><option value="audio_missing">Missing audio first</option><option value="size_desc">Largest file</option><option value="duration_desc">Longest video</option><option value="duration_asc">Shortest video</option><option value="attempts_desc">Most download attempts</option><option value="last_attempt_desc">Most recently attempted</option><option value="random">Random order</option></select>
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Ready has local media. Failed can be retried. Unavailable means TikTok reports the original is gone and it will not be retried automatically.">Archive status</HelpLabel>
+              <select value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any status</option><option value="done">Ready</option><option value="pending">Pending</option><option value="failed">Failed</option><option value="skipped">Skipped</option><option value="expired">Unavailable original</option><option value="ignored">Ignored</option></select>
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Shows favorites Sync has tried at least this many times, including successful and failed attempts.">Minimum download attempts</HelpLabel>
+              <input value={minAttempts} onChange={(e) => setMinAttempts(e.target.value)} type="number" min="0" step="1" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Shows favorites Sync has tried no more than this many times. Use 0 to find pending favorites never attempted.">Maximum download attempts</HelpLabel>
+              <input value={maxAttempts} onChange={(e) => setMaxAttempts(e.target.value)} type="number" min="0" step="1" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+          </div>
+        </div>
+        <div className="border-t border-line pt-3">
+          <p className="text-xs font-semibold text-ink">Media facts</p>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="text-xs text-ink-dim"><HelpLabel help="Filters indexed media by its frame shape: taller than wide, wider than tall, or equal width and height.">Orientation</HelpLabel>
+              <select value={orientation} onChange={(e) => setOrientation(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any orientation</option><option value="portrait">Portrait</option><option value="landscape">Landscape</option><option value="square">Square</option></select>
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Filters photo posts by whether their original downloaded images and audio are still stored beside the rebuilt video.">Raw slideshow assets</HelpLabel>
+              <select value={assets} onChange={(e) => setAssets(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any asset state</option><option value="with">Has original assets</option><option value="without">No original assets</option></select>
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Offloaded favorites are archived on external storage (like a NAS), so they have no local file here but are not missing.">External storage</HelpLabel>
+              <select value={offloaded} onChange={(e) => setOffloaded(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any</option><option value="with">Offloaded</option><option value="without">Local</option></select>
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Indexed favorites have a thumbnail and media facts. Missing has not been indexed yet. Failed means thumbnail or media inspection failed.">Gallery index health</HelpLabel>
+              <select value={indexState} onChange={(e) => setIndexState(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any index state</option><option value="indexed">Indexed</option><option value="missing">Not indexed</option><option value="failed">Index failed</option></select>
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and keeps videos at least this many seconds long.">Minimum duration (seconds)</HelpLabel>
+              <input value={minDuration} onChange={(e) => setMinDuration(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and keeps videos no longer than this many seconds.">Maximum duration (seconds)</HelpLabel>
+              <input value={maxDuration} onChange={(e) => setMaxDuration(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and keeps local video files at least this large.">Minimum file size (MB)</HelpLabel>
+              <input value={minSize} onChange={(e) => setMinSize(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and keeps local video files no larger than this value.">Maximum file size (MB)</HelpLabel>
+              <input value={maxSize} onChange={(e) => setMaxSize(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and filters by the encoded video frame width in pixels.">Minimum width (px)</HelpLabel>
+              <input value={minWidth} onChange={(e) => setMinWidth(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and excludes frames wider than this pixel value.">Maximum width (px)</HelpLabel>
+              <input value={maxWidth} onChange={(e) => setMaxWidth(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and filters by the encoded video frame height in pixels.">Minimum height (px)</HelpLabel>
+              <input value={minHeight} onChange={(e) => setMinHeight(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and excludes frames taller than this pixel value.">Maximum height (px)</HelpLabel>
+              <input value={maxHeight} onChange={(e) => setMaxHeight(e.target.value)} type="number" min="0" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Requires indexed media and matches encoded video formats such as h264, hevc, or vp9. Separate alternatives with commas.">Video codec</HelpLabel>
+              <input value={codec} onChange={(e) => setCodec(e.target.value)} placeholder="e.g. h264, hevc" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" />
+            </label>
+          </div>
+        </div>
+        <div className="border-t border-line pt-3">
+          <p className="text-xs font-semibold text-ink">Dates &amp; terms</p>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="text-xs text-ink-dim"><HelpLabel help="Uses the date recorded in your TikTok export and excludes favorites saved before this day.">Favorited on or after</HelpLabel>
+              <input value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} type="date" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Uses the date recorded in your TikTok export and excludes favorites saved after this day.">Favorited on or before</HelpLabel>
+              <input value={dateTo} onChange={(e) => setDateTo(e.target.value)} type="date" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Whitelist: every comma-separated term must match the caption or creator. Use this to keep only specific creators, hashtags, or topics.">Whitelist creators / tags / words</HelpLabel><input value={include} onChange={(e) => setInclude(e.target.value)} placeholder="e.g. @creator, #games" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" /></label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Blacklist: any matching comma-separated term removes that favorite. Use this to hide creators, hashtags, or topics such as #fyp.">Blacklist creators / tags / words</HelpLabel><input value={exclude} onChange={(e) => setExclude(e.target.value)} placeholder="e.g. #fyp, spoilers" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" /></label>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
           <span className="text-xs text-ink-dim"><HelpLabel help="Applies an archive mark to every favorite matching the current search and filters. A count is shown for confirmation before anything changes.">With these filters…</HelpLabel></span>
-          <button type="button" onClick={() => markMatching("offload")} disabled={filterActionBusy} className="inline-flex h-9 items-center rounded border border-line px-3 text-sm text-ink-dim hover:text-ink disabled:opacity-40">Mark all matching offloaded</button>
-          <button type="button" onClick={() => markMatching("ignore")} disabled={filterActionBusy} className="inline-flex h-9 items-center rounded border border-line px-3 text-sm text-ink-dim hover:text-ink disabled:opacity-40">Ignore all matching</button>
+          <Button variant="ghost" size="sm" onClick={() => markMatching("offload")} disabled={filterActionBusy}>Mark all matching offloaded</Button>
+          <Button variant="ghost" size="sm" onClick={() => markMatching("ignore")} disabled={filterActionBusy}>Ignore all matching</Button>
           {filterActionMessage && <span className="text-xs text-ink-faint">{filterActionMessage}</span>}
         </div>
       </section>}
@@ -763,6 +798,14 @@ export function Gallery() {
       )}
     </div>
     {inspectedItem && <DetailsDialog item={inspectedItem} onClose={() => setInspectedItem(null)} onPlay={() => navigate(`/?item=${inspectedItem.id}`)} />}
+    {pendingFilterAction && <ConfirmDialog
+      title={pendingFilterAction.action === "offload" ? "Mark matching favorites offloaded?" : "Ignore matching favorites?"}
+      message={`This will ${pendingFilterAction.action === "offload" ? "mark" : "ignore"} ${pendingFilterAction.matched} favorite${pendingFilterAction.matched === 1 ? "" : "s"}${pendingFilterAction.action === "offload" ? " as offloaded" : ""}. You can undo this later by changing the mark back.`}
+      confirmLabel={pendingFilterAction.action === "offload" ? "Mark offloaded" : "Ignore matching"}
+      busy={filterActionBusy}
+      onConfirm={() => void confirmMarkMatching()}
+      onCancel={() => { setPendingFilterAction(null); setFilterActionMessage("Cancelled."); }}
+    />}
     </div>
   );
 }
@@ -812,13 +855,13 @@ function Thumb({ item, details, onClick, selecting = false, inspecting = false, 
         <div className="tabular flex h-full w-full items-center justify-center text-ink-faint">#{item.id}</div>
       )}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
-      {details.archiveNumber && <span className="tabular absolute left-2 top-2 rounded bg-black/50 px-1.5 py-0.5 text-[10px] text-white/80">
+      {details.archiveNumber && <span className="tabular absolute left-2 top-2 rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white/80">
         #{item.id}
       </span>}
-      {item.has_audio === false && <span title="FFprobe found no audio stream. You can replace this file from its Feed settings." className="absolute left-2 top-9 inline-flex items-center gap-1 rounded bg-bad/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"><SpeakerSlash size={11} weight="fill" />{audioStatus(item.has_audio)}</span>}
-      {selecting && <span aria-hidden="true" className={cx("absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border text-xs", selected ? "border-accent bg-accent text-on-accent" : "border-white/70 bg-black/50 text-white/80")}>{selected ? "✓" : ""}</span>}
+      {item.has_audio === false && <span title="FFprobe found no audio stream. You can replace this file from its Feed settings." className="absolute left-2 top-9 inline-flex items-center gap-1 rounded bg-bad/90 px-1.5 py-0.5 text-[11px] font-semibold text-white"><SpeakerSlash size={11} weight="fill" />{audioStatus(item.has_audio)}</span>}
+      {selecting && <span aria-hidden="true" className={cx("absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border", selected ? "border-accent bg-accent text-on-accent" : "border-white/70 bg-black/50 text-white/80")}>{selected ? <Check size={12} weight="bold" /> : null}</span>}
       {inspecting && <span aria-hidden="true" className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border border-white/70 bg-black/50 text-xs text-white/80"><Info size={12} /></span>}
-      <div className={cx("absolute top-2 flex max-w-[65%] flex-col items-end gap-1 text-[10px] text-white/85", selecting || inspecting ? "right-9" : "right-2")}>
+      <div className={cx("absolute top-2 flex max-w-[65%] flex-col items-end gap-1 text-[11px] text-white/85", selecting || inspecting ? "right-9" : "right-2")}>
         {((details.duration && duration) || (details.resolution && resolution)) && <span className="rounded bg-black/50 px-1.5 py-0.5">{[details.duration ? duration : null, details.resolution ? resolution : null].filter(Boolean).join(" · ")}</span>}
         {!selecting && !inspecting && <span className="rounded-full bg-black/40 p-1 opacity-0 transition group-hover:opacity-100"><Play size={12} weight="fill" /></span>}
       </div>
@@ -826,10 +869,10 @@ function Thumb({ item, details, onClick, selecting = false, inspecting = false, 
         {item.status === "failed" && <p title={item.error ?? undefined} className="truncate text-[11px] font-medium text-bad">{item.error ?? "Download failed"}</p>}
         {item.status === "expired" && <p title="TikTok no longer serves the original link. Its archive number is preserved and Sync will not retry it automatically." className="truncate text-[11px] font-medium text-white/60">Original unavailable</p>}
         {item.status === "ignored" && <p title="Marked as don't-download. Its archive number is preserved and Sync will not attempt it." className="truncate text-[11px] font-medium text-white/60">Not downloading</p>}
-        {item.offloaded && <span title="Archived on external storage, so it is not flagged as missing here." className="mb-1 inline-block rounded bg-black/50 px-1.5 py-0.5 text-[10px] font-medium text-white/80">offloaded</span>}
+        {item.offloaded && <span title="Archived on external storage, so it is not flagged as missing here." className="mb-1 inline-block rounded bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white/80">offloaded</span>}
         {details.author && item.author && <p className="truncate text-xs font-medium text-white">{item.author}</p>}
         {details.caption && item.caption && <p className="truncate text-[11px] text-white/70">{item.caption}</p>}
-        {details.technical && (item.media_codec || size) && <p className="mt-0.5 truncate text-[10px] text-white/55 opacity-0 transition group-hover:opacity-100">{[item.media_codec, size].filter(Boolean).join(" · ")}</p>}
+        {details.technical && (item.media_codec || size) && <p className="mt-0.5 truncate text-[11px] text-white/70 opacity-0 transition group-hover:opacity-100">{[item.media_codec, size].filter(Boolean).join(" · ")}</p>}
       </div>
     </button>
   );
@@ -837,6 +880,8 @@ function Thumb({ item, details, onClick, selecting = false, inspecting = false, 
 
 function DetailsDialog({ item, onClose, onPlay }: { item: Item; onClose: () => void; onPlay: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDialogFocusTrap(panelRef);
   useEffect(() => {
     closeRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -853,7 +898,7 @@ function DetailsDialog({ item, onClose, onPlay }: { item: Item; onClose: () => v
   ];
   const safeLink = /^https?:\/\//i.test(item.link);
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="favorite-details-title">
-    <div className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-[var(--radius-media)] border border-line bg-surface p-5 shadow-2xl">
+    <div ref={panelRef} className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-[var(--radius-media)] border border-line bg-surface p-5 shadow-2xl">
       <div className="flex items-start justify-between gap-4"><div><p className="tabular text-xs text-ink-faint">Favorite #{item.id}</p><h2 id="favorite-details-title" className="mt-1 text-lg font-semibold text-ink">Archive details</h2></div><button ref={closeRef} type="button" onClick={onClose} aria-label="Close details" className="rounded-[var(--radius-control)] p-2 text-ink-dim hover:bg-elevated hover:text-ink"><X size={18} /></button></div>
       {item.caption && <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-ink">{item.caption}</p>}
       {item.author && <p className="mt-2 text-sm text-ink-dim">Creator: {item.author}</p>}
