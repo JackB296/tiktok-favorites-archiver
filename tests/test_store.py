@@ -216,14 +216,40 @@ def test_media_index_is_persisted_and_queryable():
     store.record_media_index(
         conn,
         1,
-        {"duration_s": 42.5, "width": 1080, "height": 1920, "codec": "h264", "file_size": 123, "thumbnail_path": ".archive/thumbnails/1.webp"},
+        {"duration_s": 42.5, "width": 1080, "height": 1920, "codec": "h264", "file_size": 123, "has_audio": False, "thumbnail_path": ".archive/thumbnails/1.webp"},
         fingerprint="123:1000",
     )
 
     row = store.get_item(conn, 1)
     assert row["duration_s"] == 42.5
     assert row["thumbnail_path"] == ".archive/thumbnails/1.webp"
+    assert row["has_audio"] == 0
     assert [item["id"] for item in store.items_needing_index(conn)] == []
+
+
+def test_legacy_indexed_item_without_audio_facts_is_rechecked_without_losing_thumbnail():
+    conn = _db()
+    store.insert_item(conn, 1, "a", status="done")
+    conn.execute("UPDATE item SET thumbnail_path = ? WHERE id = 1", (".archive/thumbnails/1.webp",))
+    conn.commit()
+
+    assert store.get_item(conn, 1)["has_audio"] is None
+    assert [item["id"] for item in store.items_needing_index(conn)] == [1]
+
+
+def test_page_items_sorts_confirmed_missing_audio_first_then_present_then_unknown():
+    conn = _db()
+    for item_id in range(1, 6):
+        store.insert_item(conn, item_id, f"link{item_id}", status="done")
+    conn.execute("UPDATE item SET has_audio = 0 WHERE id IN (2, 4)")
+    conn.execute("UPDATE item SET has_audio = 1 WHERE id IN (1, 5)")
+    conn.commit()
+
+    first = store.page_items(conn, order="audio_missing", limit=3)
+    second = store.page_items(conn, order="audio_missing", limit=3, cursor=first[-1]["id"])
+
+    assert [row["id"] for row in first] == [4, 2, 5]
+    assert [row["id"] for row in second] == [1, 3]
 
 
 def test_items_by_status_ordered():

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
-import { FilmReel, SquaresFour, DownloadSimple, Sun, Moon, Heart } from "@phosphor-icons/react";
+import { BrowserRouter, Routes, Route, NavLink, Link } from "react-router-dom";
+import { FilmReel, SquaresFour, DownloadSimple, Sun, Moon, BookmarkSimple } from "@phosphor-icons/react";
 import { Viewer } from "./routes/Viewer";
 import { Gallery } from "./routes/Gallery";
 import { Dashboard } from "./routes/Dashboard";
@@ -21,13 +21,13 @@ export function App() {
   }, [theme]);
 
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <div className="flex h-[100dvh] flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-canvas/80 px-4 backdrop-blur">
-          <div className="flex items-center gap-2 text-ink">
-            <Heart size={18} weight="fill" className="text-accent" />
+          <Link to="/gallery" aria-label="Open Gallery" title="Open Gallery" className="flex items-center gap-2 rounded-[var(--radius-control)] text-ink transition hover:text-accent focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent">
+            <BookmarkSimple size={18} weight="fill" className="text-accent" />
             <span className="text-sm font-semibold">Favorites Archive</span>
-          </div>
+          </Link>
           <nav className="flex items-center gap-1">
             {TABS.map(({ to, label, icon: Icon, end }) => (
               <NavLink

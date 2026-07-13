@@ -18,6 +18,20 @@ def test_video_item_exposes_video_url():
         assert d["video_url"] == "/media/1.mp4"
         assert d["images"] == [] and d["audio"] is None
         assert d["has_assets"] is False
+        assert d["has_audio"] is None
+
+
+def test_video_item_exposes_confirmed_missing_audio():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://tiktok.com/a", kind="video", status="done")
+    conn.execute("UPDATE item SET has_audio = 0 WHERE id = 1")
+    conn.commit()
+
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "1.mp4"), "w").close()
+        item = ArchiveItems(conn, dl).get(1)
+
+    assert item["has_audio"] is False
 
 
 def test_slideshow_item_lists_carousel_assets():

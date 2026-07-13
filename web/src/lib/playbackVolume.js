@@ -9,7 +9,7 @@ export function readPlaybackVolume(raw) {
 /** Convert the current signal RMS into a safe, bounded leveling multiplier. */
 export function normalizationGain(rms) {
   if (!Number.isFinite(rms) || rms <= 0) return 1;
-  return Math.max(0.35, Math.min(3, TARGET_RMS / rms));
+  return Math.max(0.35, Math.min(2.5, TARGET_RMS / rms));
 }
 
 export function formatAutoGain(gain) {

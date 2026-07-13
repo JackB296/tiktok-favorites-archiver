@@ -25,3 +25,13 @@ export function shouldCommitWheelTarget(scrollTop, viewportHeight, targetIndex) 
   if (viewportHeight <= 0 || targetIndex < 0) return false;
   return Math.abs(scrollTop - targetIndex * viewportHeight) <= viewportHeight * 0.08;
 }
+
+/** Pause the settled item as soon as a new wheel target has been requested. */
+export function playbackItemId(activeId, transitionTargetId) {
+  return transitionTargetId ?? activeId;
+}
+
+/** Bound eager media mounting while always including an explicit transition target. */
+export function shouldPreloadItem(index, activeIndex, itemId, transitionTargetId, ahead = 8) {
+  return itemId === transitionTargetId || (index > activeIndex && index <= activeIndex + ahead);
+}

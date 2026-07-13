@@ -13,7 +13,7 @@ from queue import Empty
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse
 
-from core import config, store, importer, cobalt, verify, inventory, legacy_bootstrap
+from core import config, store, importer, cobalt, verify, inventory, legacy_bootstrap, manual_media
 from server import archive_items
 from server.archive_items import ArchiveItems
 from server.jobs import JobBusyError
@@ -332,17 +332,21 @@ def item_window(request: Request, n: int, limit: int = 50):
 
 
 MAX_IMPORT_BYTES = 512 * 1024 * 1024  # far above any real TikTok export
+MAX_REPLACEMENT_VIDEO_BYTES = 1024 * 1024 * 1024
+MAX_REPLACEMENT_THUMBNAIL_BYTES = 20 * 1024 * 1024
 
 
-async def _stage_upload(upload, prefix, suffix):
+async def _stage_upload(upload, prefix, suffix, max_bytes=MAX_IMPORT_BYTES, directory=None):
     """Stream one multipart file to a unique temporary path."""
-    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=directory)
     try:
         received = 0
         with os.fdopen(fd, "wb") as f:
             while chunk := await upload.read(1024 * 1024):
                 received += len(chunk)
-                if received > MAX_IMPORT_BYTES:
+                if received > max_bytes:
                     raise HTTPException(status_code=413, detail=f"{upload.filename or 'upload'} is too large")
                 f.write(chunk)
         return path
@@ -360,6 +364,62 @@ def _remove_temp_files(paths):
             os.unlink(path)
         except OSError:
             pass
+
+
+@router.post("/items/{n}/media")
+async def replace_item_media(
+    request: Request,
+    n: int,
+    video: UploadFile = File(None),
+    thumbnail: UploadFile = File(None),
+):
+    """Replace one Favorite's local MP4 and/or custom Gallery thumbnail."""
+    if video is None and thumbnail is None:
+        raise HTTPException(status_code=400, detail="choose a replacement video or thumbnail")
+    upload_dir = os.path.join(_download_dir(request), ".archive", "uploads")
+    staged_video = None
+    staged_thumbnail = None
+    try:
+        if video is not None:
+            staged_video = await _stage_upload(
+                video,
+                f".{n}-video-",
+                ".upload",
+                max_bytes=MAX_REPLACEMENT_VIDEO_BYTES,
+                directory=upload_dir,
+            )
+        if thumbnail is not None:
+            staged_thumbnail = await _stage_upload(
+                thumbnail,
+                f".{n}-thumbnail-",
+                ".upload",
+                max_bytes=MAX_REPLACEMENT_THUMBNAIL_BYTES,
+                directory=upload_dir,
+            )
+
+        def operation():
+            conn = _open(request)
+            try:
+                if store.get_item(conn, n) is None:
+                    raise HTTPException(status_code=404, detail="item not found")
+                manual_media.replace_item_media(
+                    conn,
+                    _download_dir(request),
+                    n,
+                    staged_video=staged_video,
+                    staged_thumbnail=staged_thumbnail,
+                )
+                return _archive_items(request, conn).get(n)
+            finally:
+                conn.close()
+
+        return request.app.state.jobs.run_when_idle(operation)
+    except JobBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    except manual_media.MediaReplacementError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    finally:
+        _remove_temp_files([path for path in (staged_video, staged_thumbnail) if path])
 
 
 def _legacy_mapping_segments(value):

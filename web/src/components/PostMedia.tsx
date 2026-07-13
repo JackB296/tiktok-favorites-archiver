@@ -1,22 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { Archive, CaretLeft, CaretRight, LinkBreak, Play } from "@phosphor-icons/react";
+import { Archive, CaretLeft, CaretRight, LinkBreak, Pause, Play } from "@phosphor-icons/react";
 import type { Item } from "../lib/types";
 import { feedMediaKind } from "../lib/feedItems";
 import { cx } from "./ui";
 import { usePlayback } from "./playback";
 import { normalizationGain } from "../lib/playbackVolume.js";
+import { formatMediaTime } from "../lib/mediaPresentation.js";
 
 /**
  * Renders a post's media, letterboxed on black (matching the Plex/slideshow look):
- * videos autoplay while `active`; slideshows auto-advance (2.5s) with their audio,
- * plus manual prev/next. Nothing plays unless `active`.
+ * Videos autoplay while `active`; slideshows use manual prev/next with continuous
+ * audio. Nothing plays unless `active`.
  */
-export function PostMedia({ item, active, transitioning = false, preload = false }: { item: Item; active: boolean; transitioning?: boolean; preload?: boolean }) {
+export function PostMedia({ item, active, preload = false }: { item: Item; active: boolean; preload?: boolean }) {
   const { muted, setMuted, volume, autoLevel, setAutoGain, paused, togglePaused } = usePlayback();
-  if (!active && !transitioning && !preload) return <MediaPlaceholder />;
+  if (!active && !preload) return <MediaPlaceholder />;
   switch (feedMediaKind(item)) {
-    case "video": return <VideoMedia src={item.video_url!} active={active} transitioning={transitioning} muted={muted} onAutoplayFallback={() => setMuted(true)} volume={volume} autoLevel={autoLevel} onAutoGain={setAutoGain} paused={paused} onTogglePaused={togglePaused} preload={preload} />;
+    case "video": return <VideoMedia src={item.video_url!} active={active} muted={muted} onAutoplayFallback={() => setMuted(true)} volume={volume} autoLevel={autoLevel} onAutoGain={setAutoGain} paused={paused} onTogglePaused={togglePaused} preload={preload} />;
     case "slideshow": return <SlideMedia images={item.images} audio={item.audio} active={active} muted={muted} volume={volume} autoLevel={autoLevel} onAutoGain={setAutoGain} paused={paused} onTogglePaused={togglePaused} />;
     case "offloaded": return <OffloadedExternally />;
     case "expired": return <UnavailableOriginal />;
@@ -36,24 +37,39 @@ function MediaPlaceholder() {
   return <div aria-hidden="true" className="h-full w-full bg-black" />;
 }
 
-function VideoMedia({ src, active, transitioning, muted, onAutoplayFallback, volume, autoLevel, onAutoGain, paused, onTogglePaused, preload }: { src: string; active: boolean; transitioning: boolean; muted: boolean; onAutoplayFallback: () => void; volume: number; autoLevel: boolean; onAutoGain: (gain: number) => void; paused: boolean; onTogglePaused: () => void; preload: boolean }) {
+function VideoMedia({ src, active, muted, onAutoplayFallback, volume, autoLevel, onAutoGain, paused, onTogglePaused, preload }: { src: string; active: boolean; muted: boolean; onAutoplayFallback: () => void; volume: number; autoLevel: boolean; onAutoGain: (gain: number) => void; paused: boolean; onTogglePaused: () => void; preload: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  useEffect(() => {
+    setReady(false);
+    setWaiting(false);
+    setLoadError(false);
+    setCurrentTime(0);
+    setDuration(0);
+  }, [src]);
+
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
     let alive = true;
-    if ((active || transitioning) && !paused) {
+    v.muted = muted;
+    if (active && !paused) {
       v.play().then(() => alive && active && setAutoplayBlocked(false)).catch(() => alive && active && setAutoplayBlocked(true));
     } else {
       v.pause();
       setAutoplayBlocked(false);
     }
     return () => { alive = false; };
-  }, [active, paused, transitioning]);
+  }, [active, muted, paused, src]);
   useEffect(() => {
-    if (ref.current) ref.current.muted = muted || transitioning;
-  }, [muted, transitioning]);
+    if (ref.current) ref.current.muted = muted;
+  }, [muted]);
   useMediaVolume(ref, active, volume, autoLevel, onAutoGain);
   const playWithSound = async () => {
     const media = ref.current;
@@ -69,14 +85,53 @@ function VideoMedia({ src, active, transitioning, muted, onAutoplayFallback, vol
       await media.play().then(() => setAutoplayBlocked(false)).catch(() => {});
     }
   };
-  return <>
-    <video ref={ref} src={src} preload={active || preload ? "auto" : "none"} loop playsInline muted onClick={active ? onTogglePaused : undefined} aria-label={active ? paused ? "Resume video" : "Pause video" : undefined} title={active ? paused ? "Click to resume" : "Click to pause" : undefined} className="max-h-full max-w-full cursor-pointer object-contain" />
-    {active && autoplayBlocked && <button type="button" onClick={() => void playWithSound()} className="absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-black/65 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"><Play size={16} weight="fill" /> {muted ? "Play video" : "Play with sound"}</button>}
-    {active && paused && <div aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-black/60 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"><Play size={16} weight="fill" /> Paused</div>}
-  </>;
+
+  const seek = (next: number) => {
+    const media = ref.current;
+    if (!media || !Number.isFinite(next)) return;
+    media.currentTime = Math.max(0, Math.min(duration || 0, next));
+    setCurrentTime(media.currentTime);
+  };
+
+  return <div className="group relative flex h-full w-full items-center justify-center bg-black" aria-busy={active && (!ready || waiting)}>
+    <video
+      ref={ref}
+      src={src}
+      preload={active || preload ? "auto" : "none"}
+      loop
+      playsInline
+      muted
+      onClick={active ? onTogglePaused : undefined}
+      onCanPlay={() => { setReady(true); setWaiting(false); setLoadError(false); }}
+      onPlaying={() => { setReady(true); setWaiting(false); }}
+      onWaiting={() => active && setWaiting(true)}
+      onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+      onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+      onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+      onError={() => { setLoadError(true); setWaiting(false); }}
+      aria-label={active ? paused ? "Resume video" : "Pause video" : undefined}
+      title={active ? paused ? "Click to resume" : "Click to pause" : undefined}
+      className={cx("h-full w-full object-contain transition-opacity duration-200", active && !ready ? "opacity-0" : "opacity-100", active && "cursor-pointer")}
+    />
+    {active && !loadError && (!ready || waiting) && <MediaLoading />}
+    {active && loadError && <div role="alert" className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-control)] border border-white/15 bg-black/70 px-4 py-3 text-sm text-white/80">Video could not be loaded.</div>}
+    {active && autoplayBlocked && <button type="button" onClick={() => void playWithSound()} className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"><Play size={16} weight="fill" /> {muted ? "Play video" : "Play with sound"}</button>}
+    {active && ready && <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex translate-y-2 items-center gap-2 rounded-[var(--radius-control)] border border-white/10 bg-black/70 px-2.5 py-2 text-white opacity-0 shadow-lg backdrop-blur-md transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+      <button type="button" onClick={onTogglePaused} aria-label={paused ? "Play video" : "Pause video"} className="pointer-events-auto rounded-md p-1.5 hover:bg-white/15">{paused ? <Play size={16} weight="fill" /> : <Pause size={16} weight="fill" />}</button>
+      <span className="tabular w-10 text-right text-[10px] text-white/75">{formatMediaTime(currentTime)}</span>
+      <input type="range" min="0" max={Math.max(duration, 0.01)} step="0.1" value={Math.min(currentTime, Math.max(duration, 0.01))} onChange={(event) => seek(Number(event.target.value))} aria-label="Video progress" className="pointer-events-auto h-1 min-w-0 flex-1 cursor-pointer accent-white" />
+      <span className="tabular w-10 text-[10px] text-white/75">{formatMediaTime(duration)}</span>
+    </div>}
+  </div>;
 }
 
-const SLIDE_MS = 2500;
+function MediaLoading() {
+  return <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black" role="status" aria-label="Loading video">
+    <div className="relative h-[86%] max-h-[52rem] w-[min(90%,30rem)] rounded-[var(--radius-media)] border border-white/15 bg-white/[0.035]">
+      <span className="absolute left-1/2 top-1/2 h-8 w-8 -translate-x-1/2 -translate-y-1/2 animate-spin rounded-full border-2 border-white/20 border-t-white/80" />
+    </div>
+  </div>;
+}
 
 function SlideMedia({
   images,
@@ -103,12 +158,6 @@ function SlideMedia({
   const audioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
-    if (!active || paused || images.length < 2) return;
-    const t = window.setInterval(() => setIdx((i) => (i + 1) % images.length), SLIDE_MS);
-    return () => window.clearInterval(t);
-  }, [active, images.length, paused]);
-
-  useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
     a.muted = muted;
@@ -123,14 +172,15 @@ function SlideMedia({
   const go = (delta: number) => setIdx((i) => (i + delta + images.length) % images.length);
 
   return (
-    <div className="relative flex h-full w-full items-center justify-center" onClick={active ? onTogglePaused : undefined} role={active ? "button" : undefined} aria-label={active ? paused ? "Resume slideshow" : "Pause slideshow" : undefined}>
-      <img src={images[idx]} alt="" className="max-h-full max-w-full object-contain" />
+    <div className="relative flex h-full w-full items-center justify-center">
+      <img src={images[idx]} alt={`Slide ${idx + 1} of ${images.length}`} className="h-full w-full object-contain" />
+      {active && <button type="button" onClick={onTogglePaused} aria-label={paused ? "Resume slideshow audio" : "Pause slideshow audio"} className="absolute inset-0 z-[1] cursor-pointer"><span className="sr-only">{paused ? "Resume slideshow audio" : "Pause slideshow audio"}</span></button>}
       {audio && <audio ref={audioRef} src={audio} loop />}
       {images.length > 1 && (
         <>
           <SlideNav side="left" onClick={() => go(-1)} />
           <SlideNav side="right" onClick={() => go(1)} />
-          <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 gap-1.5">
+          <div className="pointer-events-none absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 gap-1.5">
             {images.map((_, i) => (
               <span
                 key={i}
@@ -235,7 +285,6 @@ function useMediaVolume(ref: RefObject<HTMLMediaElement>, active: boolean, volum
 
     connectGraph(graph);
     media.volume = 1;
-    void graph.context.resume().catch(() => {});
     graph.gain.gain.setTargetAtTime(volume, graph.context.currentTime, 0.08);
     if (!autoLevel) {
       graph.compressor.threshold.setValueAtTime(0, graph.context.currentTime);
@@ -281,7 +330,7 @@ function SlideNav({ side, onClick }: { side: "left" | "right"; onClick: () => vo
       onClick={(event) => { event.stopPropagation(); onClick(); }}
       aria-label={side === "left" ? "Previous image" : "Next image"}
       className={cx(
-        "absolute top-1/2 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white backdrop-blur-sm",
+        "absolute top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white backdrop-blur-sm",
         "transition hover:bg-black/60 active:translate-y-[calc(-50%+1px)]",
         side === "left" ? "left-3" : "right-3",
       )}

@@ -189,17 +189,20 @@ class ArchiveItems:
             "media_height": row["media_height"],
             "media_codec": row["media_codec"],
             "media_size": row["media_size"],
+            "has_audio": None if row["has_audio"] is None else bool(row["has_audio"]),
             "video_url": None,
             "images": [],
             "audio": None,
             "thumbnail_url": None,
         }
         if os.path.exists(os.path.join(self._download_dir, f"{item_id}.mp4")):
-            data["video_url"] = f"/media/{item_id}.mp4"
+            version = f"?v={row['media_fingerprint']}" if row["media_fingerprint"] else ""
+            data["video_url"] = f"/media/{item_id}.mp4{version}"
         if row["has_assets"]:
             data.update(self._slideshow_assets(item_id))
-        if row["thumbnail_path"]:
-            data["thumbnail_url"] = f"/media/{row['thumbnail_path']}"
+        thumbnail_path = row["custom_thumbnail_path"] or row["thumbnail_path"]
+        if thumbnail_path:
+            data["thumbnail_url"] = f"/media/{thumbnail_path}"
         return data
 
     def _slideshow_assets(self, item_id):

@@ -1,10 +1,11 @@
 import type { Item } from "./types";
 
-type FeedMedia = Pick<Item, "status" | "video_url" | "images" | "offloaded">;
+type FeedMedia = Pick<Item, "status" | "video_url" | "images" | "offloaded"> & Partial<Pick<Item, "kind">>;
 export type FeedMediaKind = "video" | "slideshow" | "offloaded" | "expired" | "empty";
 
 /** Prefer media that is actually present; otherwise retain durable archive markers. */
 export function feedMediaKind(item: FeedMedia): FeedMediaKind {
+  if (item.kind === "slideshow" && item.images.length) return "slideshow";
   if (item.video_url) return "video";
   if (item.images.length) return "slideshow";
   if (item.offloaded) return "offloaded";

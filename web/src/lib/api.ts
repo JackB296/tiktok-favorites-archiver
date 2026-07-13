@@ -56,7 +56,7 @@ export const api = {
   }),
   deletePlaybackQueue: (id: number) => json<{ ok: boolean }>(`/api/playback-queues/${id}`, { method: "DELETE" }),
 
-  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; min_attempts?: number; max_attempts?: number; recovery?: boolean; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; offloaded?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string } = {}) => {
+  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "audio_missing" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; min_attempts?: number; max_attempts?: number; recovery?: boolean; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; offloaded?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string } = {}) => {
     const p = new URLSearchParams();
     if (q.search) p.set("search", q.search);
     if (q.kind) p.set("kind", q.kind);
@@ -93,6 +93,12 @@ export const api = {
   itemIds: () => json<number[]>("/api/items/ids"),
   itemSelection: (ids: number[]) => json<Item[]>("/api/items/selection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }),
   itemWindow: (n: number) => json<ItemPage>(`/api/items/${n}/window`),
+  replaceItemMedia: (n: number, files: { video?: File; thumbnail?: File }) => {
+    const body = new FormData();
+    if (files.video) body.append("video", files.video);
+    if (files.thumbnail) body.append("thumbnail", files.thumbnail);
+    return json<Item>(`/api/items/${n}/media`, { method: "POST", body });
+  },
 
   status: () => json<RunStatus>("/api/status"),
   runHistory: () => json<RunHistoryEntry[]>("/api/run-history"),

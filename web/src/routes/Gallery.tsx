@@ -12,6 +12,7 @@ import {
   LinkSimple,
   SquaresFour,
   Info,
+  SpeakerSlash,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { MarkAction } from "../lib/api";
@@ -23,6 +24,7 @@ import { useDelayedLoading } from "../lib/useDelayedLoading";
 import { shouldLoadMore } from "../lib/galleryPaging.js";
 import { readGalleryDetails } from "../lib/galleryPresentation.js";
 import type { GalleryDetails } from "../lib/galleryPresentation.js";
+import { audioStatus, readGalleryDensity } from "../lib/mediaPresentation.js";
 
 const FILTERS = [
   { key: "", label: "All", help: "Show every favorite that matches the search and advanced filters." },
@@ -32,7 +34,7 @@ const FILTERS = [
 
 type GalleryDensity = "compact" | "comfortable";
 
-type GalleryOrder = "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "random";
+type GalleryOrder = "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "audio_missing" | "random";
 
 /** One shuffle per Random selection; the seed keeps cursor pages repeat-free. */
 function newShuffleSeed() {
@@ -109,7 +111,7 @@ export function Gallery() {
   const [selectedPlaybackQueueId, setSelectedPlaybackQueueId] = useState("");
   const [playbackQueueName, setPlaybackQueueName] = useState("");
   const [playbackQueueMessage, setPlaybackQueueMessage] = useState<string | null>(null);
-  const [density, setDensity] = useState<GalleryDensity>(() => localStorage.getItem("gallery-density") === "comfortable" ? "comfortable" : "compact");
+  const [density, setDensity] = useState<GalleryDensity>(() => readGalleryDensity(localStorage.getItem("gallery-density")));
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [cardDetails, setCardDetails] = useState<GalleryDetails>(() => readGalleryDetails(localStorage.getItem("gallery-card-details")));
   const [selectionMode, setSelectionMode] = useState(false);
@@ -562,7 +564,7 @@ export function Gallery() {
           />
           {search.trim() && <p className="mt-1 text-xs text-ink-faint">Best matches first. Choose an advanced sort to override relevance.</p>}
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex flex-wrap gap-1.5 sm:justify-end">
           {FILTERS.map((f) => (
             <button
               key={f.key}
@@ -660,7 +662,7 @@ export function Gallery() {
           {playbackQueueMessage && <span className="text-xs text-ink-faint">{playbackQueueMessage}</span>}
         </div>
         <label className="text-xs text-ink-dim"><HelpLabel help="Controls the order of matching favorites. Random creates a fresh temporary shuffle each time it is selected.">Sort order</HelpLabel>
-          <select value={order} onChange={(e) => changeOrder(e.target.value as GalleryOrder)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="latest">Latest imported favorite</option><option value="archive">Oldest imported favorite</option><option value="favorite_date_desc">Newest favorite date</option><option value="favorite_date_asc">Oldest favorite date</option><option value="author_asc">Creator A–Z</option><option value="size_desc">Largest file</option><option value="duration_desc">Longest video</option><option value="duration_asc">Shortest video</option><option value="attempts_desc">Most download attempts</option><option value="last_attempt_desc">Most recently attempted</option><option value="random">Random order</option></select>
+          <select value={order} onChange={(e) => changeOrder(e.target.value as GalleryOrder)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="latest">Latest imported favorite</option><option value="archive">Oldest imported favorite</option><option value="favorite_date_desc">Newest favorite date</option><option value="favorite_date_asc">Oldest favorite date</option><option value="author_asc">Creator A–Z</option><option value="audio_missing">Missing audio first</option><option value="size_desc">Largest file</option><option value="duration_desc">Longest video</option><option value="duration_asc">Shortest video</option><option value="attempts_desc">Most download attempts</option><option value="last_attempt_desc">Most recently attempted</option><option value="random">Random order</option></select>
         </label>
         <label className="text-xs text-ink-dim"><HelpLabel help="Ready has local media. Failed can be retried. Unavailable means TikTok reports the original is gone and it will not be retried automatically.">Archive status</HelpLabel>
           <select value={status} onChange={(e) => setStatus(e.target.value)} className="mt-1 h-9 w-full rounded border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any status</option><option value="done">Ready</option><option value="pending">Pending</option><option value="failed">Failed</option><option value="skipped">Skipped</option><option value="expired">Unavailable original</option><option value="ignored">Ignored</option></select>
@@ -812,6 +814,7 @@ function Thumb({ item, details, onClick, selecting = false, inspecting = false, 
       {details.archiveNumber && <span className="tabular absolute left-2 top-2 rounded bg-black/50 px-1.5 py-0.5 text-[10px] text-white/80">
         #{item.id}
       </span>}
+      {item.has_audio === false && <span title="FFprobe found no audio stream. You can replace this file from its Feed settings." className="absolute left-2 top-9 inline-flex items-center gap-1 rounded bg-bad/90 px-1.5 py-0.5 text-[10px] font-semibold text-white"><SpeakerSlash size={11} weight="fill" />{audioStatus(item.has_audio)}</span>}
       {selecting && <span aria-hidden="true" className={cx("absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border text-xs", selected ? "border-accent bg-accent text-on-accent" : "border-white/70 bg-black/50 text-white/80")}>{selected ? "✓" : ""}</span>}
       {inspecting && <span aria-hidden="true" className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border border-white/70 bg-black/50 text-xs text-white/80"><Info size={12} /></span>}
       <div className={cx("absolute top-2 flex max-w-[65%] flex-col items-end gap-1 text-[10px] text-white/85", selecting || inspecting ? "right-9" : "right-2")}>
@@ -845,7 +848,7 @@ function DetailsDialog({ item, onClose, onPlay }: { item: Item; onClose: () => v
     ["Duration", formatDuration(item.duration_s) ?? "Not indexed"], ["Resolution", resolution],
     ["Codec", item.media_codec ?? "Not indexed"], ["File size", formatSize(item.media_size) ?? "Not indexed"],
     ["Download attempts", String(item.attempt_count)], ["Last attempt", item.last_attempt_at ?? "Never"],
-    ["Archive file", item.offloaded ? "Offloaded to external storage" : item.archive_missing ? "Missing (integrity scan)" : item.video_url ? "Ready" : "Not available"], ["Raw slideshow assets", item.has_assets ? "Available" : "None"],
+    ["Archive file", item.offloaded ? "Offloaded to external storage" : item.archive_missing ? "Missing (integrity scan)" : item.video_url ? "Ready" : "Not available"], ["Audio", audioStatus(item.has_audio)], ["Raw slideshow assets", item.has_assets ? "Available" : "None"],
   ];
   const safeLink = /^https?:\/\//i.test(item.link);
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="favorite-details-title">

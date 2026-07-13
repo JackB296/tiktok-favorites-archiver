@@ -5,8 +5,16 @@ import subprocess
 from collections import namedtuple
 
 
-MediaFacts = namedtuple("MediaFacts", "duration_s width height codec file_size")
-MediaIndex = namedtuple("MediaIndex", "duration_s width height codec file_size thumbnail_path")
+MediaFacts = namedtuple(
+    "MediaFacts",
+    "duration_s width height codec file_size has_audio",
+    defaults=(True,),
+)
+MediaIndex = namedtuple(
+    "MediaIndex",
+    "duration_s width height codec file_size thumbnail_path has_audio",
+    defaults=(True,),
+)
 
 
 def inspect_media(path, runner=subprocess.run):
@@ -23,12 +31,14 @@ def inspect_media(path, runner=subprocess.run):
     )
     data = json.loads(result.stdout)
     video = next(stream for stream in data.get("streams", []) if stream.get("codec_type") == "video")
+    has_audio = any(stream.get("codec_type") == "audio" for stream in data.get("streams", []))
     return MediaFacts(
         float(data.get("format", {}).get("duration") or 0),
         int(video.get("width") or 0),
         int(video.get("height") or 0),
         video.get("codec_name") or "unknown",
         os.path.getsize(path),
+        has_audio,
     )
 
 
@@ -61,4 +71,4 @@ def index_media(download_dir, item_id, thumbnail_width, inspect=inspect_media, m
     source = os.path.join(raw_dir, images[0]) if images else movie
     relative_thumb = f".archive/thumbnails/{item_id}.webp"
     make_thumbnail(source, os.path.join(download_dir, relative_thumb), thumbnail_width)
-    return MediaIndex(*facts, relative_thumb)
+    return MediaIndex(*facts[:5], relative_thumb, facts.has_audio)

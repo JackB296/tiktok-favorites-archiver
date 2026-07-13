@@ -23,6 +23,11 @@ assert.equal(feed.nextWheelTargetIndex(0, -1, -1, 20), 0);
 assert.equal(feed.shouldCommitWheelTarget(900, 664, 2), false);
 assert.equal(feed.shouldCommitWheelTarget(1_310, 664, 2), true);
 assert.equal(feed.shouldCommitWheelTarget(1_328, 664, 2), true);
+assert.equal(feed.playbackItemId(12, null), 12);
+assert.equal(feed.playbackItemId(12, 13), 13);
+assert.equal(feed.shouldPreloadItem(13, 5, 13, null), true);
+assert.equal(feed.shouldPreloadItem(14, 5, 14, null), false);
+assert.equal(feed.shouldPreloadItem(40, 5, 40, 40), true);
 
 const progress = await load("../src/lib/progressPresentation.js");
 assert.equal(
@@ -47,10 +52,20 @@ assert.equal(volume.readPlaybackVolume("not a number"), 1);
 assert.equal(volume.normalizationGain(0), 1);
 assert.ok(volume.normalizationGain(0.5) < 1);
 assert.ok(volume.normalizationGain(0.05) > 1);
-assert.equal(volume.normalizationGain(0.001), 3);
+assert.equal(volume.normalizationGain(0.001), 2.5);
 assert.equal(volume.normalizationGain(1), 0.35);
 assert.equal(volume.formatAutoGain(1), "Auto 1.00×");
 assert.equal(volume.formatAutoGain(1.347), "Auto 1.35×");
+
+const media = await load("../src/lib/mediaPresentation.js");
+assert.equal(media.audioStatus(false), "No audio");
+assert.equal(media.audioStatus(true), "Has audio");
+assert.equal(media.audioStatus(null), "Not checked");
+assert.equal(media.readGalleryDensity(null), "comfortable");
+assert.equal(media.readGalleryDensity("compact"), "compact");
+assert.equal(media.formatMediaTime(0), "0:00");
+assert.equal(media.formatMediaTime(65.4), "1:05");
+assert.equal(media.formatMediaTime(Number.NaN), "0:00");
 
 const captions = await load("../src/lib/captionPresentation.js");
 assert.deepEqual(captions.captionParts("free will #tenet and #TenetEdit."), [

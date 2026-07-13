@@ -16,6 +16,7 @@ assert.equal(feed.isFeedItem({ status: "failed", video_url: null, images: [], of
 
 assert.equal(feed.feedMediaKind({ status: "done", video_url: "/media/1.mp4", images: [], offloaded: true }), "video");
 assert.equal(feed.feedMediaKind({ status: "done", video_url: null, images: ["/media/2/1.jpg"], offloaded: true }), "slideshow");
+assert.equal(feed.feedMediaKind({ status: "done", kind: "slideshow", video_url: "/media/2.mp4", images: ["/media/2/1.jpg"], offloaded: false }), "slideshow");
 assert.equal(feed.feedMediaKind({ status: "done", video_url: null, images: [], offloaded: true }), "offloaded");
 assert.equal(feed.feedMediaKind({ status: "expired", video_url: null, images: [], offloaded: false }), "expired");
 

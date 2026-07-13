@@ -31,6 +31,7 @@ export interface Item {
   media_height: number | null;
   media_codec: string | null;
   media_size: number | null;
+  has_audio: boolean | null;
   video_url: string | null;
   images: string[];
   audio: string | null;

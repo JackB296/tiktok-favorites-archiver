@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { SpeakerSimpleHigh, SpeakerSimpleX, ArrowSquareOut, FilmReel, Shuffle, Keyboard, CornersOut, ClockCounterClockwise } from "@phosphor-icons/react";
+import { SpeakerSimpleHigh, SpeakerSimpleX, SpeakerSlash, ArrowSquareOut, FilmReel, Shuffle, Keyboard, CornersOut, ClockCounterClockwise, GearSix } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
 import { PostMedia } from "../components/PostMedia";
@@ -9,13 +9,13 @@ import { EmptyState, Skeleton } from "../components/ui";
 import { viewerShortcut } from "../lib/viewerShortcuts";
 import { isFeedItem } from "../lib/feedItems";
 import { useDelayedLoading } from "../lib/useDelayedLoading";
-import { activeFeedIndex, feedTrimPlan, nextWheelTargetIndex, shouldCommitWheelTarget } from "../lib/viewerFeed.js";
+import { activeFeedIndex, feedTrimPlan, nextWheelTargetIndex, playbackItemId, shouldCommitWheelTarget, shouldPreloadItem } from "../lib/viewerFeed.js";
 import { formatAutoGain } from "../lib/playbackVolume.js";
 import { captionParts, cleanMetadataText, hashtagGalleryUrl } from "../lib/captionPresentation.js";
+import { audioStatus } from "../lib/mediaPresentation.js";
+import { MediaSettingsDialog } from "../components/MediaSettingsDialog";
 
 const KEEP_BEHIND = 5;
-const PRELOAD_AHEAD = 4;
-
 export function Viewer() {
   const [searchParams] = useSearchParams();
   const [items, setItems] = useState<Item[] | null>(null);
@@ -302,17 +302,19 @@ export function Viewer() {
 
   return (
     <PlaybackSession initiallyMuted={false}>
-      <ViewerFeed items={items} activeId={activeId} transitionTargetId={transitionTargetId} containerRef={containerRef} onActiveChange={setActiveId} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} randomizing={randomizing} randomMode={randomMode} randomPosition={randomPosition} randomTotal={randomTotal} queueTotal={requestedQueueIds.length} queueReadyTotal={queueReadyTotal} onOrdered={returnToOrderedFeed} />
+      <ViewerFeed items={items} activeId={activeId} transitionTargetId={transitionTargetId} containerRef={containerRef} onActiveChange={setActiveId} onItemUpdated={(updated) => setItems((current) => current?.map((item) => item.id === updated.id ? updated : item) ?? null)} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} randomizing={randomizing} randomMode={randomMode} randomPosition={randomPosition} randomTotal={randomTotal} queueTotal={requestedQueueIds.length} queueReadyTotal={queueReadyTotal} onOrdered={returnToOrderedFeed} />
     </PlaybackSession>
   );
 }
 
-function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiveChange, onGoToLastWatched, onRandom, randomizing, randomMode, randomPosition, randomTotal, queueTotal, queueReadyTotal, onOrdered }: { items: Item[]; activeId: number | null; transitionTargetId: number | null; containerRef: React.RefObject<HTMLDivElement>; onActiveChange: (id: number) => void; onGoToLastWatched?: () => void; onRandom: () => void; randomizing: boolean; randomMode: boolean; randomPosition: number | null; randomTotal: number; queueTotal: number; queueReadyTotal: number; onOrdered: () => void }) {
+function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiveChange, onItemUpdated, onGoToLastWatched, onRandom, randomizing, randomMode, randomPosition, randomTotal, queueTotal, queueReadyTotal, onOrdered }: { items: Item[]; activeId: number | null; transitionTargetId: number | null; containerRef: React.RefObject<HTMLDivElement>; onActiveChange: (id: number) => void; onItemUpdated: (item: Item) => void; onGoToLastWatched?: () => void; onRandom: () => void; randomizing: boolean; randomMode: boolean; randomPosition: number | null; randomTotal: number; queueTotal: number; queueReadyTotal: number; onOrdered: () => void }) {
   const { muted, toggleMuted, volume, setVolume, autoLevel, toggleAutoLevel, autoGain, setAutoGain, paused, togglePaused, setPaused } = usePlayback();
   const Speaker = muted ? SpeakerSimpleX : SpeakerSimpleHigh;
   const activeIndex = items.findIndex((item) => item.id === activeId);
+  const effectivePlaybackId = playbackItemId(activeId, transitionTargetId);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [settingsItem, setSettingsItem] = useState<Item | null>(null);
 
   const toggleFullscreen = useCallback(async () => {
     const target = containerRef.current;
@@ -375,9 +377,10 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
           data-id={item.id}
           className="relative flex h-full snap-start items-center justify-center"
         >
-          <PostMedia item={item} active={item.id === activeId} transitioning={item.id === transitionTargetId} preload={(index > activeIndex && index <= activeIndex + PRELOAD_AHEAD) || item.id === transitionTargetId} />
+          <PostMedia item={item} active={item.id === effectivePlaybackId} preload={shouldPreloadItem(index, activeIndex, item.id, transitionTargetId)} />
 
           <div className="absolute right-4 top-4 flex items-center gap-2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm">
+            {item.has_audio === false && <span title="FFprobe found no audio stream" className="inline-flex items-center gap-1 rounded-full bg-bad/90 px-2 py-1 text-[10px] font-semibold"><SpeakerSlash size={13} weight="fill" />{audioStatus(item.has_audio)}</span>}
             <button
               onClick={toggleMuted}
               aria-label={muted ? "Unmute" : "Mute"}
@@ -407,11 +410,12 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
             >
               {autoLevel ? formatAutoGain(autoGain) : "Auto off"}
             </button>
+            {item.video_url && <button type="button" onClick={() => setSettingsItem(item)} aria-label={`Open media settings for favorite #${item.id}`} title="Replace video or thumbnail" className="rounded-full p-1.5 transition hover:bg-white/15 active:translate-y-px"><GearSix size={20} /></button>}
           </div>
 
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/45 to-transparent px-4 pb-4 pt-24 sm:px-6 sm:pb-6">
-            <div className="mx-auto max-w-xl">
-              {(cleanMetadataText(item.author) || cleanMetadataText(item.caption)) && <div className="rounded-2xl border border-white/10 bg-black/45 p-3.5 text-white shadow-xl shadow-black/20 backdrop-blur-md">
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent px-4 pb-16 pt-28 sm:px-6">
+            <div className="mx-auto max-w-2xl">
+              {(cleanMetadataText(item.author) || cleanMetadataText(item.caption)) && <div className="rounded-[var(--radius-media)] border border-white/20 bg-black/70 p-4 text-white shadow-xl shadow-black/25 backdrop-blur-md">
                 {cleanMetadataText(item.author) && <div className="mb-2 flex items-center gap-2"><span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/55">Creator</span><span className="truncate text-sm font-semibold text-white">{cleanMetadataText(item.author)}</span></div>}
                 {cleanMetadataText(item.caption) && <CaptionDescription caption={cleanMetadataText(item.caption)} />}
               </div>}
@@ -423,12 +427,13 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
           </div>
         </section>
       ))}
+      {settingsItem && <MediaSettingsDialog item={settingsItem} onClose={() => setSettingsItem(null)} onSaved={(updated) => { onItemUpdated(updated); setSettingsItem(null); }} />}
     </div>
   );
 }
 
 function CaptionDescription({ caption }: { caption: string }) {
-  return <p className="line-clamp-3 whitespace-pre-wrap break-words text-[13px] leading-5 text-white/80 sm:text-sm">
+  return <p className="line-clamp-4 whitespace-pre-wrap break-words text-[15px] leading-6 text-white sm:text-base">
     {captionParts(caption).map((part, index) => part.hashtag ? (
       <Link key={`${part.text}-${index}`} to={hashtagGalleryUrl(part.hashtag)} title={`Show all favorites tagged ${part.hashtag}`} className="pointer-events-auto rounded px-0.5 font-semibold text-white underline decoration-white/35 underline-offset-2 transition hover:bg-white/15 hover:decoration-white">{part.text}</Link>
     ) : <span key={`${part.text}-${index}`}>{part.text}</span>)}

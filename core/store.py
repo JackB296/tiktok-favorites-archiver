@@ -33,11 +33,13 @@ CREATE TABLE IF NOT EXISTS item (
     caption      TEXT,
     author       TEXT,
     thumbnail_path TEXT,
+    custom_thumbnail_path TEXT,
     duration_s    REAL,
     media_width   INTEGER,
     media_height  INTEGER,
     media_codec   TEXT,
     media_size    INTEGER,
+    has_audio     INTEGER,
     media_fingerprint TEXT,
     indexed_at    TEXT,
     index_error   TEXT,
@@ -119,11 +121,13 @@ END;
 _ITEM_MIGRATIONS = {
     "favorite_order": "INTEGER",
     "thumbnail_path": "TEXT",
+    "custom_thumbnail_path": "TEXT",
     "duration_s": "REAL",
     "media_width": "INTEGER",
     "media_height": "INTEGER",
     "media_codec": "TEXT",
     "media_size": "INTEGER",
+    "has_audio": "INTEGER",
     "media_fingerprint": "TEXT",
     "indexed_at": "TEXT",
     "index_error": "TEXT",
@@ -447,6 +451,7 @@ def record_media_index(conn, item_id, index, fingerprint):
         media_height=index["height"],
         media_codec=index["codec"],
         media_size=index["file_size"],
+        has_audio=1 if index.get("has_audio", True) else 0,
         media_fingerprint=fingerprint,
         indexed_at=_now(),
         index_error=None,
@@ -458,10 +463,44 @@ def record_media_index_error(conn, item_id, error):
     _update(conn, item_id, index_error=error)
 
 
+def record_manual_media(conn, item_id, index=None, fingerprint=None, custom_thumbnail_path=None):
+    """Commit facts for user-supplied media without changing archive identity."""
+    fields = {}
+    if index is not None:
+        fields.update(
+            status="done",
+            error=None,
+            archive_missing=0,
+            offloaded=0,
+            thumbnail_path=index["thumbnail_path"],
+            duration_s=index["duration_s"],
+            media_width=index["width"],
+            media_height=index["height"],
+            media_codec=index["codec"],
+            media_size=index["file_size"],
+            has_audio=1 if index["has_audio"] else 0,
+            media_fingerprint=fingerprint,
+            indexed_at=_now(),
+            index_error=None,
+        )
+    if custom_thumbnail_path is not None:
+        fields["custom_thumbnail_path"] = custom_thumbnail_path
+    if not fields:
+        return
+    fields["updated_at"] = _now()
+    assignments = ", ".join(f"{column} = ?" for column in fields)
+    conn.execute(
+        f"UPDATE item SET {assignments} WHERE id = ?",
+        (*fields.values(), item_id),
+    )
+    conn.commit()
+
+
 def items_needing_index(conn):
     """Finished Archive items without a persisted Gallery index."""
     return conn.execute(
-        "SELECT * FROM item WHERE status = 'done' AND offloaded = 0 AND thumbnail_path IS NULL ORDER BY id"
+        "SELECT * FROM item WHERE status = 'done' AND offloaded = 0 AND "
+        "(thumbnail_path IS NULL OR has_audio IS NULL) ORDER BY id"
     ).fetchall()
 
 
@@ -528,6 +567,11 @@ _PAGE_ORDERS = {
     "attempts_desc": ("attempt_count DESC, id DESC", "attempt_count", "DESC"),
     "last_attempt_desc": ("last_attempt_at DESC, id DESC", "last_attempt_at", "DESC"),
     "author_asc": ("author ASC, id ASC", "author", "ASC"),
+    "audio_missing": (
+        "CASE WHEN has_audio = 0 THEN 0 WHEN has_audio = 1 THEN 1 ELSE 2 END ASC, id DESC",
+        None,
+        None,
+    ),
     "relevance": ("rank ASC, id DESC", None, None),
 }
 
@@ -716,6 +760,14 @@ def page_items(conn, **query):
             key_sql = _random_key_sql(seed)
             cursor_key = _random_order_key(cursor, seed)
             clauses.append(f"({key_sql} > ? OR ({key_sql} = ? AND id > ?))")
+            params += [cursor_key, cursor_key, int(cursor)]
+        elif order == "audio_missing":
+            cursor_row = get_item(conn, int(cursor))
+            if cursor_row is None:
+                raise ValueError("unknown pagination cursor")
+            cursor_key = 0 if cursor_row["has_audio"] == 0 else 1 if cursor_row["has_audio"] == 1 else 2
+            key_sql = "CASE WHEN has_audio = 0 THEN 0 WHEN has_audio = 1 THEN 1 ELSE 2 END"
+            clauses.append(f"({key_sql} > ? OR ({key_sql} = ? AND id < ?))")
             params += [cursor_key, cursor_key, int(cursor)]
         elif order == "relevance":
             cursor_row = conn.execute(
