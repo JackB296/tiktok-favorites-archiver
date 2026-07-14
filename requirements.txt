@@ -1,3 +1,4 @@
 requests>=2.28
 moviepy<2.0.0   # 2.0 removed moviepy.editor, which this project imports from
 pillow>=9.1
+shazamio>=0.7   # opt-in song identification (Shazam); ships prebuilt cp312 manylinux wheels

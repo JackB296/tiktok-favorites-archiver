@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS item (
     last_attempt_at TEXT,
     archive_missing INTEGER NOT NULL DEFAULT 0,
     offloaded    INTEGER NOT NULL DEFAULT 0,
+    song_id       INTEGER,               -- references song(id); NULL = no identified song
+    song_status   TEXT,                  -- NULL=never tried, 'identified'/'no_match'/'error'
+    song_source   TEXT,                  -- 'auto' (Shazam) or 'manual' (user match)
+    song_identified_at TEXT,
+    song_error    TEXT,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
@@ -57,6 +62,22 @@ CREATE INDEX IF NOT EXISTS idx_item_favorited_at  ON item(favorited_at, id)    W
 CREATE INDEX IF NOT EXISTS idx_item_attempts      ON item(attempt_count, id);
 CREATE INDEX IF NOT EXISTS idx_item_last_attempt  ON item(last_attempt_at, id) WHERE last_attempt_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_item_author        ON item(author, id)          WHERE author IS NOT NULL;
+
+-- One row per distinct identified track. Many favorites share one sound, so
+-- songs are stored once (deduped by dedup_key) and referenced by item.song_id.
+CREATE TABLE IF NOT EXISTS song (
+    id          INTEGER PRIMARY KEY,
+    dedup_key   TEXT NOT NULL UNIQUE,   -- 'shazam:<key>' when known, else 'ta:<title>|<artist>'
+    shazam_key  TEXT,                   -- Shazam's stable track id, when available
+    title       TEXT NOT NULL,
+    artist      TEXT,
+    album       TEXT,
+    art_url     TEXT,                   -- cover art
+    shazam_url  TEXT,                   -- canonical Shazam track page
+    apple_url   TEXT,                   -- direct Apple Music link, if Shazam returned one
+    spotify_url TEXT,                   -- direct Spotify link, if Shazam returned one
+    created_at  TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS run_state (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
@@ -135,6 +156,11 @@ _ITEM_MIGRATIONS = {
     "last_attempt_at": "TEXT",
     "archive_missing": "INTEGER NOT NULL DEFAULT 0",
     "offloaded": "INTEGER NOT NULL DEFAULT 0",
+    "song_id": "INTEGER",
+    "song_status": "TEXT",
+    "song_source": "TEXT",
+    "song_identified_at": "TEXT",
+    "song_error": "TEXT",
 }
 
 
@@ -167,6 +193,10 @@ def init_db(conn):
     conn.execute("UPDATE item SET favorite_order = id WHERE favorite_order IS NULL")
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_item_favorite_order ON item(favorite_order)"
+    )
+    # Created after the migration loop so upgrading DBs already have song_id.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_item_song ON item(song_id) WHERE song_id IS NOT NULL"
     )
     item_count = conn.execute("SELECT COUNT(*) FROM item").fetchone()[0]
     search_count = conn.execute("SELECT COUNT(*) FROM item_search").fetchone()[0]
@@ -516,6 +546,67 @@ def record_manual_media(conn, item_id, index=None, fingerprint=None, custom_thum
         (*fields.values(), item_id),
     )
     conn.commit()
+
+
+# --- song identification ----------------------------------------------------
+
+def upsert_song(conn, dedup_key, title, artist=None, album=None, art_url=None,
+                shazam_url=None, apple_url=None, spotify_url=None, shazam_key=None):
+    """Insert a song (deduped by ``dedup_key``) and return its id.
+
+    A repeat identification of the same track reuses the existing row, so the
+    Music view can list each distinct song once with the favorites that use it.
+    """
+    conn.execute(
+        "INSERT OR IGNORE INTO song "
+        "(dedup_key, shazam_key, title, artist, album, art_url, shazam_url, apple_url, spotify_url, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (dedup_key, shazam_key, title, artist, album, art_url, shazam_url, apple_url, spotify_url, _now()),
+    )
+    conn.commit()
+    return conn.execute("SELECT id FROM song WHERE dedup_key = ?", (dedup_key,)).fetchone()["id"]
+
+
+def get_song(conn, song_id):
+    return conn.execute("SELECT * FROM song WHERE id = ?", (song_id,)).fetchone()
+
+
+def set_item_song(conn, item_id, song_id, source="auto"):
+    """Attach an identified song to an item and mark it identified."""
+    _update(conn, item_id, song_id=song_id, song_status="identified",
+            song_source=source, song_identified_at=_now(), song_error=None)
+
+
+def set_item_song_no_match(conn, item_id):
+    """Remember that identification ran and found nothing, so re-runs skip it."""
+    _update(conn, item_id, song_id=None, song_status="no_match",
+            song_identified_at=_now(), song_error=None)
+
+
+def set_item_song_error(conn, item_id, error):
+    """Record an identification failure; kept retryable, keeps the reason."""
+    _update(conn, item_id, song_status="error", song_error=str(error)[:500])
+
+
+def items_needing_identification(conn, retry_no_match=False):
+    """Finished, audio-bearing local items whose song is not yet resolved.
+
+    NULL ``song_status`` = never attempted. ``'no_match'`` is remembered so a
+    re-run does not re-hammer Shazam (unless ``retry_no_match``); ``'error'`` is
+    always retried. Confirmed-silent items (``has_audio = 0``) have no song to
+    find and are skipped.
+    """
+    skip = ["identified"]
+    if not retry_no_match:
+        skip.append("no_match")
+    placeholders = ",".join("?" for _ in skip)
+    return conn.execute(
+        "SELECT * FROM item WHERE status = 'done' AND offloaded = 0 AND archive_missing = 0 "
+        "AND has_audio = 1 "
+        f"AND (song_status IS NULL OR song_status NOT IN ({placeholders})) "
+        "ORDER BY id",
+        tuple(skip),
+    ).fetchall()
 
 
 def items_needing_index(conn):
