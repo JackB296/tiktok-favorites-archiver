@@ -190,6 +190,7 @@ export interface LibrarySettings {
   index_enabled: number;
   thumbnail_width: 320 | 480;
   song_id_enabled: number;
+  default_audio_name: string | null;
   index: { total: number; indexed: number; pending: number; failed: number };
 }
 

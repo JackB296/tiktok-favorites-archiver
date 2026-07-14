@@ -51,7 +51,10 @@ export function Dashboard() {
   const [metadataOpen, setMetadataOpen] = useState(false);
   const [songIdOpen, setSongIdOpen] = useState(false);
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
+  const [audioMsg, setAudioMsg] = useState<string | null>(null);
+  const [audioBusy, setAudioBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const defaultAudioRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => api.status().then(setStatus).catch(() => {});
   const refreshLibrary = () => api.librarySettings().then(setLibrary).catch(() => {});
@@ -117,6 +120,36 @@ export function Dashboard() {
   async function updateSyncSettings(concurrency: number) {
     const next = await api.updateSyncSettings({ concurrency }).catch(() => null);
     if (next) setSyncSettings(next);
+  }
+
+  async function onDefaultAudio(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setAudioBusy(true);
+    setAudioMsg(null);
+    try {
+      const next = await api.setDefaultAudio(file);
+      setLibrary(next);
+      setAudioMsg(`Now using ${next.default_audio_name} when a slideshow's original sound is gone.`);
+    } catch (err) {
+      setAudioMsg(`Upload failed: ${(err as Error).message}`);
+    } finally {
+      setAudioBusy(false);
+    }
+  }
+
+  async function clearDefaultAudio() {
+    setAudioBusy(true);
+    setAudioMsg(null);
+    try {
+      setLibrary(await api.clearDefaultAudio());
+      setAudioMsg("Reverted to the bundled default track.");
+    } catch (err) {
+      setAudioMsg((err as Error).message);
+    } finally {
+      setAudioBusy(false);
+    }
   }
 
   async function act(a: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "pause" | "continue" | "stop") {
@@ -285,6 +318,21 @@ export function Dashboard() {
             </Button>
           </div>
           <p className="mt-2 text-xs text-ink-faint">Rebuild refreshes existing thumbnails and media facts. It is available when indexing is enabled and can be paused or stopped like Sync.</p>
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <h2 className="text-sm font-semibold text-ink">Slideshow fallback audio</h2>
+          <p className="mt-1 text-sm text-ink-dim">Photo posts are rebuilt with their original sound. When TikTok has already deleted that audio, this track fills in instead. A change applies to slideshows built from now on; existing videos keep the audio they were made with.</p>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+            <p className="text-sm text-ink-dim">Current: {library?.default_audio_name ? <span className="font-medium text-ink">{library.default_audio_name}</span> : "Bundled default"}</p>
+            <div className="flex items-center gap-2">
+              {library?.default_audio_name && <Button variant="ghost" disabled={audioBusy} onClick={() => void clearDefaultAudio()}>Use bundled</Button>}
+              <Button variant="ghost" disabled={audioBusy} onClick={() => defaultAudioRef.current?.click()}><UploadSimple size={16} /> {audioBusy ? "Uploading…" : "Upload MP3"}</Button>
+              <input ref={defaultAudioRef} type="file" accept="audio/mpeg,.mp3" hidden onChange={onDefaultAudio} />
+            </div>
+          </div>
+          {library?.default_audio_name && <audio controls src="/media/.archive/default-audio.mp3" className="mt-3 w-full" />}
+          {audioMsg && <p className="mt-3 text-sm text-ink-dim">{audioMsg}</p>}
         </section>
 
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
