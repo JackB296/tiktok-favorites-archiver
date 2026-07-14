@@ -191,6 +191,9 @@ class ArchiveItems:
             "media_codec": row["media_codec"],
             "media_size": row["media_size"],
             "has_audio": None if row["has_audio"] is None else bool(row["has_audio"]),
+            "song": None,
+            "song_status": row["song_status"],
+            "song_source": row["song_source"],
             "video_url": None,
             "images": [],
             "audio": None,
@@ -204,6 +207,18 @@ class ArchiveItems:
         thumbnail_path = row["custom_thumbnail_path"] or row["thumbnail_path"]
         if thumbnail_path:
             data["thumbnail_url"] = f"/media/{thumbnail_path}"
+        if row["song_id"]:
+            song = store.get_song(self._conn, row["song_id"])
+            if song is not None:
+                data["song"] = {
+                    "title": song["title"],
+                    "artist": song["artist"],
+                    "album": song["album"],
+                    "art_url": song["art_url"],
+                    "shazam_url": song["shazam_url"],
+                    "apple_url": song["apple_url"],
+                    "spotify_url": song["spotify_url"],
+                }
         return data
 
     def _slideshow_assets(self, item_id):

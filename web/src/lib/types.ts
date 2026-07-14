@@ -12,6 +12,20 @@ export type Status =
 
 export type RunState = "idle" | "running" | "paused" | "stopping" | "stopped" | "failed";
 
+export type SongStatus = "identified" | "no_match" | "error";
+export type SongSource = "auto" | "manual";
+
+/** A track identified for a favorite (many favorites can share one song). */
+export interface Song {
+  title: string;
+  artist: string | null;
+  album: string | null;
+  art_url: string | null;
+  shazam_url: string | null;
+  apple_url: string | null;
+  spotify_url: string | null;
+}
+
 export interface Item {
   id: number;
   link: string;
@@ -32,6 +46,9 @@ export interface Item {
   media_codec: string | null;
   media_size: number | null;
   has_audio: boolean | null;
+  song: Song | null;
+  song_status: SongStatus | null;
+  song_source: SongSource | null;
   video_url: string | null;
   images: string[];
   audio: string | null;
@@ -57,7 +74,7 @@ export interface ProgressEvent {
   status?: Status;
   kind?: Kind;
   has_assets?: number;
-  event?: "complete" | "error" | "indexing" | "sidecars" | "enrichment" | "verify";
+  event?: "complete" | "error" | "indexing" | "sidecars" | "enrichment" | "identification" | "verify";
   error?: string;
   indexed?: number;
   failed?: number;
@@ -65,6 +82,10 @@ export interface ProgressEvent {
   total?: number;
   enriched?: number;
   unavailable?: number;
+  identified?: number;
+  no_match?: number;
+  errors?: number;
+  title?: string | null;
 }
 
 export interface ImportResult {
@@ -149,6 +170,7 @@ export interface LegacyBootstrapResult {
 export interface LibrarySettings {
   index_enabled: number;
   thumbnail_width: 320 | 480;
+  song_id_enabled: number;
   index: { total: number; indexed: number; pending: number; failed: number };
 }
 

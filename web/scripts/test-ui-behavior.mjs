@@ -34,6 +34,10 @@ assert.equal(
   progress.progressLabel({ event: "enrichment", completed: 11, total: 18_467, enriched: 9 }),
   "Metadata 11/18467 · 9 updated",
 );
+assert.equal(
+  progress.progressLabel({ event: "identification", completed: 7, total: 40, identified: 5, errors: 1 }),
+  "Songs 7/40 · 5 identified · 1 errors",
+);
 assert.equal(progress.progressLabel({ event: "error", error: "TikTok unavailable" }), "Error: TikTok unavailable");
 assert.equal(progress.progressLabel({ event: "complete" }), "Run complete");
 

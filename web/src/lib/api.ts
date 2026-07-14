@@ -124,7 +124,7 @@ export const api = {
 
   librarySettings: () => json<LibrarySettings>("/api/library-settings"),
   libraryStats: () => json<LibraryStatistics>("/api/library-stats"),
-  updateLibrarySettings: (settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480 }) =>
+  updateLibrarySettings: (settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480; song_id_enabled?: boolean }) =>
     json<LibrarySettings>("/api/library-settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -168,7 +168,7 @@ export const api = {
     return json<LegacyBootstrapResult>("/api/import/legacy-apply", { method: "POST", body });
   },
 
-  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "pause" | "continue" | "stop") =>
+  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "pause" | "continue" | "stop") =>
     json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}`, { method: "POST" }),
 
   /** Subscribe to the SSE progress stream. Returns an unsubscribe fn. */
