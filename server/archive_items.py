@@ -79,6 +79,7 @@ _PAGE_PARAMS = {
     "date_from": ("date_from", str),
     "date_to": ("date_to", str),
     "assets": ("has_assets", {"with": True, "without": False}.__getitem__),
+    "audio": ("has_audio", {"with": True, "without": False}.__getitem__),
     "index_state": ("index_state", str),
     "recovery": ("recovery", _boolean),
     "offloaded": ("offloaded", {"with": True, "without": False}.__getitem__),

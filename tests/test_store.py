@@ -252,6 +252,21 @@ def test_page_items_sorts_confirmed_missing_audio_first_then_present_then_unknow
     assert [row["id"] for row in second] == [1, 3]
 
 
+def test_page_items_filters_to_only_no_audio():
+    conn = _db()
+    for item_id in range(1, 6):
+        store.insert_item(conn, item_id, f"link{item_id}", status="done")
+    conn.execute("UPDATE item SET has_audio = 0 WHERE id IN (2, 4)")  # confirmed silent
+    conn.execute("UPDATE item SET has_audio = 1 WHERE id IN (1, 5)")  # confirmed has sound
+    conn.commit()  # id 3 stays NULL (unindexed / unknown)
+
+    silent = store.page_items(conn, has_audio=False, order="latest")
+    with_sound = store.page_items(conn, has_audio=True, order="latest")
+    assert [row["id"] for row in silent] == [4, 2]  # only the no-audio ones, newest first
+    assert [row["id"] for row in with_sound] == [5, 1]
+    assert 3 not in [row["id"] for row in silent]  # unknown audio is not "no audio"
+
+
 def test_items_by_status_ordered():
     conn = _db()
     for n in (3, 1, 2):

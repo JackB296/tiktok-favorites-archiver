@@ -184,6 +184,7 @@ export interface GalleryPresetFilters {
   dateTo?: string;
   orientation?: string;
   assets?: string;
+  audio?: string;
   offloaded?: string;
   indexState?: string;
   include?: string;

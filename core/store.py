@@ -709,6 +709,7 @@ PAGE_QUERY_DEFAULTS = {
     "date_to": None,
     "orientations": None,
     "has_assets": None,
+    "has_audio": None,
     "index_state": None,
     "include": None,
     "exclude": None,
@@ -783,6 +784,11 @@ def _page_filter_clauses(q):
     if q["has_assets"] is not None:
         clauses.append("has_assets = ?")
         params.append(1 if q["has_assets"] else 0)
+    if q["has_audio"] is not None:
+        # has_audio = 0 means FFprobe found no audio stream — the file is silent,
+        # whether the original had no sound or the audio never came through.
+        clauses.append("has_audio = ?")
+        params.append(1 if q["has_audio"] else 0)
     index_filters = {
         "indexed": "thumbnail_path IS NOT NULL",
         "missing": "thumbnail_path IS NULL AND index_error IS NULL",

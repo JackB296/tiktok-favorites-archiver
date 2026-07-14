@@ -113,35 +113,39 @@ function VideoMedia({ src, active, preload }: { src: string; active: boolean; pr
     setCurrentTime(media.currentTime);
   };
 
-  return <div ref={boxRef} className="group relative flex h-full w-full items-center justify-center bg-black" aria-busy={active && (!ready || waiting)}>
-    <video
-      ref={ref}
-      src={src}
-      preload={active || preload ? "auto" : "none"}
-      loop
-      playsInline
-      muted
-      onClick={active ? togglePaused : undefined}
-      onCanPlay={() => { setReady(true); setWaiting(false); setLoadError(false); }}
-      onPlaying={() => { setReady(true); setWaiting(false); }}
-      onWaiting={() => active && setWaiting(true)}
-      onLoadedMetadata={(event) => { setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0); setMediaSize({ w: event.currentTarget.videoWidth, h: event.currentTarget.videoHeight }); }}
-      onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-      onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-      onError={() => { setLoadError(true); setWaiting(false); }}
-      aria-label={active ? paused ? "Resume video" : "Pause video" : undefined}
-      title={active ? paused ? "Click to resume" : "Click to pause" : undefined}
-      className={cx("h-full w-full object-contain transition-opacity duration-200", active && !ready ? "opacity-0" : "opacity-100", active && "cursor-pointer")}
-    />
+  return <div ref={boxRef} className="relative flex h-full w-full items-center justify-center bg-black" aria-busy={active && (!ready || waiting)}>
+    {/* Inner box is exactly the displayed (letterboxed) video, and is the hover
+        group — so controls appear only over the video, not the black bars. */}
+    <div className="group relative" style={{ width: media.width ? `${media.width}px` : "100%", height: media.height ? `${media.height}px` : "100%" }}>
+      <video
+        ref={ref}
+        src={src}
+        preload={active || preload ? "auto" : "none"}
+        loop
+        playsInline
+        muted
+        onClick={active ? togglePaused : undefined}
+        onCanPlay={() => { setReady(true); setWaiting(false); setLoadError(false); }}
+        onPlaying={() => { setReady(true); setWaiting(false); }}
+        onWaiting={() => active && setWaiting(true)}
+        onLoadedMetadata={(event) => { setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0); setMediaSize({ w: event.currentTarget.videoWidth, h: event.currentTarget.videoHeight }); }}
+        onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onError={() => { setLoadError(true); setWaiting(false); }}
+        aria-label={active ? paused ? "Resume video" : "Pause video" : undefined}
+        title={active ? paused ? "Click to resume" : "Click to pause" : undefined}
+        className={cx("h-full w-full object-contain transition-opacity duration-200", active && !ready ? "opacity-0" : "opacity-100", active && "cursor-pointer")}
+      />
+      {active && ready && <div className="pointer-events-none absolute inset-x-3 bottom-3 z-30 flex translate-y-2 items-center gap-2 rounded-[var(--radius-control)] border border-white/10 bg-black/70 px-2.5 py-2 text-white opacity-0 shadow-lg backdrop-blur-md transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+        <button type="button" onClick={togglePaused} aria-label={paused ? "Play video" : "Pause video"} className="pointer-events-auto rounded-md p-1.5 hover:bg-white/15">{paused ? <Play size={16} weight="fill" /> : <Pause size={16} weight="fill" />}</button>
+        <span className="tabular w-10 text-right text-[11px] text-white/75">{formatMediaTime(currentTime)}</span>
+        <input type="range" min="0" max={Math.max(duration, 0.01)} step="0.1" value={Math.min(currentTime, Math.max(duration, 0.01))} onChange={(event) => seek(Number(event.target.value))} aria-label="Video progress" className="pointer-events-auto h-1 min-w-0 flex-1 cursor-pointer accent-white" />
+        <span className="tabular w-10 text-[11px] text-white/75">{formatMediaTime(duration)}</span>
+      </div>}
+    </div>
     {active && !loadError && (!ready || waiting) && <MediaLoading />}
     {active && loadError && <div role="alert" className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-control)] border border-white/15 bg-black/70 px-4 py-3 text-sm text-white/80">Video could not be loaded.</div>}
     {active && autoplayBlocked && <button type="button" onClick={() => void playWithSound()} className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-medium text-white backdrop-blur-sm"><Play size={16} weight="fill" /> {muted ? "Play video" : "Play with sound"}</button>}
-    {active && ready && <div style={{ width: media.width ? `${Math.max(0, media.width - 24)}px` : undefined }} className="pointer-events-none absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 translate-y-2 items-center gap-2 rounded-[var(--radius-control)] border border-white/10 bg-black/70 px-2.5 py-2 text-white opacity-0 shadow-lg backdrop-blur-md transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
-      <button type="button" onClick={togglePaused} aria-label={paused ? "Play video" : "Pause video"} className="pointer-events-auto rounded-md p-1.5 hover:bg-white/15">{paused ? <Play size={16} weight="fill" /> : <Pause size={16} weight="fill" />}</button>
-      <span className="tabular w-10 text-right text-[11px] text-white/75">{formatMediaTime(currentTime)}</span>
-      <input type="range" min="0" max={Math.max(duration, 0.01)} step="0.1" value={Math.min(currentTime, Math.max(duration, 0.01))} onChange={(event) => seek(Number(event.target.value))} aria-label="Video progress" className="pointer-events-auto h-1 min-w-0 flex-1 cursor-pointer accent-white" />
-      <span className="tabular w-10 text-[11px] text-white/75">{formatMediaTime(duration)}</span>
-    </div>}
   </div>;
 }
 

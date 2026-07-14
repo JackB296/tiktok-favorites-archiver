@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { SpeakerSimpleHigh, SpeakerSimpleX, SpeakerSlash, ArrowSquareOut, FilmReel, Shuffle, Keyboard, CornersOut, ClockCounterClockwise, GearSix } from "@phosphor-icons/react";
+import { SpeakerSimpleHigh, SpeakerSimpleX, SpeakerSlash, ArrowSquareOut, ArrowLeft, FilmReel, Shuffle, Keyboard, CornersOut, ClockCounterClockwise, GearSix } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
 import { PostMedia } from "../components/PostMedia";
@@ -57,7 +57,11 @@ export function Viewer() {
   const filterParams = new URLSearchParams(searchParams);
   filterParams.delete("item");
   filterParams.delete("queue");
+  filterParams.delete("from");
   const filterKey = filterParams.toString();
+  const filterActive = filterKey.length > 0;
+  const backFrom = searchParams.has("from") ? (searchParams.get("from") ?? "") : null;
+  const backHref = backFrom == null ? null : backFrom ? `/gallery?${backFrom}` : "/gallery";
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
 
@@ -91,8 +95,10 @@ export function Viewer() {
           setRandomMode(false);
         })
         .catch(failLoad);
-    } else if (filterKey && requestedItemId != null) {
-      // Search/filter results become a bounded feed, opened at the clicked item.
+    } else if (requestedItemId != null) {
+      // Opening a Favorite scopes a windowed feed over feed_ids — the whole archive
+      // in latest order, or the active search/filter — opened at the clicked item so
+      // you can scroll both up (newer) and down (older) from it.
       setFilteredMode(true);
       setRandomMode(false);
       setQueueReadyTotal(0);
@@ -114,19 +120,6 @@ export function Viewer() {
           setActiveId(requestedItemId);
           pendingScrollToId.current = requestedItemId; // scroll the feed to the clicked item before paint
           setNextCursor(null);
-        })
-        .catch(() => openLatest().catch(failLoad));
-    } else if (requestedItemId != null) {
-      setFilteredMode(false);
-      setQueueReadyTotal(0);
-      api.itemWindow(requestedItemId)
-        .then((page) => {
-          if (!alive) return;
-          const playable = page.items.filter(isFeedItem);
-          if (!playable.some((item) => item.id === requestedItemId)) return openLatest();
-          setItems(playable);
-          setActiveId(requestedItemId);
-          setNextCursor(page.items[page.items.length - 1]?.id ?? null);
         })
         .catch(() => openLatest().catch(failLoad));
     } else {
@@ -426,12 +419,12 @@ export function Viewer() {
 
   return (
     <PlaybackSession initiallyMuted={false}>
-      <ViewerFeed items={items} activeId={activeId} transitionTargetId={transitionTargetId} containerRef={containerRef} onActiveChange={setActiveId} onItemUpdated={(updated) => setItems((current) => current?.map((item) => item.id === updated.id ? updated : item) ?? null)} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} randomizing={randomizing} randomMode={randomMode} randomPosition={randomPosition} randomTotal={randomTotal} filteredMode={filteredMode} filteredTotal={filteredTotal} queueTotal={requestedQueueIds.length} queueReadyTotal={queueReadyTotal} onOrdered={returnToOrderedFeed} />
+      <ViewerFeed items={items} activeId={activeId} transitionTargetId={transitionTargetId} containerRef={containerRef} onActiveChange={setActiveId} onItemUpdated={(updated) => setItems((current) => current?.map((item) => item.id === updated.id ? updated : item) ?? null)} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} randomizing={randomizing} randomMode={randomMode} randomPosition={randomPosition} randomTotal={randomTotal} filterActive={filterActive} filteredTotal={filteredTotal} backHref={backHref} queueTotal={requestedQueueIds.length} queueReadyTotal={queueReadyTotal} onOrdered={returnToOrderedFeed} />
     </PlaybackSession>
   );
 }
 
-function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiveChange, onItemUpdated, onGoToLastWatched, onRandom, randomizing, randomMode, randomPosition, randomTotal, filteredMode, filteredTotal, queueTotal, queueReadyTotal, onOrdered }: { items: Item[]; activeId: number | null; transitionTargetId: number | null; containerRef: React.RefObject<HTMLDivElement>; onActiveChange: (id: number) => void; onItemUpdated: (item: Item) => void; onGoToLastWatched?: () => void; onRandom: () => void; randomizing: boolean; randomMode: boolean; randomPosition: number | null; randomTotal: number; filteredMode: boolean; filteredTotal: number; queueTotal: number; queueReadyTotal: number; onOrdered: () => void }) {
+function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiveChange, onItemUpdated, onGoToLastWatched, onRandom, randomizing, randomMode, randomPosition, randomTotal, filterActive, filteredTotal, backHref, queueTotal, queueReadyTotal, onOrdered }: { items: Item[]; activeId: number | null; transitionTargetId: number | null; containerRef: React.RefObject<HTMLDivElement>; onActiveChange: (id: number) => void; onItemUpdated: (item: Item) => void; onGoToLastWatched?: () => void; onRandom: () => void; randomizing: boolean; randomMode: boolean; randomPosition: number | null; randomTotal: number; filterActive: boolean; filteredTotal: number; backHref: string | null; queueTotal: number; queueReadyTotal: number; onOrdered: () => void }) {
   const { muted, toggleMuted, volume, setVolume, autoLevel, toggleAutoLevel, autoGain, setAutoGain, paused, togglePaused, setPaused } = usePlayback();
   const Speaker = muted ? SpeakerSimpleX : SpeakerSimpleHigh;
   const activeIndex = items.findIndex((item) => item.id === activeId);
@@ -499,8 +492,8 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
       </div>
       {randomMode && <div className="absolute left-3 top-16 z-20 flex items-center gap-2 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">Random · {randomPosition == null ? "…" : randomPosition + 1} / {randomTotal}<button onClick={onOrdered} className="text-white/70 underline underline-offset-2 hover:text-white">Ordered feed</button></div>}
       {!randomMode && queueTotal > 0 && <div className="absolute left-3 top-16 z-20 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">Gallery queue · {queueReadyTotal} ready of {queueTotal} selected</div>}
-      {!randomMode && queueTotal === 0 && filteredMode && <div className="absolute left-3 top-16 z-20 flex items-center gap-2 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">Search results · {filteredTotal}<Link to="/" className="text-white/70 underline underline-offset-2 hover:text-white">Full feed</Link></div>}
-      {showShortcuts && <div className={`absolute left-3 z-20 rounded-xl border border-white/10 bg-black/70 px-3 py-2 text-xs leading-5 text-white shadow-xl backdrop-blur-md ${randomMode || queueTotal > 0 || filteredMode ? "top-28" : "top-16"}`}>↑ ↓: previous or next post<br />← →: slideshow image<br />Space or video click: play or pause<br />M: mute or unmute<br />F: enter or exit fullscreen</div>}
+      {!randomMode && queueTotal === 0 && (backHref || filterActive) && <div className="absolute left-3 top-16 z-20 flex items-center gap-2 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">{backHref ? <Link to={backHref} state={{ restore: true }} className="inline-flex items-center gap-1 font-medium hover:underline"><ArrowLeft size={13} weight="bold" /> {filterActive ? "Back to results" : "Back to gallery"}</Link> : <span>Search results</span>}{filterActive && <span className="text-white/70">· {filteredTotal}</span>}</div>}
+      {showShortcuts && <div className={`absolute left-3 z-20 rounded-xl border border-white/10 bg-black/70 px-3 py-2 text-xs leading-5 text-white shadow-xl backdrop-blur-md ${randomMode || queueTotal > 0 || filterActive ? "top-28" : "top-16"}`}>↑ ↓: previous or next post<br />← →: slideshow image<br />Space or video click: play or pause<br />M: mute or unmute<br />F: enter or exit fullscreen</div>}
       {items.map((item, index) => (
         <section
           key={item.id}

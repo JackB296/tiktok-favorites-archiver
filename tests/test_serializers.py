@@ -166,9 +166,9 @@ def test_parse_page_query_maps_and_transforms_a_full_param_set():
 
 
 def test_parse_page_query_maps_assets_without_and_ignores_falsy_recovery():
-    query = parse_page_query({"assets": "without", "recovery": "false", "kind": ""})
+    query = parse_page_query({"assets": "without", "audio": "without", "recovery": "false", "kind": ""})
 
-    assert query == {"has_assets": False, "recovery": False, "kinds": None}
+    assert query == {"has_assets": False, "has_audio": False, "recovery": False, "kinds": None}
 
 
 def test_parse_page_query_preserves_fastapi_boolean_vocabulary():

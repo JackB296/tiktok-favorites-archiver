@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   MagnifyingGlass,
   Play,
@@ -26,6 +26,7 @@ import { shouldLoadMore } from "../lib/galleryPaging.js";
 import { readGalleryDetails } from "../lib/galleryPresentation.js";
 import type { GalleryDetails } from "../lib/galleryPresentation.js";
 import { audioStatus, readGallerySize } from "../lib/mediaPresentation.js";
+import { isFeedItem } from "../lib/feedItems";
 
 const FILTERS = [
   { key: "", label: "All", help: "Show every favorite that matches the search and advanced filters." },
@@ -52,30 +53,42 @@ function filtersToSearchParams(filters: GalleryPresetFilters) {
     min_height: filters.minHeight, max_height: filters.maxHeight, codec: filters.codec,
     min_attempts: filters.minAttempts, max_attempts: filters.maxAttempts,
     recovery: filters.recovery ? "1" : undefined,
-    from: filters.dateFrom, to: filters.dateTo, orientation: filters.orientation, assets: filters.assets, offloaded: filters.offloaded, index: filters.indexState,
+    from: filters.dateFrom, to: filters.dateTo, orientation: filters.orientation, assets: filters.assets, audio: filters.audio, offloaded: filters.offloaded, index: filters.indexState,
     include: filters.include, exclude: filters.exclude,
   };
   Object.entries(values).forEach(([key, value]) => { if (value && !(key === "sort" && value === "latest")) params.set(key, value); });
   return params;
 }
 
+/** Snapshot of a Gallery view (loaded items + scroll) so the Feed's Back button
+    can restore the exact same page and scroll position. Keyed by the filter query;
+    only applied when returning via that Back button (router state `restore`). */
+type GalleryReturnState = { key: string; items: Item[]; nextCursor: number | null; scrollTop: number };
+let galleryReturnState: GalleryReturnState | null = null;
+
 export function Gallery() {
   const navigate = useNavigate();
+  const location = useLocation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<() => void>(() => {});
   const loadingMoreRef = useRef(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const fromUrl = (name: string) => searchParams.get(name) ?? "";
+  const restoreRef = useRef<GalleryReturnState | null>(
+    (location.state as { restore?: boolean } | null)?.restore && galleryReturnState && galleryReturnState.key === searchParams.toString()
+      ? galleryReturnState
+      : null,
+  );
   const [search, setSearch] = useState(() => fromUrl("q"));
   const [suggestions, setSuggestions] = useState<SearchSuggestions | null>(null);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [suggestActive, setSuggestActive] = useState(-1);
   const [kind, setKind] = useState(() => fromUrl("kind"));
-  const [items, setItems] = useState<Item[] | null>(null);
+  const [items, setItems] = useState<Item[] | null>(() => restoreRef.current?.items ?? null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const initialLoadingPhase = useDelayedLoading(items === null);
-  const [nextCursor, setNextCursor] = useState<number | null>(null);
+  const [nextCursor, setNextCursor] = useState<number | null>(() => restoreRef.current?.nextCursor ?? null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreFailed, setLoadMoreFailed] = useState(false);
   const [advanced, setAdvanced] = useState(false);
@@ -100,6 +113,7 @@ export function Gallery() {
   const [dateTo, setDateTo] = useState(() => fromUrl("to"));
   const [orientation, setOrientation] = useState(() => fromUrl("orientation"));
   const [assets, setAssets] = useState(() => fromUrl("assets"));
+  const [audio, setAudio] = useState(() => fromUrl("audio"));
   const [offloaded, setOffloaded] = useState(() => fromUrl("offloaded"));
   const [indexState, setIndexState] = useState(() => fromUrl("index"));
   const [include, setInclude] = useState(() => fromUrl("include"));
@@ -157,6 +171,7 @@ export function Gallery() {
     date_to: dateTo ? `${dateTo}T23:59:59` : undefined,
     orientation: orientation || undefined,
     assets: (assets === "with" || assets === "without" ? assets : undefined) as "with" | "without" | undefined,
+    audio: (audio === "with" || audio === "without" ? audio : undefined) as "with" | "without" | undefined,
     offloaded: (offloaded === "with" || offloaded === "without" ? offloaded : undefined) as "with" | "without" | undefined,
     index_state: (indexState === "indexed" || indexState === "missing" || indexState === "failed" ? indexState : undefined) as "indexed" | "missing" | "failed" | undefined,
     include, exclude,
@@ -164,7 +179,23 @@ export function Gallery() {
 
   const queryVersion = useRef(0);
 
+  // Restore scroll position when returning to a cached Gallery view via Back. Retry
+  // across a few frames so the virtual grid has time to compute its full height.
   useEffect(() => {
+    if (!restoreRef.current) return;
+    const target = restoreRef.current.scrollTop;
+    let cancelled = false;
+    const apply = () => { if (!cancelled && scrollRef.current) scrollRef.current.scrollTop = target; };
+    const timers = [0, 50, 150, 300, 500].map((delay) => window.setTimeout(apply, delay));
+    return () => { cancelled = true; timers.forEach((t) => window.clearTimeout(t)); };
+  }, []);
+
+  useEffect(() => {
+    // Returning from the Feed via Back keeps the restored items + scroll — don't refetch.
+    if (restoreRef.current) {
+      if (restoreRef.current.key === filtersToSearchParams(currentFilters()).toString()) return;
+      restoreRef.current = null;
+    }
     let alive = true;
     queryVersion.current += 1;
     setLoadError(null);
@@ -187,12 +218,12 @@ export function Gallery() {
       alive = false;
       window.clearTimeout(t);
     };
-  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude, reloadNonce]);
+  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, audio, offloaded, indexState, include, exclude, reloadNonce]);
 
   useEffect(() => {
     setSelectedIds(new Set());
     setRecoveryMessage(null);
-  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude]);
+  }, [search, kind, status, order, randomSeed, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, audio, offloaded, indexState, include, exclude]);
 
   useEffect(() => {
     api.galleryPresets().then(setPresets).catch(() => setPresetMessage("Could not load saved filters."));
@@ -220,12 +251,15 @@ export function Gallery() {
   useEffect(() => { setSuggestActive(-1); }, [suggestions]);
 
   function currentFilters(): GalleryPresetFilters {
-    return { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude };
+    return { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, audio, offloaded, indexState, include, exclude };
   }
 
   useEffect(() => {
-    setSearchParams(filtersToSearchParams(currentFilters()), { replace: true });
-  }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, offloaded, indexState, include, exclude, setSearchParams]);
+    // Only rewrite the URL when it's actually out of sync — a redundant replace()
+    // would wipe navigation state (the Back-button `restore` flag) on mount.
+    const next = filtersToSearchParams(currentFilters());
+    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true });
+  }, [search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, audio, offloaded, indexState, include, exclude, searchParams, setSearchParams]);
 
   function applyPreset(filters: GalleryPresetFilters) {
     setSearch(filters.search ?? "");
@@ -248,6 +282,7 @@ export function Gallery() {
     setDateTo(filters.dateTo ?? "");
     setOrientation(filters.orientation ?? "");
     setAssets(filters.assets ?? "");
+    setAudio(filters.audio ?? "");
     setOffloaded(filters.offloaded ?? "");
     setIndexState(filters.indexState ?? "");
     setInclude(filters.include ?? "");
@@ -390,7 +425,7 @@ export function Gallery() {
     setMinWidth(""); setMaxWidth(""); setMinHeight(""); setMaxHeight(""); setCodec("");
     setMinAttempts(""); setMaxAttempts("");
     setRecovery(false); setRecoveryInboxMessage(null);
-    setDateFrom(""); setDateTo(""); setOrientation(""); setAssets(""); setOffloaded(""); setIndexState(""); setInclude(""); setExclude("");
+    setDateFrom(""); setDateTo(""); setOrientation(""); setAssets(""); setAudio(""); setOffloaded(""); setIndexState(""); setInclude(""); setExclude("");
     setSelectedPresetId("");
   }
 
@@ -502,15 +537,32 @@ export function Gallery() {
     }
   }
 
+  async function retryItem(id: number) {
+    await api.requeueItems([id]).catch(() => {});
+    setInspectedItem(null);
+    restoreRef.current = null; // force a fresh page so the change shows
+    setReloadNonce((n) => n + 1);
+  }
+
+  async function ignoreItem(id: number, ignored: boolean) {
+    await api.markItems(ignored ? "unignore" : "ignore", { ids: [id] }).catch(() => {});
+    setInspectedItem(null);
+    restoreRef.current = null;
+    setReloadNonce((n) => n + 1);
+  }
+
   /** Open a favorite in the Feed. With an active search/filter, scope the Feed to
       the whole matching set in the current sort order; otherwise open the archive. */
   function openInFeed(itemId: number) {
     const params = new URLSearchParams(currentFilterSelector());
     if (order !== "latest") params.set("order", order);
     if (order === "random") params.set("seed", String(randomSeed));
-    const scoped = Array.from(params.keys()).length > 0;
+    const from = filtersToSearchParams(currentFilters()).toString();
+    // Snapshot this view so the Feed's Back button restores it at the same scroll spot.
+    galleryReturnState = { key: from, items: items ?? [], nextCursor, scrollTop: scrollRef.current?.scrollTop ?? 0 };
+    params.set("from", from);
     params.set("item", String(itemId));
-    navigate(scoped ? `/?${params.toString()}` : `/?item=${itemId}`);
+    navigate(`/?${params.toString()}`);
   }
 
   /** The current page filters as the same key/value strings `api.itemPage` sends. */
@@ -596,7 +648,7 @@ export function Gallery() {
   addFilter(minAttempts, `≥ ${minAttempts} attempts`, () => setMinAttempts("")); addFilter(maxAttempts, `≤ ${maxAttempts} attempts`, () => setMaxAttempts(""));
   if (recovery) activeFilters.push({ label: "Recovery inbox", clear: () => setRecovery(false) });
   addFilter(codec, `Codec: ${codec}`, () => setCodec("")); addFilter(dateFrom, `After: ${dateFrom}`, () => setDateFrom("")); addFilter(dateTo, `Before: ${dateTo}`, () => setDateTo(""));
-  addFilter(orientation, orientation, () => setOrientation("")); addFilter(assets, assets === "with" ? "Has raw assets" : "No raw assets", () => setAssets("")); addFilter(offloaded, offloaded === "with" ? "Offloaded" : "Stored locally", () => setOffloaded("")); addFilter(indexState, `Index: ${indexState}`, () => setIndexState("")); addFilter(include, `Include: ${include}`, () => setInclude("")); addFilter(exclude, `Exclude: ${exclude}`, () => setExclude(""));
+  addFilter(orientation, orientation, () => setOrientation("")); addFilter(assets, assets === "with" ? "Has raw assets" : "No raw assets", () => setAssets("")); addFilter(audio, audio === "with" ? "Has audio" : "No audio", () => setAudio("")); addFilter(offloaded, offloaded === "with" ? "Offloaded" : "Stored locally", () => setOffloaded("")); addFilter(indexState, `Index: ${indexState}`, () => setIndexState("")); addFilter(include, `Include: ${include}`, () => setInclude("")); addFilter(exclude, `Exclude: ${exclude}`, () => setExclude(""));
 
   const suggestItems = suggestions
     ? [
@@ -810,6 +862,9 @@ export function Gallery() {
             <label className="text-xs text-ink-dim"><HelpLabel help="Filters photo posts by whether their original downloaded images and audio are still stored beside the rebuilt video.">Raw slideshow assets</HelpLabel>
               <select value={assets} onChange={(e) => setAssets(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any asset state</option><option value="with">Has original assets</option><option value="without">No original assets</option></select>
             </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Filters videos by whether the archived file has an audio stream. 'No audio' shows silent videos — whether the original had no sound or the audio never came through.">Audio</HelpLabel>
+              <select value={audio} onChange={(e) => setAudio(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any audio</option><option value="with">Has audio</option><option value="without">No audio</option></select>
+            </label>
             <label className="text-xs text-ink-dim"><HelpLabel help="Offloaded favorites are archived on external storage (like a NAS), so they have no local file here but are not missing.">External storage</HelpLabel>
               <select value={offloaded} onChange={(e) => setOffloaded(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any</option><option value="with">Offloaded</option><option value="without">Local</option></select>
             </label>
@@ -894,7 +949,7 @@ export function Gallery() {
             items={items}
             size={size}
             scrollRef={scrollRef}
-            renderItem={(it, cardWidth) => <Thumb key={it.id} item={it} cardWidth={cardWidth} details={cardDetails} selecting={selectionMode} inspecting={inspectionMode} selected={selectedIds.has(it.id)} onClick={() => selectionMode ? toggleSelection(it.id) : inspectionMode ? setInspectedItem(it) : openInFeed(it.id)} />}
+            renderItem={(it, cardWidth) => <Thumb key={it.id} item={it} cardWidth={cardWidth} details={cardDetails} selecting={selectionMode} inspecting={inspectionMode} selected={selectedIds.has(it.id)} onClick={() => selectionMode ? toggleSelection(it.id) : inspectionMode || !isFeedItem(it) ? setInspectedItem(it) : openInFeed(it.id)} />}
           />
           {nextCursor != null && (
             <div className="mt-6 flex items-center justify-center gap-2 py-3 text-xs text-ink-faint" aria-live="polite" aria-busy={loadingMore}>
@@ -914,7 +969,7 @@ export function Gallery() {
         </>
       )}
     </div>
-    {inspectedItem && <DetailsDialog item={inspectedItem} onClose={() => setInspectedItem(null)} onPlay={() => navigate(`/?item=${inspectedItem.id}`)} />}
+    {inspectedItem && <DetailsDialog item={inspectedItem} onClose={() => setInspectedItem(null)} onPlay={() => navigate(`/?item=${inspectedItem.id}`)} onRetry={() => retryItem(inspectedItem.id)} onIgnore={() => ignoreItem(inspectedItem.id, inspectedItem.status === "ignored")} />}
     {pendingFilterAction && <ConfirmDialog
       title={pendingFilterAction.action === "offload" ? "Mark matching favorites offloaded?" : "Ignore matching favorites?"}
       message={`This will ${pendingFilterAction.action === "offload" ? "mark" : "ignore"} ${pendingFilterAction.matched} favorite${pendingFilterAction.matched === 1 ? "" : "s"}${pendingFilterAction.action === "offload" ? " as offloaded" : ""}. You can undo this later by changing the mark back.`}
@@ -1000,7 +1055,7 @@ function Thumb({ item, details, cardWidth, onClick, selecting = false, inspectin
   );
 }
 
-function DetailsDialog({ item, onClose, onPlay }: { item: Item; onClose: () => void; onPlay: () => void }) {
+function DetailsDialog({ item, onClose, onPlay, onRetry, onIgnore }: { item: Item; onClose: () => void; onPlay: () => void; onRetry: () => void; onIgnore: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   useDialogFocusTrap(panelRef);
@@ -1026,7 +1081,12 @@ function DetailsDialog({ item, onClose, onPlay }: { item: Item; onClose: () => v
       {item.author && <p className="mt-2 text-sm text-ink-dim">Creator: {item.author}</p>}
       {item.error && <p className="mt-3 rounded-[var(--radius-control)] border border-bad/40 bg-bad/10 p-3 text-sm text-bad">Last error: {item.error}</p>}
       <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 border-t border-line pt-4 sm:grid-cols-2">{rows.map(([label, value]) => <div key={label}><dt className="text-xs text-ink-faint">{label}</dt><dd className="mt-0.5 break-words text-sm text-ink">{value}</dd></div>)}</dl>
-      <div className="mt-5 flex flex-wrap gap-2 border-t border-line pt-4"><button type="button" onClick={onPlay} className="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-accent px-3 py-2 text-sm font-medium text-on-accent"><Play size={15} weight="fill" /> Play this favorite</button>{safeLink && <a href={item.link} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-[var(--radius-control)] border border-line px-3 py-2 text-sm text-ink-dim hover:text-ink">Open TikTok</a>}</div>
+      <div className="mt-5 flex flex-wrap gap-2 border-t border-line pt-4">
+        {isFeedItem(item) && <button type="button" onClick={onPlay} className="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-accent px-3 py-2 text-sm font-medium text-on-accent"><Play size={15} weight="fill" /> Play this favorite</button>}
+        {safeLink && <a href={item.link} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-[var(--radius-control)] border border-line px-3 py-2 text-sm text-ink-dim hover:text-ink"><LinkSimple size={15} className="mr-1.5" /> Open on TikTok</a>}
+        {!isFeedItem(item) && item.status !== "ignored" && !item.offloaded && <button type="button" onClick={onRetry} className="inline-flex items-center rounded-[var(--radius-control)] border border-line px-3 py-2 text-sm text-ink-dim hover:text-ink">Retry download</button>}
+        {(!isFeedItem(item) || item.status === "ignored") && <button type="button" onClick={onIgnore} className="inline-flex items-center rounded-[var(--radius-control)] border border-line px-3 py-2 text-sm text-ink-dim hover:text-ink">{item.status === "ignored" ? "Allow downloading" : "Don't download (mark unavailable)"}</button>}
+      </div>
     </div>
   </div>;
 }
