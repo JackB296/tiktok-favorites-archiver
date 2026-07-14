@@ -16,6 +16,7 @@ import { audioStatus } from "../lib/mediaPresentation.js";
 import { MediaSettingsDialog } from "../components/MediaSettingsDialog";
 
 const KEEP_BEHIND = 5;
+const FILTERED_BEFORE = 45; // how many earlier results to preload so scroll-up works (window ≤ itemSelection's 100 cap)
 export function Viewer() {
   const [searchParams] = useSearchParams();
   const [items, setItems] = useState<Item[] | null>(null);
@@ -41,7 +42,10 @@ export function Viewer() {
   const randomBatchGeneration = useRef<number | null>(null);
   const randomPositions = useRef(new Map<number, number>());
   const feedListIds = useRef<number[]>([]);
+  const feedListStart = useRef(0);
   const feedListOffset = useRef(0);
+  const pendingScrollToId = useRef<number | null>(null);
+  const pendingPrepend = useRef(0);
   const pendingTrim = useRef<{ removeCount: number; restoredScrollTop: number } | null>(null);
   const pendingWheelTargetId = useRef<number | null>(null);
   const wheelGestureReady = useRef(true);
@@ -99,13 +103,16 @@ export function Viewer() {
           setFilteredTotal(ids.length);
           const clickedIndex = ids.indexOf(requestedItemId);
           if (clickedIndex < 0) { void openLatest().catch(failLoad); return; }
-          const start = Math.max(0, clickedIndex - KEEP_BEHIND);
-          const slice = ids.slice(start, clickedIndex + 50).slice(0, 100);
-          feedListOffset.current = start + slice.length;
+          const start = Math.max(0, clickedIndex - FILTERED_BEFORE);
+          const end = Math.min(ids.length, clickedIndex + 50);
+          const slice = ids.slice(start, end);
+          feedListStart.current = start;
+          feedListOffset.current = end;
           const selected = await api.itemSelection(slice);
           if (!alive) return;
           setItems(selected.filter(isFeedItem));
           setActiveId(requestedItemId);
+          pendingScrollToId.current = requestedItemId; // scroll the feed to the clicked item before paint
           setNextCursor(null);
         })
         .catch(() => openLatest().catch(failLoad));
@@ -165,6 +172,26 @@ export function Viewer() {
     try {
       const selected = await api.itemSelection(ids);
       setItems((current) => [...(current ?? []), ...selected.filter(isFeedItem)]);
+    } catch {
+      /* transient — the sentinel stays and the next scroll retries */
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore]);
+
+  const loadFilteredBefore = useCallback(async () => {
+    if (loadingMore) return;
+    const end = feedListStart.current;
+    const start = Math.max(0, end - 50);
+    if (start >= end) return;
+    const ids = feedListIds.current.slice(start, end);
+    setLoadingMore(true);
+    try {
+      const selected = await api.itemSelection(ids);
+      const playable = selected.filter(isFeedItem);
+      feedListStart.current = start;
+      pendingPrepend.current = playable.length; // keep the view fixed after prepending
+      setItems((current) => [...playable, ...(current ?? [])]);
     } catch {
       /* transient — the sentinel stays and the next scroll retries */
     } finally {
@@ -266,20 +293,41 @@ export function Viewer() {
       .finally(() => setLoadingMore(false));
   }, [activeId, items, loadRandomBatch, loadFilteredBatch, loadingMore, nextCursor, randomMode, filteredMode]);
 
+  // Pull in earlier results when scrolling up near the top of a filtered feed.
+  useEffect(() => {
+    if (!filteredMode || !items?.length || activeId == null || loadingMore) return;
+    if (feedListStart.current <= 0) return;
+    if (items.findIndex((item) => item.id === activeId) > 2) return;
+    void loadFilteredBefore();
+  }, [activeId, items, filteredMode, loadingMore, loadFilteredBefore]);
+
   useEffect(() => {
     const root = containerRef.current;
-    if (activeId == null || !root) return;
+    // A filtered feed is bounded, so it keeps its loaded window instead of trimming.
+    if (filteredMode || activeId == null || !root) return;
     const activeIndex = items?.findIndex((item) => item.id === activeId) ?? -1;
     const plan = feedTrimPlan(activeIndex, root.scrollTop, root.clientHeight, KEEP_BEHIND);
     if (plan.removeCount <= 0) return;
     pendingTrim.current = plan;
     setItems((current) => current?.slice(plan.removeCount) ?? null);
-  }, [activeId, items]);
+  }, [activeId, items, filteredMode]);
 
   useLayoutEffect(() => {
-    const plan = pendingTrim.current;
     const root = containerRef.current;
-    if (!plan || !root) return;
+    if (!root) return;
+    if (pendingScrollToId.current != null) {
+      const index = items?.findIndex((item) => item.id === pendingScrollToId.current) ?? -1;
+      if (index >= 0) root.scrollTop = index * root.clientHeight; // open at the clicked result
+      pendingScrollToId.current = null;
+      return;
+    }
+    if (pendingPrepend.current > 0) {
+      root.scrollTop += pendingPrepend.current * root.clientHeight; // hold position after prepend
+      pendingPrepend.current = 0;
+      return;
+    }
+    const plan = pendingTrim.current;
+    if (!plan) return;
     root.scrollTop = plan.restoredScrollTop;
     pendingTrim.current = null;
   }, [items]);

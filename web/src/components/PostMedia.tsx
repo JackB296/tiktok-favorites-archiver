@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { CSSProperties, RefObject } from "react";
 import { Archive, CaretLeft, CaretRight, LinkBreak, Pause, Play } from "@phosphor-icons/react";
 import type { Item } from "../lib/types";
 import { feedMediaKind } from "../lib/feedItems";
@@ -160,7 +160,6 @@ function SlideMedia({ images, audio, active }: { images: string[]; audio: string
   const [boxRef, boxSize] = useElementSize();
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const media = containedMediaBox(boxSize.width, boxSize.height, imgSize.w, imgSize.h);
-  const edgeOffset = media.marginX + 8;
 
   useEffect(() => {
     const a = audioRef.current;
@@ -194,8 +193,8 @@ function SlideMedia({ images, audio, active }: { images: string[]; audio: string
       {audio && <audio ref={audioRef} src={audio} loop />}
       {images.length > 1 && (
         <>
-          <SlideNav side="left" onClick={() => go(-1)} offset={edgeOffset} />
-          <SlideNav side="right" onClick={() => go(1)} offset={edgeOffset} />
+          <SlideNav side="left" onClick={() => go(-1)} margin={media.marginX} />
+          <SlideNav side="right" onClick={() => go(1)} margin={media.marginX} />
           <div className="pointer-events-none absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 gap-1.5">
             {images.map((_, i) => (
               <span
@@ -339,16 +338,30 @@ function useMediaVolume(ref: RefObject<HTMLMediaElement>, active: boolean, volum
   }, [active, autoLevel, onAutoGain, ref, volume]);
 }
 
-function SlideNav({ side, onClick, offset }: { side: "left" | "right"; onClick: () => void; offset: number }) {
+function SlideNav({ side, onClick, margin }: { side: "left" | "right"; onClick: () => void; margin: number }) {
   const Icon = side === "left" ? CaretLeft : CaretRight;
+  const gap = 8;
+  // Sit just outside the image edge, out in the letterbox margin. If the margin is
+  // too thin to hold the control (a portrait image nearly fills the width) fall back
+  // to a small inset so the arrow stays on-screen.
+  const enough = margin >= 44;
+  const style: CSSProperties = enough
+    ? {
+        ...(side === "left" ? { left: `${margin}px` } : { right: `${margin}px` }),
+        transform: side === "left" ? `translate(calc(-100% - ${gap}px), -50%)` : `translate(calc(100% + ${gap}px), -50%)`,
+      }
+    : {
+        ...(side === "left" ? { left: `${gap}px` } : { right: `${gap}px` }),
+        transform: "translateY(-50%)",
+      };
   return (
     <button
       onClick={(event) => { event.stopPropagation(); onClick(); }}
       aria-label={side === "left" ? "Previous image" : "Next image"}
-      style={{ [side]: `${offset}px` }}
+      style={style}
       className={cx(
-        "absolute top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white backdrop-blur-sm",
-        "transition hover:bg-black/60 active:translate-y-[calc(-50%+1px)]",
+        "absolute top-1/2 z-10 rounded-full bg-black/40 p-2 text-white backdrop-blur-sm",
+        "transition hover:bg-black/60",
       )}
     >
       <Icon size={20} weight="bold" />
