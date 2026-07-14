@@ -263,7 +263,7 @@ Python · FastAPI · SQLite · MoviePy · React · Vite · TypeScript · Tailwin
 
 Not affiliated with, endorsed by, or sponsored by TikTok or ByteDance Ltd. "TikTok" is a trademark of its respective owner and is used here only to describe what this tool works with.
 
-This is a tool for **privately archiving your own favorited content** from the data export TikTok provides to you. It runs entirely on your own machine; nothing you import or download is sent to any external service or to the author. You are responsible for complying with [TikTok's Terms of Service](https://www.tiktok.com/legal/) and with the copyright of the original creators. Keep downloaded media for personal use and don't redistribute it. The software is provided "as is", without warranty, under the [MIT License](LICENSE).
+This is a tool for **privately archiving your own favorited content** from the data export TikTok provides to you. Importing and downloading run entirely on your own machine and send nothing to the author. The one exception is optional song identification: when you enable it, a short audio clip per video is sent to Shazam to name the track, through the unofficial [`shazamio`](https://github.com/shazamio/ShazamIO) client. It is off by default and is not affiliated with or endorsed by Shazam or Apple. You are responsible for complying with [TikTok's Terms of Service](https://www.tiktok.com/legal/), with Shazam's terms when you use identification, and with the copyright of the original creators. Keep downloaded media for personal use and don't redistribute it. The software is provided "as is", without warranty, under the [MIT License](LICENSE).
 
 ## License
 
