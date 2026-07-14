@@ -134,6 +134,41 @@ def test_items_needing_identification_selects_and_skips():
     assert fresh not in ids
 
 
+def test_library_settings_opt_in_off_by_default_and_migrates():
+    # Fresh DB: identification is opt-in, so off.
+    conn = store.init_db(store.connect(":memory:"))
+    assert store.get_library_settings(conn)["song_id_enabled"] == 0
+
+    # A pre-feature settings table gains the column, still defaulting to off.
+    legacy = store.connect(":memory:")
+    legacy.executescript(
+        """
+        CREATE TABLE library_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            index_enabled INTEGER NOT NULL DEFAULT 1,
+            thumbnail_width INTEGER NOT NULL DEFAULT 480,
+            updated_at TEXT NOT NULL
+        );
+        INSERT INTO library_settings (id, index_enabled, thumbnail_width, updated_at)
+        VALUES (1, 1, 480, '2020-01-01');
+        """
+    )
+    legacy.commit()
+    store.init_db(legacy)
+    assert store.get_library_settings(legacy)["song_id_enabled"] == 0
+
+
+def test_song_id_opt_in_toggles():
+    conn = store.init_db(store.connect(":memory:"))
+    store.set_library_settings(conn, song_id_enabled=True)
+    assert store.get_library_settings(conn)["song_id_enabled"] == 1
+    store.set_library_settings(conn, song_id_enabled=False)
+    assert store.get_library_settings(conn)["song_id_enabled"] == 0
+    # Leaving it unset does not disturb the stored value.
+    store.set_library_settings(conn, thumbnail_width=320)
+    assert store.get_library_settings(conn)["song_id_enabled"] == 0
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

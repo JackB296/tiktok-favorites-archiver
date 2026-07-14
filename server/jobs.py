@@ -11,7 +11,7 @@ runner — no requests/moviepy needed.
 import queue
 import threading
 
-from core import enrich, runs, sidecars, store, sync
+from core import enrich, identify, runs, sidecars, store, sync
 
 
 class JobBusyError(RuntimeError):
@@ -53,6 +53,7 @@ class JobManager:
             "index": sync.run_index,
             "sidecars": sidecars.run_sidecars,
             "enrich": enrich.run_enrichment,
+            "identify": identify.run_identification,
         }
         self._thread = None
         self._broadcaster = Broadcaster()

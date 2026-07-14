@@ -654,6 +654,7 @@ async def update_library_settings(request: Request):
             conn,
             index_enabled=body.get("index_enabled"),
             thumbnail_width=body.get("thumbnail_width"),
+            song_id_enabled=body.get("song_id_enabled"),
         )
         return _library_settings(conn)
     except (TypeError, ValueError) as error:
@@ -698,6 +699,16 @@ def sync_control(request: Request, action: str):
         return {"started": jm.start("sidecars")}
     if action == "enrich":
         return {"started": jm.start("enrich")}
+    if action == "identify":
+        # Opt-in gate: never start identification (which sends audio to Shazam)
+        # unless the owner has explicitly enabled it.
+        conn = _open(request)
+        try:
+            if not store.get_library_settings(conn)["song_id_enabled"]:
+                raise HTTPException(status_code=409, detail="enable song identification in settings first")
+        finally:
+            conn.close()
+        return {"started": jm.start("identify")}
     if action == "pause":
         if not jm.pause():
             raise HTTPException(status_code=409, detail="no run in progress")

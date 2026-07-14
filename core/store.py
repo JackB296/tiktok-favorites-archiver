@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS library_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     index_enabled INTEGER NOT NULL DEFAULT 1,
     thumbnail_width INTEGER NOT NULL DEFAULT 480,
+    song_id_enabled INTEGER NOT NULL DEFAULT 0,   -- opt-in; sends audio to Shazam
     updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS gallery_preset (
@@ -198,6 +199,10 @@ def init_db(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_item_song ON item(song_id) WHERE song_id IS NOT NULL"
     )
+    # Additive migration for the singleton settings row (no migration dict here).
+    settings_columns = {row["name"] for row in conn.execute("PRAGMA table_info(library_settings)")}
+    if "song_id_enabled" not in settings_columns:
+        conn.execute("ALTER TABLE library_settings ADD COLUMN song_id_enabled INTEGER NOT NULL DEFAULT 0")
     item_count = conn.execute("SELECT COUNT(*) FROM item").fetchone()[0]
     search_count = conn.execute("SELECT COUNT(*) FROM item_search").fetchone()[0]
     if item_count and search_count != item_count:
@@ -1123,7 +1128,7 @@ def library_statistics(conn):
     }
 
 
-def set_library_settings(conn, index_enabled=None, thumbnail_width=None):
+def set_library_settings(conn, index_enabled=None, thumbnail_width=None, song_id_enabled=None):
     fields = {}
     if index_enabled is not None:
         fields["index_enabled"] = 1 if index_enabled else 0
@@ -1131,6 +1136,8 @@ def set_library_settings(conn, index_enabled=None, thumbnail_width=None):
         if thumbnail_width not in (320, 480):
             raise ValueError("thumbnail width must be 320 or 480")
         fields["thumbnail_width"] = thumbnail_width
+    if song_id_enabled is not None:
+        fields["song_id_enabled"] = 1 if song_id_enabled else 0
     if not fields:
         return
     fields["updated_at"] = _now()
