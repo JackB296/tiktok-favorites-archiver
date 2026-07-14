@@ -15,6 +15,7 @@ import { captionParts, cleanMetadataText, hashtagGalleryUrl } from "../lib/capti
 import { audioStatus } from "../lib/mediaPresentation.js";
 import { primarySongUrl, songLabel } from "../lib/songLinks.js";
 import { MediaSettingsDialog } from "../components/MediaSettingsDialog";
+import { SongIdentifyDialog } from "../components/SongIdentifyDialog";
 
 const KEEP_BEHIND = 5;
 const FILTERED_BEFORE = 45; // how many earlier results to preload so scroll-up works (window ≤ itemSelection's 100 cap)
@@ -433,6 +434,7 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [settingsItem, setSettingsItem] = useState<Item | null>(null);
+  const [identifyItem, setIdentifyItem] = useState<Item | null>(null);
 
   const toggleFullscreen = useCallback(async () => {
     const target = containerRef.current;
@@ -534,6 +536,7 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
             >
               {autoLevel ? formatAutoGain(autoGain) : "Auto off"}
             </button>
+            {item.video_url && <button type="button" onClick={() => setIdentifyItem(item)} aria-label={`Identify the song for favorite #${item.id}`} title="Identify or fix the song" className="rounded-full p-1.5 transition hover:bg-white/15 active:translate-y-px"><MusicNotes size={20} /></button>}
             {item.video_url && <button type="button" onClick={() => setSettingsItem(item)} aria-label={`Open media settings for favorite #${item.id}`} title="Replace video or thumbnail" className="rounded-full p-1.5 transition hover:bg-white/15 active:translate-y-px"><GearSix size={20} /></button>}
           </div>
 
@@ -553,6 +556,7 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
         </section>
       ))}
       {settingsItem && <MediaSettingsDialog item={settingsItem} onClose={() => setSettingsItem(null)} onSaved={(updated) => { onItemUpdated(updated); setSettingsItem(null); }} />}
+      {identifyItem && <SongIdentifyDialog item={identifyItem} onClose={() => setIdentifyItem(null)} onSaved={(updated) => { onItemUpdated(updated); setIdentifyItem(null); }} />}
     </div>
   );
 }

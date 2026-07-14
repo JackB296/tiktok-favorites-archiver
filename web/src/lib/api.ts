@@ -1,4 +1,4 @@
-import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions } from "./types";
+import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -104,6 +104,13 @@ export const api = {
     if (files.thumbnail) body.append("thumbnail", files.thumbnail);
     return json<Item>(`/api/items/${n}/media`, { method: "POST", body });
   },
+
+  searchSongs: (q: string) => json<{ results: SongCandidate[] }>(`/api/songs/search?q=${encodeURIComponent(q)}`),
+  setItemSong: (n: number, match: SongCandidate) => json<Item>(`/api/items/${n}/song`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(match),
+  }),
 
   status: () => json<RunStatus>("/api/status"),
   runHistory: () => json<RunHistoryEntry[]>("/api/run-history"),

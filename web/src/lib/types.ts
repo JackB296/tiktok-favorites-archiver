@@ -26,6 +26,11 @@ export interface Song {
   spotify_url: string | null;
 }
 
+/** A Shazam catalog search result for the manual "match it myself" flow. */
+export interface SongCandidate extends Song {
+  key: string | null;
+}
+
 export interface Item {
   id: number;
   link: string;

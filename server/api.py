@@ -13,7 +13,7 @@ from queue import Empty
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse
 
-from core import config, store, importer, cobalt, verify, inventory, legacy_bootstrap, manual_media
+from core import config, store, importer, cobalt, verify, inventory, legacy_bootstrap, manual_media, songid
 from server import archive_items
 from server.archive_items import ArchiveItems
 from server.jobs import JobBusyError
@@ -449,6 +449,62 @@ async def replace_item_media(
         raise HTTPException(status_code=400, detail=str(error))
     finally:
         _remove_temp_files([path for path in (staged_video, staged_thumbnail) if path])
+
+
+@router.get("/songs/search")
+def search_songs(request: Request, q: str = ""):
+    """Search Shazam's catalog by text for the manual 'match it myself' flow.
+
+    Gated on the opt-in setting: this contacts Shazam's servers, so it stays off
+    until the owner enables song identification.
+    """
+    query = q.strip()
+    if not query:
+        return {"results": []}
+    conn = _open(request)
+    try:
+        if not store.get_library_settings(conn)["song_id_enabled"]:
+            raise HTTPException(status_code=409, detail="enable song identification in settings first")
+    finally:
+        conn.close()
+    try:
+        matches = songid.search(query, limit=8)
+    except Exception as error:  # network / reverse-engineered client can fail
+        raise HTTPException(status_code=502, detail=f"Shazam search failed: {error}")
+    return {"results": [dict(match._asdict()) for match in matches]}
+
+
+@router.post("/items/{n}/song")
+async def set_item_song(request: Request, n: int):
+    """Attach a hand-picked song to a Favorite (manual identification)."""
+    body = await request.json()
+    if not isinstance(body, dict) or not body.get("title"):
+        raise HTTPException(status_code=400, detail="a song title is required")
+    match = songid.SongMatch(
+        key=body.get("key"), title=body["title"], artist=body.get("artist"),
+        album=body.get("album"), art_url=body.get("art_url"), shazam_url=body.get("shazam_url"),
+        apple_url=body.get("apple_url"), spotify_url=body.get("spotify_url"),
+    )
+
+    def operation():
+        conn = _open(request)
+        try:
+            if store.get_item(conn, n) is None:
+                raise HTTPException(status_code=404, detail="item not found")
+            song_id = store.upsert_song(
+                conn, songid.dedup_key(match), match.title, artist=match.artist,
+                album=match.album, art_url=match.art_url, shazam_url=match.shazam_url,
+                apple_url=match.apple_url, spotify_url=match.spotify_url, shazam_key=match.key,
+            )
+            store.set_item_song(conn, n, song_id, source="manual")
+            return _archive_items(request, conn).get(n)
+        finally:
+            conn.close()
+
+    try:
+        return request.app.state.jobs.run_when_idle(operation)
+    except JobBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error))
 
 
 def _legacy_mapping_segments(value):
