@@ -134,6 +134,40 @@ def test_items_needing_identification_selects_and_skips():
     assert fresh not in ids
 
 
+def test_distinct_songs_counts_uses_and_lists_favorites():
+    conn = store.init_db(store.connect(":memory:"))
+    a = _done_audio_item(conn, "https://tiktok.com/a")
+    b = _done_audio_item(conn, "https://tiktok.com/b")
+    c = _done_audio_item(conn, "https://tiktok.com/c")
+    viral = store.upsert_song(conn, "shazam:viral", "Viral", artist="A")
+    rare = store.upsert_song(conn, "shazam:rare", "Rare", artist="B")
+    store.set_item_song(conn, a, viral)
+    store.set_item_song(conn, b, viral)
+    store.set_item_song(conn, c, rare)
+
+    songs = store.distinct_songs(conn)
+    assert [(s["title"], s["uses"]) for s in songs] == [("Viral", 2), ("Rare", 1)]  # most-used first
+    assert songs[0]["item_ids"] == [a, b]
+    assert songs[1]["item_ids"] == [c]
+
+    # item_cap bounds how many favorite ids each song carries.
+    assert store.distinct_songs(conn, item_cap=1)[0]["item_ids"] == [a]
+
+
+def test_song_playlist_crud():
+    conn = store.init_db(store.connect(":memory:"))
+    one = store.upsert_song(conn, "shazam:1", "One")
+    two = store.upsert_song(conn, "shazam:2", "Two")
+
+    pid = store.save_song_playlist(conn, "Favorites", [one, two])
+    listed = store.list_song_playlists(conn)
+    assert listed == [{"id": pid, "name": "Favorites", "song_ids": [one, two]}]
+
+    assert store.delete_song_playlist(conn, pid) is True
+    assert store.list_song_playlists(conn) == []
+    assert store.delete_song_playlist(conn, pid) is False
+
+
 def test_library_settings_opt_in_off_by_default_and_migrates():
     # Fresh DB: identification is opt-in, so off.
     conn = store.init_db(store.connect(":memory:"))

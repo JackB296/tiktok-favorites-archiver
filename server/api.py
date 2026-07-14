@@ -88,6 +88,23 @@ def _playback_queue(body):
     return name, item_ids
 
 
+def _song_playlist(body):
+    if not isinstance(body, dict):
+        raise ValueError("playlist must be an object")
+    name = body.get("name")
+    song_ids = body.get("song_ids")
+    if not isinstance(name, str) or not (name := name.strip()) or len(name) > 80:
+        raise ValueError("name must be between 1 and 80 characters")
+    if (
+        not isinstance(song_ids, list)
+        or not 1 <= len(song_ids) <= 1000
+        or len(set(song_ids)) != len(song_ids)
+        or any(type(song_id) is not int or song_id < 1 for song_id in song_ids)
+    ):
+        raise ValueError("song_ids must contain 1 to 1000 unique positive integer IDs")
+    return name, song_ids
+
+
 @router.get("/health")
 def health():
     return {"status": "ok", "cobalt_reachable": cobalt.check_cobalt(config.COBALT_API_URL)}
@@ -214,6 +231,52 @@ def delete_playback_queue(request: Request, queue_id: int):
     try:
         if not store.delete_playback_queue(conn, queue_id):
             raise HTTPException(status_code=404, detail="playback queue not found")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.get("/songs")
+def list_songs(request: Request):
+    """Every identified song with its favorite count and ids, for the Music view."""
+    conn = _open(request)
+    try:
+        return {"songs": store.distinct_songs(conn)}
+    finally:
+        conn.close()
+
+
+@router.get("/song-playlists")
+def list_song_playlists(request: Request):
+    conn = _open(request)
+    try:
+        return store.list_song_playlists(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/song-playlists")
+async def create_song_playlist(request: Request):
+    try:
+        name, song_ids = _song_playlist(await request.json())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    conn = _open(request)
+    try:
+        playlist_id = store.save_song_playlist(conn, name, song_ids)
+        return {"id": playlist_id, "name": name, "song_ids": song_ids}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="a playlist with that name already exists")
+    finally:
+        conn.close()
+
+
+@router.delete("/song-playlists/{playlist_id}")
+def delete_song_playlist(request: Request, playlist_id: int):
+    conn = _open(request)
+    try:
+        if not store.delete_song_playlist(conn, playlist_id):
+            raise HTTPException(status_code=404, detail="playlist not found")
         return {"ok": True}
     finally:
         conn.close()

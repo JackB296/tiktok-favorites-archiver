@@ -113,6 +113,12 @@ CREATE TABLE IF NOT EXISTS playback_queue (
     item_ids_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS song_playlist (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    song_ids_json TEXT NOT NULL,   -- references song(id)
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS run_history (
     id INTEGER PRIMARY KEY,
     kind TEXT NOT NULL,
@@ -612,6 +618,66 @@ def items_needing_identification(conn, retry_no_match=False):
         "ORDER BY id",
         tuple(skip),
     ).fetchall()
+
+
+def distinct_songs(conn, item_cap=100):
+    """Every identified song with how many favorites use it, most-used first.
+
+    Each entry carries up to ``item_cap`` of its favorites' ids so the Music view
+    can open them as a Feed queue. Songs used by no (remaining) item are omitted.
+    """
+    songs = conn.execute(
+        "SELECT s.*, COUNT(i.id) AS uses "
+        "FROM song s JOIN item i ON i.song_id = s.id "
+        "GROUP BY s.id ORDER BY uses DESC, s.title COLLATE NOCASE, s.id"
+    ).fetchall()
+    ids_by_song = {}
+    for row in conn.execute(
+        "SELECT song_id, id FROM item WHERE song_id IS NOT NULL ORDER BY song_id, id"
+    ):
+        ids = ids_by_song.setdefault(row["song_id"], [])
+        if len(ids) < item_cap:
+            ids.append(row["id"])
+    return [
+        {
+            "id": song["id"],
+            "title": song["title"],
+            "artist": song["artist"],
+            "album": song["album"],
+            "art_url": song["art_url"],
+            "shazam_url": song["shazam_url"],
+            "apple_url": song["apple_url"],
+            "spotify_url": song["spotify_url"],
+            "uses": song["uses"],
+            "item_ids": ids_by_song.get(song["id"], []),
+        }
+        for song in songs
+    ]
+
+
+def list_song_playlists(conn):
+    rows = conn.execute(
+        "SELECT id, name, song_ids_json FROM song_playlist ORDER BY name COLLATE NOCASE, id"
+    ).fetchall()
+    return [
+        {"id": row["id"], "name": row["name"], "song_ids": json.loads(row["song_ids_json"])}
+        for row in rows
+    ]
+
+
+def save_song_playlist(conn, name, song_ids):
+    cursor = conn.execute(
+        "INSERT INTO song_playlist (name, song_ids_json, created_at) VALUES (?, ?, ?)",
+        (name, json.dumps(song_ids, separators=(",", ":")), _now()),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def delete_song_playlist(conn, playlist_id):
+    cursor = conn.execute("DELETE FROM song_playlist WHERE id = ?", (playlist_id,))
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def items_needing_index(conn):

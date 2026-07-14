@@ -31,6 +31,20 @@ export interface SongCandidate extends Song {
   key: string | null;
 }
 
+/** A distinct identified song for the Music view: its DB id, how many favorites
+ * use it, and (capped) which ones, so it can open a Feed queue. */
+export interface SongSummary extends Song {
+  id: number;
+  uses: number;
+  item_ids: number[];
+}
+
+export interface SongPlaylist {
+  id: number;
+  name: string;
+  song_ids: number[];
+}
+
 export interface Item {
   id: number;
   link: string;

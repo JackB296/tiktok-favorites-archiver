@@ -1,4 +1,4 @@
-import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate } from "./types";
+import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -104,6 +104,15 @@ export const api = {
     if (files.thumbnail) body.append("thumbnail", files.thumbnail);
     return json<Item>(`/api/items/${n}/media`, { method: "POST", body });
   },
+
+  songs: () => json<{ songs: SongSummary[] }>("/api/songs"),
+  songPlaylists: () => json<SongPlaylist[]>("/api/song-playlists"),
+  createSongPlaylist: (name: string, songIds: number[]) => json<SongPlaylist>("/api/song-playlists", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, song_ids: songIds }),
+  }),
+  deleteSongPlaylist: (id: number) => json<{ ok: boolean }>(`/api/song-playlists/${id}`, { method: "DELETE" }),
 
   searchSongs: (q: string) => json<{ results: SongCandidate[] }>(`/api/songs/search?q=${encodeURIComponent(q)}`),
   setItemSong: (n: number, match: SongCandidate) => json<Item>(`/api/items/${n}/song`, {
