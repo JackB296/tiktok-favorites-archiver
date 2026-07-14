@@ -36,8 +36,9 @@ File numbering is stable: `147.mp4` stays archive item 147 in the database. Favo
 - **Resilient download engine.** A bounded worker pool holds a configurable request rate and backs off on HTTP 429. Progress lives in SQLite, downloads stream to a `.part` file and are renamed into place only when complete, and a rerun resumes exactly where it stopped.
 - **Rebuilds photo slideshows.** TikTok photo posts are re-encoded into MP4s with their original audio (FFmpeg via MoviePy), each image centered on a canvas sized to the largest slide, with the raw images kept for the in-app carousel.
 - **Scales to a real library.** The Feed and Gallery stay responsive at 11,000+ favorites through row virtualization, media preloading, and range-based streaming from the backend.
+- **Identifies songs (opt-in).** Shazam names the track in each favorite and shows it in Feed and Gallery. A Music tab lists every identified song, opens each in Spotify, YouTube, or Apple Music, and saves playlists. It stays off until you turn it on; enabling it uploads a short audio clip per video to Shazam, the only time the app sends your media's audio to an outside service.
 - **Built to be operated.** Live per-item progress over Server-Sent Events, an archive integrity check, a one-click recovery inbox, saved and shareable filters, and a portable CSV inventory.
-- **Tested and typed.** The download engine is a standalone Python package with a stdlib-only unit suite (24 files). The frontend talks to a small typed API and never reaches Cobalt directly.
+- **Tested and typed.** The download engine is a standalone Python package with a stdlib-only unit suite (29 files). The frontend talks to a small typed API and never reaches Cobalt directly.
 
 ## Quick start
 
@@ -61,7 +62,7 @@ Media is written to `./downloads` on your host. Point Plex at that folder and yo
 
 ### Feed
 
-A vertical scroll of your favorites, one at a time. Videos autoplay as they come into view and expose play/pause and seeking controls on hover. Photo posts use a manual image carousel while their original audio keeps playing; slides never advance on their own.
+A vertical scroll of your favorites, one at a time. Videos autoplay as they come into view and expose play/pause and seeking controls on hover. Photo posts use a manual image carousel while their original audio keeps playing; slides never advance on their own. An identified song shows as a chip you can open in a music service, and a per-post button lets you search for and set the song by hand.
 
 It opens at your newest favorite, remembers where you left off ("go to last watched"), and has a no-repeat shuffle. Desktop controls are built in: arrow keys change favorites, Space pauses, M toggles sound, F enters or exits fullscreen. The next eight posts preload and the previous video stops the moment navigation begins, so the Feed stays smooth at 11,000+ favorites. Optional loudness leveling is capped at 2.5× to avoid distorted amplification.
 
@@ -75,9 +76,13 @@ A searchable thumbnail grid of everything, ranked best-match first.
 - **Queues and inspect.** Select up to 100 favorites to start a temporary custom Feed queue, save it as a named queue, or target recovery. Inspect mode opens a favorite's full archive metadata, including retry count and last attempt time, without leaving the grid. Failed favorites show their last error.
 - **Performance.** The grid loads the next page near the end of the current results and keeps only viewport-adjacent thumbnail rows mounted, so an 11,000-favorite library stays responsive.
 
+### Music
+
+Every identified song collects here, most-used first. Each track shows how many favorites use it, opens in Spotify, YouTube, or Apple Music, and can start a Feed of exactly the favorites that share it. Tick songs to save a named playlist. The tab is empty until you enable song identification in Sync and run it.
+
 ### Sync
 
-The control center. Upload your export, then start, pause, resume, or stop a run and watch per-item status update live over Server-Sent Events. It keeps a durable local history of recent jobs and their final counts, and houses the library settings: Gallery indexing (thumbnails and media facts, with a quality choice), worker count, a portable archive-inventory CSV, media-server metadata export, and an archive integrity check.
+The control center. Upload your export, then start, pause, resume, or stop a run and watch per-item status update live over Server-Sent Events. It keeps a durable local history of recent jobs and their final counts, and houses the library settings: Gallery indexing (thumbnails and media facts, with a quality choice), worker count, a portable archive-inventory CSV, media-server metadata export, and an archive integrity check. Song identification lives here as an opt-in run: enable it, and a rate-limited pass sends a short clip per video to Shazam and labels each favorite, skipping ones already done.
 
 <p align="center">
   <img src="screenshots/sync.png" alt="The Sync dashboard: upload, run controls, live per-item progress" width="880">
@@ -91,16 +96,18 @@ The control center. Upload your export, then start, pause, resume, or stop a run
 - **Provenance.** `downloads/manifest.csv` maps each file to its source link, type, and status alongside the database.
 - **Gallery index.** Sync records duration, dimensions, codec, file size, and whether an audio stream exists, then renders a WebP thumbnail per favorite (480px or 320px), so the Gallery pages instantly instead of decoding video. Indexing runs on a small worker pool and can be rebuilt, paused, or turned off.
 - **Search metadata.** Sync can fetch missing captions and creator names from TikTok's public oEmbed endpoint at the configured rate limit, skipping entries already enriched. This powers author, hashtag, and caption search.
+- **Song identification (opt-in).** Off by default. When you turn it on, a rate-limited Sync run uploads a short audio clip per video to Shazam and records the match. It remembers the ones Shazam cannot place so a rerun skips them, and a per-post search lets you set or correct a song by hand. Enabling it is the only time the app sends your audio to an outside service.
 - **Media-server metadata.** One click writes a `.nfo` title file and `.jpg` poster next to every video, so Plex, Jellyfin, and Kodi show real titles and artwork instead of bare numbers. Your media files are never modified.
 - **Integrity check.** Sync can verify the whole archive: finished favorites missing their video (one click re-queues them), stray files no favorite claims, and leftover temp files from interrupted runs.
 - **Localhost only.** The app has no login, so Docker binds it to `127.0.0.1`; nothing else on your network can reach it. Plex reads `./downloads` from disk and is unaffected.
-- **Backups.** Two things hold your archive: the media in `./downloads` and the database at `./appdata/archive.db` (numbering, statuses, captions, saved filters). Copy both while the app is stopped and you can restore everything.
+- **Backups.** Two things hold your archive: the media in `./downloads` and the database at `./appdata/archive.db` (numbering, statuses, captions, identified songs, playlists, saved filters). Copy both while the app is stopped and you can restore everything.
 
 ## Project layout
 
 ```
 core/     download engine: export parsing, Cobalt client, slideshow encoder,
-          SQLite store, concurrent sync, oEmbed enrichment, asset backfill
+          SQLite store, concurrent sync, oEmbed enrichment, asset backfill,
+          Shazam song identification
 server/   FastAPI backend: REST + Server-Sent Events, background job manager,
           range-capable media streaming
 web/      React + Vite + Tailwind SPA: Feed, Gallery, Sync
@@ -212,7 +219,7 @@ delete, move, index, or download any media.
 
 If the original CLI was restarted and its numbering changed, use **Mapping
 segments** before preview. Enter comma-separated `first-file:offset` pairs.
-For example, `20968:5833, 22315:5832` means files #20,968–#22,314 use offset
+For example, `20968:5833, 22315:5832` means files #20,968-#22,314 use offset
 5,833 and files from #22,315 onward use 5,832. Preview shows each resulting
 file and export-position range separately. Any favorite consumed by a failed
 run and then hidden by a reused filename is preserved as its own ignored
