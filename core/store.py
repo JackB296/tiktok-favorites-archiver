@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS library_settings (
     index_enabled INTEGER NOT NULL DEFAULT 1,
     thumbnail_width INTEGER NOT NULL DEFAULT 480,
     song_id_enabled INTEGER NOT NULL DEFAULT 0,   -- opt-in; sends audio to Shazam
+    default_audio_name TEXT,                       -- custom slideshow fallback filename; NULL = bundled default.mp3
     updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS gallery_preset (
@@ -209,6 +210,8 @@ def init_db(conn):
     settings_columns = {row["name"] for row in conn.execute("PRAGMA table_info(library_settings)")}
     if "song_id_enabled" not in settings_columns:
         conn.execute("ALTER TABLE library_settings ADD COLUMN song_id_enabled INTEGER NOT NULL DEFAULT 0")
+    if "default_audio_name" not in settings_columns:
+        conn.execute("ALTER TABLE library_settings ADD COLUMN default_audio_name TEXT")
     item_count = conn.execute("SELECT COUNT(*) FROM item").fetchone()[0]
     search_count = conn.execute("SELECT COUNT(*) FROM item_search").fetchone()[0]
     if item_count and search_count != item_count:
@@ -1209,6 +1212,15 @@ def set_library_settings(conn, index_enabled=None, thumbnail_width=None, song_id
     fields["updated_at"] = _now()
     assignments = ", ".join(f"{name} = ?" for name in fields)
     conn.execute(f"UPDATE library_settings SET {assignments} WHERE id = 1", tuple(fields.values()))
+    conn.commit()
+
+
+def set_default_audio(conn, name):
+    """Set the custom slideshow fallback filename, or clear it with ``None``."""
+    conn.execute(
+        "UPDATE library_settings SET default_audio_name = ?, updated_at = ? WHERE id = 1",
+        (name, _now()),
+    )
     conn.commit()
 
 

@@ -652,6 +652,38 @@ def test_items_needing_index_skips_offloaded_items():
     assert [row["id"] for row in store.items_needing_index(conn)] == [1]
 
 
+def test_default_audio_defaults_to_bundled_and_sets_and_clears():
+    conn = _db()
+    assert store.get_library_settings(conn)["default_audio_name"] is None  # bundled by default
+
+    store.set_default_audio(conn, "my-track.mp3")
+    assert store.get_library_settings(conn)["default_audio_name"] == "my-track.mp3"
+
+    store.set_default_audio(conn, None)
+    assert store.get_library_settings(conn)["default_audio_name"] is None
+
+
+def test_default_audio_column_migrates_onto_a_legacy_settings_table():
+    conn = store.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE library_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            index_enabled INTEGER NOT NULL DEFAULT 1,
+            thumbnail_width INTEGER NOT NULL DEFAULT 480,
+            updated_at TEXT NOT NULL
+        );
+        INSERT INTO library_settings (id, index_enabled, thumbnail_width, updated_at)
+        VALUES (1, 1, 480, '2020-01-01');
+        """
+    )
+    conn.commit()
+    store.init_db(conn)
+    assert store.get_library_settings(conn)["default_audio_name"] is None
+    store.set_default_audio(conn, "kept.mp3")
+    assert store.get_library_settings(conn)["default_audio_name"] == "kept.mp3"
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

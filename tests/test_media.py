@@ -50,7 +50,24 @@ def test_recover_slideshow_assets_returns_none_when_no_images_download():
         assert media.recover_slideshow_assets(deps, download_dir, 7, result, lambda *_: "ready") is None
 
 
+def test_resolve_default_audio_prefers_present_custom_track():
+    with tempfile.TemporaryDirectory() as download_dir:
+        # No custom file configured -> bundled default.
+        assert media.resolve_default_audio(download_dir, None, "/bundled.mp3") == "/bundled.mp3"
+
+        # Configured but the file is missing -> bundled default (graceful).
+        assert media.resolve_default_audio(download_dir, "mine.mp3", "/bundled.mp3") == "/bundled.mp3"
+
+        # Configured and present at the fixed path -> the custom track.
+        custom = os.path.join(download_dir, media.CUSTOM_DEFAULT_AUDIO)
+        os.makedirs(os.path.dirname(custom), exist_ok=True)
+        with open(custom, "wb") as f:
+            f.write(b"\x00")
+        assert media.resolve_default_audio(download_dir, "mine.mp3", "/bundled.mp3") == custom
+
+
 if __name__ == "__main__":
     test_recover_slideshow_assets_saves_raw_media_before_callback()
     test_recover_slideshow_assets_returns_none_when_no_images_download()
+    test_resolve_default_audio_prefers_present_custom_track()
     print("PASS test_media")

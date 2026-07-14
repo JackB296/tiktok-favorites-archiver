@@ -7,13 +7,14 @@ Each request opens its own SQLite connection (safe under WAL + busy_timeout).
 import os
 import json
 import sqlite3
+import subprocess
 import tempfile
 from queue import Empty
 
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse
 
-from core import config, store, importer, cobalt, verify, inventory, legacy_bootstrap, manual_media, songid
+from core import config, store, importer, cobalt, verify, inventory, legacy_bootstrap, manual_media, songid, media
 from server import archive_items
 from server.archive_items import ArchiveItems
 from server.jobs import JobBusyError
@@ -426,6 +427,26 @@ def item_window(request: Request, n: int, limit: int = 50):
 MAX_IMPORT_BYTES = 512 * 1024 * 1024  # far above any real TikTok export
 MAX_REPLACEMENT_VIDEO_BYTES = 1024 * 1024 * 1024
 MAX_REPLACEMENT_THUMBNAIL_BYTES = 20 * 1024 * 1024
+MAX_DEFAULT_AUDIO_BYTES = 20 * 1024 * 1024
+
+
+def _has_audio_stream(path):
+    """True when ffprobe finds a decodable audio stream in the file."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=codec_type", "-of", "json", path],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        data = json.loads(result.stdout or "{}")
+    except ValueError:
+        return False
+    return any(stream.get("codec_type") == "audio" for stream in data.get("streams", []))
 
 
 async def _stage_upload(upload, prefix, suffix, max_bytes=MAX_IMPORT_BYTES, directory=None):
@@ -778,6 +799,54 @@ async def update_library_settings(request: Request):
         return _library_settings(conn)
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error))
+    finally:
+        conn.close()
+
+
+@router.post("/default-audio")
+async def upload_default_audio(request: Request, audio: UploadFile = File(...)):
+    """Set a custom slideshow fallback track, used when a photo post's original
+    sound is gone. Applies to future encodes; existing MP4s keep their audio."""
+    name = (audio.filename or "").strip() or "default-audio.mp3"
+    if not name.lower().endswith(".mp3"):
+        raise HTTPException(status_code=400, detail="upload an .mp3 file")
+    download_dir = _download_dir(request)
+    target = os.path.join(download_dir, media.CUSTOM_DEFAULT_AUDIO)
+    staged = None
+    try:
+        staged = await _stage_upload(
+            audio, ".default-audio-", ".upload",
+            max_bytes=MAX_DEFAULT_AUDIO_BYTES,
+            directory=os.path.join(download_dir, ".archive", "uploads"),
+        )
+        if not _has_audio_stream(staged):
+            raise HTTPException(status_code=400, detail="that file has no readable audio")
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        os.replace(staged, target)
+        staged = None
+        conn = _open(request)
+        try:
+            store.set_default_audio(conn, name)
+            return _library_settings(conn)
+        finally:
+            conn.close()
+    finally:
+        if staged:
+            _remove_temp_files([staged])
+
+
+@router.delete("/default-audio")
+def clear_default_audio(request: Request):
+    """Revert to the bundled default track and remove the uploaded custom one."""
+    target = os.path.join(_download_dir(request), media.CUSTOM_DEFAULT_AUDIO)
+    try:
+        os.remove(target)
+    except OSError:
+        pass
+    conn = _open(request)
+    try:
+        store.set_default_audio(conn, None)
+        return _library_settings(conn)
     finally:
         conn.close()
 

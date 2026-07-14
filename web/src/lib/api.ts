@@ -146,6 +146,13 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
     }),
+  setDefaultAudio: (file: File) => {
+    const body = new FormData();
+    body.append("audio", file);
+    return json<LibrarySettings>("/api/default-audio", { method: "POST", body });
+  },
+  clearDefaultAudio: () => json<LibrarySettings>("/api/default-audio", { method: "DELETE" }),
+
   syncSettings: () => json<SyncSettings>("/api/sync-settings"),
   updateSyncSettings: (settings: SyncSettings) => json<SyncSettings>("/api/sync-settings", {
     method: "PUT",

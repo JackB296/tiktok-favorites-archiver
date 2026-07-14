@@ -96,7 +96,7 @@ def process_item(deps, download_dir, item):
     return {"status": "failed", "kind": "unknown", "error": _errstr(result.error)}
 
 
-def build_default_deps(limiter=None):
+def build_default_deps(limiter=None, default_audio=None):
     """Wire the real backends (lazy-imports the heavy deps)."""
     from core import cobalt, download, slideshow, assets
     if limiter is None:
@@ -106,7 +106,15 @@ def build_default_deps(limiter=None):
         download_file=download.download_file,
         build_slideshow=slideshow.create_slideshow,
         save_assets=assets.save_assets,
-        default_audio=config.DEFAULT_AUDIO,
+        default_audio=default_audio or config.DEFAULT_AUDIO,
+    )
+
+
+def _default_deps_for(conn, download_dir):
+    """Build the real backends with the effective slideshow fallback audio."""
+    name = store.get_library_settings(conn)["default_audio_name"]
+    return build_default_deps(
+        default_audio=media.resolve_default_audio(download_dir, name, config.DEFAULT_AUDIO),
     )
 
 
@@ -118,7 +126,7 @@ def run_sync(conn, download_dir, deps=None, concurrency=None, progress=None,
     Returns final counts-by-status. ``wait`` is the pause poll (injectable for tests).
     """
     if deps is None:
-        deps = build_default_deps()
+        deps = _default_deps_for(conn, download_dir)
     if wait is None:
         wait = lambda: time.sleep(0.1)  # noqa: E731
 
@@ -239,7 +247,7 @@ def run_backfill(conn, download_dir, deps=None, concurrency=None, progress=None,
     with recovered assets drop out of the selection.
     """
     if deps is None:
-        deps = build_default_deps()
+        deps = _default_deps_for(conn, download_dir)
     if wait is None:
         wait = lambda: time.sleep(0.1)  # noqa: E731
     os.makedirs(download_dir, exist_ok=True)

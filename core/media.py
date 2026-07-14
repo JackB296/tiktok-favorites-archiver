@@ -8,6 +8,25 @@ import os
 import shutil
 import tempfile
 
+# A user-supplied slideshow fallback track lives at a fixed path inside the
+# download directory, so it persists in the media volume (not baked into the
+# image like the bundled default).
+CUSTOM_DEFAULT_AUDIO = os.path.join(".archive", "default-audio.mp3")
+
+
+def resolve_default_audio(download_dir, custom_name, bundled):
+    """The fallback audio for a slideshow whose original sound is gone.
+
+    Uses the user-uploaded track when one is configured and present on disk;
+    otherwise the bundled default, so a missing or removed custom file degrades
+    gracefully instead of breaking the encode.
+    """
+    if custom_name:
+        path = os.path.join(download_dir, CUSTOM_DEFAULT_AUDIO)
+        if os.path.isfile(path):
+            return path
+    return bundled
+
 
 def finished_movie_ids(names):
     """Sorted archive numbers of finished ``<n>.mp4`` files among directory entries."""
