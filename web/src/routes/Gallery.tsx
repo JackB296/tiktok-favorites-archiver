@@ -1036,7 +1036,7 @@ function Thumb({ item, details, cardWidth, onClick, selecting = false, inspectin
       {details.archiveNumber && <span className="tabular absolute left-[0.55em] top-[0.55em] rounded bg-black/50 px-[0.4em] py-[0.15em] text-[0.78em] text-white/80">
         #{item.id}
       </span>}
-      {item.has_audio === false && <span title="FFprobe found no audio stream. You can replace this file from its Feed settings." className="absolute left-[0.55em] top-[2.5em] inline-flex items-center gap-[0.3em] rounded bg-bad/90 px-[0.4em] py-[0.15em] text-[0.78em] font-semibold text-white"><SpeakerSlash size="1em" weight="fill" />{audioStatus(item.has_audio)}</span>}
+      {(item.has_audio === false || item.audio_silent === true) && <span title="No sound — no audio stream, or a stream that is silent. You can replace the file from its Feed settings." className="absolute left-[0.55em] top-[2.5em] inline-flex items-center gap-[0.3em] rounded bg-bad/90 px-[0.4em] py-[0.15em] text-[0.78em] font-semibold text-white"><SpeakerSlash size="1em" weight="fill" />{audioStatus(item.has_audio, item.audio_silent)}</span>}
       {selecting && <span aria-hidden="true" className={cx("absolute right-[0.55em] top-[0.55em] flex h-[1.5em] w-[1.5em] items-center justify-center rounded-full border", selected ? "border-accent bg-accent text-on-accent" : "border-white/70 bg-black/50 text-white/80")}>{selected ? <Check size="1em" weight="bold" /> : null}</span>}
       {inspecting && <span aria-hidden="true" className="absolute right-[0.55em] top-[0.55em] flex h-[1.5em] w-[1.5em] items-center justify-center rounded-full border border-white/70 bg-black/50 text-white/80"><Info size="1em" /></span>}
       <div className={cx("absolute top-[0.55em] flex max-w-[65%] flex-col items-end gap-[0.3em] text-[0.78em] text-white/85", selecting || inspecting ? "right-[2.5em]" : "right-[0.55em]")}>
@@ -1072,7 +1072,7 @@ function DetailsDialog({ item, onClose, onPlay, onRetry, onIgnore }: { item: Ite
     ["Duration", formatDuration(item.duration_s) ?? "Not indexed"], ["Resolution", resolution],
     ["Codec", item.media_codec ?? "Not indexed"], ["File size", formatSize(item.media_size) ?? "Not indexed"],
     ["Download attempts", String(item.attempt_count)], ["Last attempt", item.last_attempt_at ?? "Never"],
-    ["Archive file", item.offloaded ? "Offloaded to external storage" : item.archive_missing ? "Missing (integrity scan)" : item.video_url ? "Ready" : "Not available"], ["Audio", audioStatus(item.has_audio)], ["Raw slideshow assets", item.has_assets ? "Available" : "None"],
+    ["Archive file", item.offloaded ? "Offloaded to external storage" : item.archive_missing ? "Missing (integrity scan)" : item.video_url ? "Ready" : "Not available"], ["Audio", audioStatus(item.has_audio, item.audio_silent)], ["Raw slideshow assets", item.has_assets ? "Available" : "None"],
   ];
   const safeLink = /^https?:\/\//i.test(item.link);
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="favorite-details-title">

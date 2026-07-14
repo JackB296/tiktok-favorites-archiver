@@ -65,6 +65,8 @@ const media = await load("../src/lib/mediaPresentation.js");
 assert.equal(media.audioStatus(false), "No audio");
 assert.equal(media.audioStatus(true), "Has audio");
 assert.equal(media.audioStatus(null), "Not checked");
+assert.equal(media.audioStatus(true, true), "Silent");
+assert.equal(media.audioStatus(false, false), "No audio");
 assert.equal(media.readGallerySize(null), "m");
 assert.equal(media.readGallerySize("xl"), "xl");
 assert.equal(media.readGallerySize("bogus"), "m");

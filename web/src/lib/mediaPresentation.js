@@ -1,4 +1,5 @@
-export function audioStatus(hasAudio) {
+export function audioStatus(hasAudio, audioSilent) {
+  if (audioSilent) return "Silent";
   if (hasAudio === false) return "No audio";
   if (hasAudio === true) return "Has audio";
   return "Not checked";

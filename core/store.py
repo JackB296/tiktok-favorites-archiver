@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS item (
     media_codec   TEXT,
     media_size    INTEGER,
     has_audio     INTEGER,
+    audio_silent  INTEGER,
     media_fingerprint TEXT,
     indexed_at    TEXT,
     index_error   TEXT,
@@ -157,6 +158,7 @@ _ITEM_MIGRATIONS = {
     "media_codec": "TEXT",
     "media_size": "INTEGER",
     "has_audio": "INTEGER",
+    "audio_silent": "INTEGER",
     "media_fingerprint": "TEXT",
     "indexed_at": "TEXT",
     "index_error": "TEXT",
@@ -518,6 +520,7 @@ def record_media_index(conn, item_id, index, fingerprint):
         media_codec=index["codec"],
         media_size=index["file_size"],
         has_audio=1 if index.get("has_audio", True) else 0,
+        audio_silent=None if index.get("audio_silent") is None else (1 if index.get("audio_silent") else 0),
         media_fingerprint=fingerprint,
         indexed_at=_now(),
         index_error=None,
@@ -545,6 +548,7 @@ def record_manual_media(conn, item_id, index=None, fingerprint=None, custom_thum
             media_codec=index["codec"],
             media_size=index["file_size"],
             has_audio=1 if index["has_audio"] else 0,
+            audio_silent=None if index.get("audio_silent") is None else (1 if index.get("audio_silent") else 0),
             media_fingerprint=fingerprint,
             indexed_at=_now(),
             index_error=None,
@@ -805,7 +809,7 @@ _PAGE_ORDERS = {
     "last_attempt_desc": ("last_attempt_at DESC, id DESC", "last_attempt_at", "DESC"),
     "author_asc": ("author ASC, id ASC", "author", "ASC"),
     "audio_missing": (
-        "CASE WHEN has_audio = 0 THEN 0 WHEN has_audio = 1 THEN 1 ELSE 2 END ASC, id DESC",
+        "CASE WHEN (has_audio = 0 OR audio_silent = 1) THEN 0 WHEN has_audio = 1 THEN 1 ELSE 2 END ASC, id DESC",
         None,
         None,
     ),
@@ -950,10 +954,12 @@ def _page_filter_clauses(q):
         clauses.append("has_assets = ?")
         params.append(1 if q["has_assets"] else 0)
     if q["has_audio"] is not None:
-        # has_audio = 0 means FFprobe found no audio stream — the file is silent,
-        # whether the original had no sound or the audio never came through.
-        clauses.append("has_audio = ?")
-        params.append(1 if q["has_audio"] else 0)
+        # "No audio" = no stream at all, OR a stream that is silent (all-zero /
+        # inaudible). "Has audio" = a stream that is not known-silent.
+        if q["has_audio"]:
+            clauses.append("(has_audio = 1 AND (audio_silent = 0 OR audio_silent IS NULL))")
+        else:
+            clauses.append("(has_audio = 0 OR audio_silent = 1)")
     index_filters = {
         "indexed": "thumbnail_path IS NOT NULL",
         "missing": "thumbnail_path IS NULL AND index_error IS NULL",
@@ -1008,8 +1014,8 @@ def page_items(conn, **query):
             cursor_row = get_item(conn, int(cursor))
             if cursor_row is None:
                 raise ValueError("unknown pagination cursor")
-            cursor_key = 0 if cursor_row["has_audio"] == 0 else 1 if cursor_row["has_audio"] == 1 else 2
-            key_sql = "CASE WHEN has_audio = 0 THEN 0 WHEN has_audio = 1 THEN 1 ELSE 2 END"
+            cursor_key = 0 if (cursor_row["has_audio"] == 0 or cursor_row["audio_silent"] == 1) else 1 if cursor_row["has_audio"] == 1 else 2
+            key_sql = "CASE WHEN (has_audio = 0 OR audio_silent = 1) THEN 0 WHEN has_audio = 1 THEN 1 ELSE 2 END"
             clauses.append(f"({key_sql} > ? OR ({key_sql} = ? AND id < ?))")
             params += [cursor_key, cursor_key, int(cursor)]
         elif order == "relevance":

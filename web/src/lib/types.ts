@@ -65,6 +65,7 @@ export interface Item {
   media_codec: string | null;
   media_size: number | null;
   has_audio: boolean | null;
+  audio_silent: boolean | null;
   song: Song | null;
   song_status: SongStatus | null;
   song_source: SongSource | null;

@@ -506,7 +506,7 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
           <PostMedia item={item} active={item.id === effectivePlaybackId} preload={shouldPreloadItem(index, activeIndex, item.id, transitionTargetId)} />
 
           <div className="absolute right-4 top-4 flex items-center gap-2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm">
-            {item.has_audio === false && <span title="FFprobe found no audio stream" className="inline-flex items-center gap-1 rounded-full bg-bad/90 px-2 py-1 text-[11px] font-semibold"><SpeakerSlash size={13} weight="fill" />{audioStatus(item.has_audio)}</span>}
+            {(item.has_audio === false || item.audio_silent === true) && <span title="No sound — no audio stream, or a stream that is silent" className="inline-flex items-center gap-1 rounded-full bg-bad/90 px-2 py-1 text-[11px] font-semibold"><SpeakerSlash size={13} weight="fill" />{audioStatus(item.has_audio, item.audio_silent)}</span>}
             <button
               onClick={toggleMuted}
               aria-label={muted ? "Unmute" : "Mute"}

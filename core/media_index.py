@@ -7,15 +7,19 @@ from collections import namedtuple
 
 MediaIndex = namedtuple(
     "MediaIndex",
-    "duration_s width height codec file_size thumbnail_path has_audio",
-    defaults=(True,),
+    "duration_s width height codec file_size thumbnail_path has_audio audio_silent",
+    defaults=(True, None),
 )
+
+# A track whose peak never rises above this (dBFS) is treated as silent. Digital
+# silence reads around -91 dB; real audio peaks near 0 dB.
+SILENCE_MAX_DB = -50.0
 
 
 class MediaFacts(namedtuple(
     "MediaFacts",
-    "duration_s width height codec file_size has_audio",
-    defaults=(True,),
+    "duration_s width height codec file_size has_audio audio_silent",
+    defaults=(True, None),
 )):
     __slots__ = ()
 
@@ -29,7 +33,26 @@ class MediaFacts(namedtuple(
             file_size=self.file_size,
             thumbnail_path=thumbnail_path,
             has_audio=self.has_audio,
+            audio_silent=self.audio_silent,
         )
+
+
+def measure_max_volume_db(path, runner=subprocess.run):
+    """Peak audio level in dBFS via ffmpeg ``volumedetect``, or None if unreadable.
+    A digitally silent track reports roughly -91 dB (or -inf)."""
+    result = runner(
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", path, "-map", "0:a:0?",
+         "-af", "volumedetect", "-f", "null", "-"],
+        capture_output=True,
+        text=True,
+    )
+    for line in (getattr(result, "stderr", "") or "").splitlines():
+        if "max_volume:" in line:
+            try:
+                return float(line.split("max_volume:", 1)[1].strip().split()[0])
+            except (ValueError, IndexError):
+                return None
+    return None
 
 
 def inspect_media(path, runner=subprocess.run):
@@ -47,6 +70,10 @@ def inspect_media(path, runner=subprocess.run):
     data = json.loads(result.stdout)
     video = next(stream for stream in data.get("streams", []) if stream.get("codec_type") == "video")
     has_audio = any(stream.get("codec_type") == "audio" for stream in data.get("streams", []))
+    audio_silent = None
+    if has_audio:
+        peak = measure_max_volume_db(path, runner)
+        audio_silent = peak is not None and peak <= SILENCE_MAX_DB
     return MediaFacts(
         float(data.get("format", {}).get("duration") or 0),
         int(video.get("width") or 0),
@@ -54,6 +81,7 @@ def inspect_media(path, runner=subprocess.run):
         video.get("codec_name") or "unknown",
         os.path.getsize(path),
         has_audio,
+        audio_silent,
     )
 
 

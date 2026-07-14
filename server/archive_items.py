@@ -191,6 +191,7 @@ class ArchiveItems:
             "media_codec": row["media_codec"],
             "media_size": row["media_size"],
             "has_audio": None if row["has_audio"] is None else bool(row["has_audio"]),
+            "audio_silent": None if row["audio_silent"] is None else bool(row["audio_silent"]),
             "song": None,
             "song_status": row["song_status"],
             "song_source": row["song_source"],
