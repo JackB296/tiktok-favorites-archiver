@@ -223,6 +223,28 @@ def test_public_projection_includes_the_offloaded_flag():
         assert items.get(2)["offloaded"] is False
 
 
+def test_public_projection_embeds_the_identified_song():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://tiktok.com/a", status="done")
+    store.insert_item(conn, 2, "https://tiktok.com/b", status="done")
+    song_id = store.upsert_song(conn, "shazam:1", "Blinding Lights", artist="The Weeknd",
+                                spotify_url="https://open.spotify.com/track/x")
+    store.set_item_song(conn, 1, song_id, source="auto")
+    store.set_item_song_no_match(conn, 2)
+
+    with tempfile.TemporaryDirectory() as dl:
+        items = ArchiveItems(conn, dl)
+        one = items.get(1)
+        assert one["song"]["title"] == "Blinding Lights"
+        assert one["song"]["artist"] == "The Weeknd"
+        assert one["song"]["spotify_url"].endswith("/x")
+        assert one["song_status"] == "identified" and one["song_source"] == "auto"
+
+        two = items.get(2)
+        assert two["song"] is None
+        assert two["song_status"] == "no_match"
+
+
 def test_parse_mark_request_accepts_each_selector():
     assert parse_mark_request({"action": "offload", "ids": [1, 2]}) == ("offload", "ids", [1, 2], False)
     assert parse_mark_request({"action": "unoffload", "range": {"first_id": 1, "last_id": 9}}) == (

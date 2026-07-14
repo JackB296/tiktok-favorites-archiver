@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test": "npm run test:virtual-grid && npm run test:viewer-shortcuts && npm run test:ui-behavior && npm run test:feed-items && npm run test:loading-presentation && npm run test:legacy-bootstrap && npm run test:media-layout",
+    "test": "npm run test:virtual-grid && npm run test:viewer-shortcuts && npm run test:ui-behavior && npm run test:feed-items && npm run test:loading-presentation && npm run test:legacy-bootstrap && npm run test:media-layout && npm run test:song-links",
     "typecheck": "tsc --noEmit",
     "test:media-layout": "node scripts/test-media-layout.mjs",
     "test:virtual-grid": "node scripts/test-virtual-grid.mjs",
@@ -16,7 +16,8 @@
     "test:ui-behavior": "node scripts/test-ui-behavior.mjs",
     "test:feed-items": "node scripts/test-feed-items.mjs",
     "test:loading-presentation": "node scripts/test-loading-presentation.mjs",
-    "test:legacy-bootstrap": "node scripts/test-legacy-bootstrap.mjs"
+    "test:legacy-bootstrap": "node scripts/test-legacy-bootstrap.mjs",
+    "test:song-links": "node scripts/test-song-links.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.0.0",

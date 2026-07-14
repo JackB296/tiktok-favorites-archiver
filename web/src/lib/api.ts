@@ -1,4 +1,4 @@
-import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions } from "./types";
+import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -105,6 +105,22 @@ export const api = {
     return json<Item>(`/api/items/${n}/media`, { method: "POST", body });
   },
 
+  songs: () => json<{ songs: SongSummary[] }>("/api/songs"),
+  songPlaylists: () => json<SongPlaylist[]>("/api/song-playlists"),
+  createSongPlaylist: (name: string, songIds: number[]) => json<SongPlaylist>("/api/song-playlists", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, song_ids: songIds }),
+  }),
+  deleteSongPlaylist: (id: number) => json<{ ok: boolean }>(`/api/song-playlists/${id}`, { method: "DELETE" }),
+
+  searchSongs: (q: string) => json<{ results: SongCandidate[] }>(`/api/songs/search?q=${encodeURIComponent(q)}`),
+  setItemSong: (n: number, match: SongCandidate) => json<Item>(`/api/items/${n}/song`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(match),
+  }),
+
   status: () => json<RunStatus>("/api/status"),
   runHistory: () => json<RunHistoryEntry[]>("/api/run-history"),
 
@@ -124,7 +140,7 @@ export const api = {
 
   librarySettings: () => json<LibrarySettings>("/api/library-settings"),
   libraryStats: () => json<LibraryStatistics>("/api/library-stats"),
-  updateLibrarySettings: (settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480 }) =>
+  updateLibrarySettings: (settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480; song_id_enabled?: boolean }) =>
     json<LibrarySettings>("/api/library-settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -168,7 +184,7 @@ export const api = {
     return json<LegacyBootstrapResult>("/api/import/legacy-apply", { method: "POST", body });
   },
 
-  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "pause" | "continue" | "stop") =>
+  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "pause" | "continue" | "stop") =>
     json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}`, { method: "POST" }),
 
   /** Subscribe to the SSE progress stream. Returns an unsubscribe fn. */

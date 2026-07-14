@@ -7,6 +7,10 @@ export function progressLabel(event) {
     const unavailable = event.unavailable ? ` · ${event.unavailable} unavailable` : "";
     return `Metadata ${event.completed || 0}/${event.total || 0} · ${event.enriched || 0} updated${unavailable}`;
   }
+  if (event.event === "identification") {
+    const errors = event.errors ? ` · ${event.errors} errors` : "";
+    return `Songs ${event.completed || 0}/${event.total || 0} · ${event.identified || 0} identified${errors}`;
+  }
   if (event.event === "verify") return `Verifying ${event.completed || 0}/${event.total || 0}`;
   return null;
 }

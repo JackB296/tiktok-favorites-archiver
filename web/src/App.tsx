@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, NavLink, Link } from "react-router-dom";
-import { FilmReel, SquaresFour, DownloadSimple, Sun, Moon, BookmarkSimple } from "@phosphor-icons/react";
+import { FilmReel, SquaresFour, MusicNotes, DownloadSimple, Sun, Moon, BookmarkSimple } from "@phosphor-icons/react";
 import { Viewer } from "./routes/Viewer";
 import { Gallery } from "./routes/Gallery";
+import { Music } from "./routes/Music";
 import { Dashboard } from "./routes/Dashboard";
 import { cx } from "./components/ui";
 
 const TABS = [
   { to: "/", label: "Feed", icon: FilmReel, end: true },
   { to: "/gallery", label: "Gallery", icon: SquaresFour, end: false },
+  { to: "/music", label: "Music", icon: MusicNotes, end: false },
   { to: "/sync", label: "Sync", icon: DownloadSimple, end: false },
 ];
 
@@ -59,6 +61,7 @@ export function App() {
           <Routes>
             <Route path="/" element={<Viewer />} />
             <Route path="/gallery" element={<Gallery />} />
+            <Route path="/music" element={<Music />} />
             <Route path="/sync" element={<Dashboard />} />
           </Routes>
         </main>

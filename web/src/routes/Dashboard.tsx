@@ -9,6 +9,7 @@ import {
   ArrowClockwise,
   Question,
   CaretDown,
+  MusicNotes,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport, RunHistoryEntry, SyncSettings } from "../lib/types";
@@ -41,12 +42,14 @@ export function Dashboard() {
   const [indexProgress, setIndexProgress] = useState<ProgressEvent | null>(null);
   const [sidecarsProgress, setSidecarsProgress] = useState<ProgressEvent | null>(null);
   const [enrichmentProgress, setEnrichmentProgress] = useState<ProgressEvent | null>(null);
+  const [identificationProgress, setIdentificationProgress] = useState<ProgressEvent | null>(null);
   const [runActionError, setRunActionError] = useState<string | null>(null);
   const [verifyReport, setVerifyReport] = useState<VerifyReport | null>(null);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
   const [syncSettings, setSyncSettings] = useState<SyncSettings | null>(null);
   const [metadataOpen, setMetadataOpen] = useState(false);
+  const [songIdOpen, setSongIdOpen] = useState(false);
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -69,6 +72,7 @@ export function Dashboard() {
       if (e.event === "indexing") setIndexProgress(e);
       if (e.event === "sidecars") setSidecarsProgress(e);
       if (e.event === "enrichment") setEnrichmentProgress(e);
+      if (e.event === "identification") setIdentificationProgress(e);
       if (e.event === "complete") {
         refresh();
         refreshLibrary();
@@ -88,6 +92,7 @@ export function Dashboard() {
   useEffect(() => {
     if (!running) return;
     if (status?.phase === "enrich") setMetadataOpen(true);
+    if (status?.phase === "identify") setSongIdOpen(true);
     if (["index", "sidecars", "backfill"].includes(status?.phase ?? "")) setMaintenanceOpen(true);
   }, [running, status?.phase]);
 
@@ -104,7 +109,7 @@ export function Dashboard() {
     }
   }
 
-  async function updateLibrary(settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480 }) {
+  async function updateLibrary(settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480; song_id_enabled?: boolean }) {
     const next = await api.updateLibrarySettings(settings).catch(() => null);
     if (next) setLibrary(next);
   }
@@ -114,9 +119,10 @@ export function Dashboard() {
     if (next) setSyncSettings(next);
   }
 
-  async function act(a: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "pause" | "continue" | "stop") {
+  async function act(a: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "pause" | "continue" | "stop") {
     setRunActionError(null);
     if (a === "enrich") setEnrichmentProgress(null);
+    if (a === "identify") setIdentificationProgress(null);
     try {
       const result = await api.syncAction(a);
       if ("started" in result && result.started === false) setRunActionError("Another Archive run is already active.");
@@ -214,6 +220,28 @@ export function Dashboard() {
             </p>
           )}
           {runActionError && <p className="mt-3 text-sm text-bad" role="alert">{runActionError}</p>}
+          </div>
+        </details>
+
+        <details open={songIdOpen} onToggle={(event) => setSongIdOpen(event.currentTarget.open)} className="group mb-4 rounded-[var(--radius-media)] border border-line bg-surface">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-semibold text-ink"><span>Song identification{running && status?.phase === "identify" ? <span className="ml-2 text-xs font-normal text-active">running</span> : null}</span><CaretDown size={16} className="text-ink-faint transition group-open:rotate-180" /></summary>
+          <div className="border-t border-line px-5 py-4">
+            <p className="text-sm text-ink-dim">Identifies the song in each favorite with Shazam and shows it in Feed and Gallery. This is the one feature that leaves your machine: when enabled, a short audio clip per video is sent to Shazam's servers to match it. It runs one rate-limited request at a time and can be paused or stopped.</p>
+            <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-ink">
+              <input type="checkbox" checked={library?.song_id_enabled === 1} onChange={(e) => updateLibrary({ song_id_enabled: e.target.checked })} />
+              <span><span className="font-medium">Enable song identification</span><span className="mt-0.5 block text-ink-dim">Off by default. Turning this on allows short audio clips to be sent to Shazam. While it is off, no audio ever leaves your machine and the run cannot start.</span></span>
+            </label>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+              <p className="text-sm text-ink-dim">
+                {identificationProgress?.event === "identification"
+                  ? `Identifying ${identificationProgress.completed ?? 0} of ${identificationProgress.total ?? 0}: ${identificationProgress.identified ?? 0} found, ${identificationProgress.no_match ?? 0} no match${identificationProgress.errors ? `, ${identificationProgress.errors} errors` : ""}`
+                  : "Runs over finished favorites that have audio and no song yet. Re-running skips ones already identified."}
+              </p>
+              <Button variant="ghost" disabled={running || library?.song_id_enabled !== 1} onClick={() => act("identify")}>
+                <MusicNotes size={16} /> Identify songs
+              </Button>
+            </div>
+            {runActionError && <p className="mt-3 text-sm text-bad" role="alert">{runActionError}</p>}
           </div>
         </details>
 

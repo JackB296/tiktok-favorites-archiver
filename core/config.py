@@ -33,6 +33,11 @@ RATE_MAX_CALLS = int(os.environ.get("RATE_MAX_CALLS", "8"))    # at most this ma
 RATE_PERIOD = float(os.environ.get("RATE_PERIOD", "1.0"))      # ...per this many seconds
 APP_PORT = int(os.environ.get("APP_PORT", "8080"))             # web server port
 
+# Song identification (opt-in): a deliberately conservative outbound rate to
+# Shazam, since it is an external service that can throttle or block heavy use.
+SONG_ID_RATE_MAX_CALLS = int(os.environ.get("SONG_ID_RATE_MAX_CALLS", "1"))  # 1 recognition...
+SONG_ID_RATE_PERIOD = float(os.environ.get("SONG_ID_RATE_PERIOD", "2.0"))    # ...per 2 seconds
+
 
 def setup_logging():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

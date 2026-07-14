@@ -26,6 +26,7 @@ import { shouldLoadMore } from "../lib/galleryPaging.js";
 import { readGalleryDetails } from "../lib/galleryPresentation.js";
 import type { GalleryDetails } from "../lib/galleryPresentation.js";
 import { audioStatus, readGallerySize } from "../lib/mediaPresentation.js";
+import { primarySongUrl, songLabel } from "../lib/songLinks.js";
 import { isFeedItem } from "../lib/feedItems";
 
 const FILTERS = [
@@ -1079,6 +1080,11 @@ function DetailsDialog({ item, onClose, onPlay, onRetry, onIgnore }: { item: Ite
       <div className="flex items-start justify-between gap-4"><div><p className="tabular text-xs text-ink-faint">Favorite #{item.id}</p><h2 id="favorite-details-title" className="mt-1 text-lg font-semibold text-ink">Archive details</h2></div><button ref={closeRef} type="button" onClick={onClose} aria-label="Close details" className="rounded-[var(--radius-control)] p-2 text-ink-dim hover:bg-elevated hover:text-ink"><X size={18} /></button></div>
       {item.caption && <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-ink">{item.caption}</p>}
       {item.author && <p className="mt-2 text-sm text-ink-dim">Creator: {item.author}</p>}
+      {item.song
+        ? <p className="mt-2 text-sm text-ink-dim">Song: <a href={primarySongUrl(item.song)} target="_blank" rel="noreferrer" className="text-ink underline underline-offset-2 hover:text-active">{songLabel(item.song)}</a></p>
+        : item.song_status === "no_match" ? <p className="mt-2 text-sm text-ink-faint">Song: not recognized</p>
+        : item.song_status === "error" ? <p className="mt-2 text-sm text-ink-faint">Song: identification failed</p>
+        : null}
       {item.error && <p className="mt-3 rounded-[var(--radius-control)] border border-bad/40 bg-bad/10 p-3 text-sm text-bad">Last error: {item.error}</p>}
       <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 border-t border-line pt-4 sm:grid-cols-2">{rows.map(([label, value]) => <div key={label}><dt className="text-xs text-ink-faint">{label}</dt><dd className="mt-0.5 break-words text-sm text-ink">{value}</dd></div>)}</dl>
       <div className="mt-5 flex flex-wrap gap-2 border-t border-line pt-4">

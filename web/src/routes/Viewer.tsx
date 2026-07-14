@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { SpeakerSimpleHigh, SpeakerSimpleX, SpeakerSlash, ArrowSquareOut, ArrowLeft, FilmReel, Shuffle, Keyboard, CornersOut, ClockCounterClockwise, GearSix } from "@phosphor-icons/react";
+import { SpeakerSimpleHigh, SpeakerSimpleX, SpeakerSlash, ArrowSquareOut, ArrowLeft, FilmReel, Shuffle, Keyboard, CornersOut, ClockCounterClockwise, GearSix, MusicNotes } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
 import { PostMedia } from "../components/PostMedia";
@@ -13,7 +13,9 @@ import { activeFeedIndex, feedTrimPlan, nextWheelTargetIndex, playbackItemId, sh
 import { formatAutoGain } from "../lib/playbackVolume.js";
 import { captionParts, cleanMetadataText, hashtagGalleryUrl } from "../lib/captionPresentation.js";
 import { audioStatus } from "../lib/mediaPresentation.js";
+import { primarySongUrl, songLabel } from "../lib/songLinks.js";
 import { MediaSettingsDialog } from "../components/MediaSettingsDialog";
+import { SongIdentifyDialog } from "../components/SongIdentifyDialog";
 
 const KEEP_BEHIND = 5;
 const FILTERED_BEFORE = 45; // how many earlier results to preload so scroll-up works (window ≤ itemSelection's 100 cap)
@@ -432,6 +434,7 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [settingsItem, setSettingsItem] = useState<Item | null>(null);
+  const [identifyItem, setIdentifyItem] = useState<Item | null>(null);
 
   const toggleFullscreen = useCallback(async () => {
     const target = containerRef.current;
@@ -533,13 +536,15 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
             >
               {autoLevel ? formatAutoGain(autoGain) : "Auto off"}
             </button>
+            {item.video_url && <button type="button" onClick={() => setIdentifyItem(item)} aria-label={`Identify the song for favorite #${item.id}`} title="Identify or fix the song" className="rounded-full p-1.5 transition hover:bg-white/15 active:translate-y-px"><MusicNotes size={20} /></button>}
             {item.video_url && <button type="button" onClick={() => setSettingsItem(item)} aria-label={`Open media settings for favorite #${item.id}`} title="Replace video or thumbnail" className="rounded-full p-1.5 transition hover:bg-white/15 active:translate-y-px"><GearSix size={20} /></button>}
           </div>
 
           <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent px-4 pb-16 pt-28 sm:px-6">
             <div className="mx-auto max-w-2xl">
-              {(cleanMetadataText(item.author) || cleanMetadataText(item.caption)) && <div className="rounded-[var(--radius-media)] border border-white/20 bg-black/70 p-4 text-white shadow-xl shadow-black/25 backdrop-blur-md">
+              {(cleanMetadataText(item.author) || cleanMetadataText(item.caption) || item.song) && <div className="rounded-[var(--radius-media)] border border-white/20 bg-black/70 p-4 text-white shadow-xl shadow-black/25 backdrop-blur-md">
                 {cleanMetadataText(item.author) && <div className="mb-2 flex items-center gap-2"><span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-white/70">Creator</span><span className="truncate text-sm font-semibold text-white">{cleanMetadataText(item.author)}</span></div>}
+                {item.song && <div className="mb-2 flex items-center gap-2"><span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-white/70">Song</span><a href={primarySongUrl(item.song)} target="_blank" rel="noreferrer" title="Find this song" className="pointer-events-auto inline-flex min-w-0 items-center gap-1.5 text-sm font-semibold text-white hover:underline"><MusicNotes size={14} weight="fill" className="shrink-0" /><span className="truncate">{songLabel(item.song)}</span></a></div>}
                 {cleanMetadataText(item.caption) && <CaptionDescription caption={cleanMetadataText(item.caption)} />}
               </div>}
               <div className="mt-2 flex items-center gap-2 px-1 text-xs text-white/70">
@@ -551,6 +556,7 @@ function ViewerFeed({ items, activeId, transitionTargetId, containerRef, onActiv
         </section>
       ))}
       {settingsItem && <MediaSettingsDialog item={settingsItem} onClose={() => setSettingsItem(null)} onSaved={(updated) => { onItemUpdated(updated); setSettingsItem(null); }} />}
+      {identifyItem && <SongIdentifyDialog item={identifyItem} onClose={() => setIdentifyItem(null)} onSaved={(updated) => { onItemUpdated(updated); setIdentifyItem(null); }} />}
     </div>
   );
 }
