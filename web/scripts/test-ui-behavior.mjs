@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import ts from "typescript";
 
 async function load(relativePath) {
   const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
   return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+}
+
+async function loadTs(relativePath) {
+  const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText;
+  return import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 }
 
 const feed = await load("../src/lib/viewerFeed.js");
@@ -61,18 +70,29 @@ assert.equal(volume.normalizationGain(1), 0.35);
 assert.equal(volume.formatAutoGain(1), "Auto 1.00×");
 assert.equal(volume.formatAutoGain(1.347), "Auto 1.35×");
 
-const media = await load("../src/lib/mediaPresentation.js");
-assert.equal(media.audioStatus(false), "No audio");
-assert.equal(media.audioStatus(true), "Has audio");
-assert.equal(media.audioStatus(null), "Not checked");
-assert.equal(media.audioStatus(true, true), "Silent");
-assert.equal(media.audioStatus(false, false), "No audio");
-assert.equal(media.readGallerySize(null), "m");
-assert.equal(media.readGallerySize("xl"), "xl");
-assert.equal(media.readGallerySize("bogus"), "m");
-assert.equal(media.formatMediaTime(0), "0:00");
-assert.equal(media.formatMediaTime(65.4), "1:05");
-assert.equal(media.formatMediaTime(Number.NaN), "0:00");
+const format = await loadTs("../src/lib/format.ts");
+assert.equal(format.audioStatus(false), "No audio");
+assert.equal(format.audioStatus(true), "Has audio");
+assert.equal(format.audioStatus(null), "Not checked");
+assert.equal(format.audioStatus(true, true), "Silent");
+assert.equal(format.audioStatus(false, false), "No audio");
+assert.equal(format.formatMediaTime(0), "0:00");
+assert.equal(format.formatMediaTime(65.4), "1:05");
+assert.equal(format.formatMediaTime(Number.NaN), "0:00");
+// Each formatter keeps the exact strings its original route rendered.
+assert.equal(format.formatDuration(null), null);
+assert.equal(format.formatDuration(45.4), "45s");
+assert.equal(format.formatDuration(65.4), "1:05");
+assert.equal(format.formatSize(null), null);
+assert.equal(format.formatSize(34_500_000), "34.5 MB");
+assert.equal(format.formatSize(1_200_000_000), "1.2 GB");
+assert.equal(format.formatRuntime(1_500), "25 min");
+assert.equal(format.formatRuntime(5_400), "1.5 hours");
+assert.equal(format.formatRuntime(39_600), "11 hours");
+assert.equal(format.isSafeHttpUrl("https://www.tiktok.com/@user/video/1"), true);
+assert.equal(format.isSafeHttpUrl("HTTP://tiktok.com"), true);
+assert.equal(format.isSafeHttpUrl("javascript:alert(1)"), false);
+assert.equal(format.isSafeHttpUrl("N/A"), false);
 
 const captions = await load("../src/lib/captionPresentation.js");
 assert.deepEqual(captions.captionParts("free will #tenet and #TenetEdit."), [
@@ -85,9 +105,5 @@ assert.deepEqual(captions.captionParts("free will #tenet and #TenetEdit."), [
 assert.equal(captions.hashtagGalleryUrl("#TenetEdit"), "/gallery?q=%23TenetEdit");
 assert.equal(captions.cleanMetadataText("\uFFF6\n Alice "), "Alice");
 assert.equal(captions.cleanMetadataText("\uFFF4\uFFF6"), "");
-
-const galleryPaging = await load("../src/lib/galleryPaging.js");
-assert.equal(galleryPaging.shouldLoadMore(4_600, 700, 6_000, 800), true);
-assert.equal(galleryPaging.shouldLoadMore(2_000, 700, 6_000, 800), false);
 
 console.log("PASS UI behavior helpers cover scrolling, metadata labels, card details, and loudness leveling");

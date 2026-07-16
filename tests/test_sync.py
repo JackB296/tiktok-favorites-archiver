@@ -47,11 +47,11 @@ def _run_sync(conn, download_dir, **kwargs):
 def test_full_drain_status_mapping():
     conn = store.init_db(store.connect(":memory:"))
     results = {
-        "v": cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel"),
-        "s": cobalt.Result("slideshow", None, ["http://x/1.jpg", "http://x/2.jpg"], "http://x/a.mp3", None, "picker"),
-        "e": cobalt.Result("error", None, None, None, "gone", "error"),
-        "u": cobalt.Result("unsupported", None, None, None, "no photo", "picker"),
-        "t": cobalt.Result("transient", None, None, None, "HTTP 500", "500"),
+        "v": cobalt.Result(kind="video", url="http://x/v.mp4", images=None, audio=None, error=None, status="tunnel"),
+        "s": cobalt.Result(kind="slideshow", url=None, images=["http://x/1.jpg", "http://x/2.jpg"], audio="http://x/a.mp3", error=None, status="picker"),
+        "e": cobalt.Result(kind="error", url=None, images=None, audio=None, error="gone", status="error"),
+        "u": cobalt.Result(kind="unsupported", url=None, images=None, audio=None, error="no photo", status="picker"),
+        "t": cobalt.Result(kind="transient", url=None, images=None, audio=None, error="HTTP 500", status="500"),
     }
     _seed(conn, ["v", "s", "e", "u", "t"])  # ids 1..5
     with tempfile.TemporaryDirectory() as dl:
@@ -70,7 +70,7 @@ def test_full_drain_status_mapping():
 def test_video_download_failure_is_retryable():
     conn = store.init_db(store.connect(":memory:"))
     _seed(conn, ["v"])
-    results = {"v": cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel")}
+    results = {"v": cobalt.Result(kind="video", url="http://x/v.mp4", images=None, audio=None, error=None, status="tunnel")}
     with tempfile.TemporaryDirectory() as dl:
         _run_sync(conn, dl, deps=_fake_deps(results, download_ok=False), concurrency=1)
         assert store.get_item(conn, 1)["status"] == "failed"
@@ -79,7 +79,7 @@ def test_video_download_failure_is_retryable():
 def test_items_stranded_downloading_by_a_crash_are_retried_on_the_next_run():
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 1, "v", status="downloading")  # orphaned by a hard kill
-    results = {"v": cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel")}
+    results = {"v": cobalt.Result(kind="video", url="http://x/v.mp4", images=None, audio=None, error=None, status="tunnel")}
     with tempfile.TemporaryDirectory() as dl:
         _run_sync(conn, dl, deps=_fake_deps(results), concurrency=1)
     assert store.get_item(conn, 1)["status"] == "done"  # reset + retried in the same run
@@ -100,7 +100,7 @@ def test_expired_links_remain_as_archive_markers_and_are_not_retried():
 
 
 def test_slideshow_image_download_failure_keeps_its_specific_error():
-    result = cobalt.Result("slideshow", None, ["http://x/1.jpg"], None, None, "picker")
+    result = cobalt.Result(kind="slideshow", url=None, images=["http://x/1.jpg"], audio=None, error=None, status="picker")
     deps = _fake_deps({"s": result}, download_ok=False)
 
     with tempfile.TemporaryDirectory() as dl:
@@ -146,7 +146,7 @@ def test_pause_survives_the_indexing_phase_transition():
 def test_sync_indexes_finished_media_by_default():
     conn = store.init_db(store.connect(":memory:"))
     _seed(conn, ["v"])
-    result = cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel")
+    result = cobalt.Result(kind="video", url="http://x/v.mp4", images=None, audio=None, error=None, status="tunnel")
     calls = []
 
     with tempfile.TemporaryDirectory() as dl:
@@ -184,7 +184,7 @@ def test_rebuild_index_uses_library_quality_and_reports_progress():
 def test_stop_halts_remaining_items():
     conn = store.init_db(store.connect(":memory:"))
     _seed(conn, ["a", "b", "c"])
-    results = {k: cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel") for k in ("a", "b", "c")}
+    results = {k: cobalt.Result(kind="video", url="http://x/v.mp4", images=None, audio=None, error=None, status="tunnel") for k in ("a", "b", "c")}
 
     def progress(event):
         # After the first item completes, request a stop.
@@ -201,7 +201,7 @@ def test_stop_halts_remaining_items():
 def test_pause_then_continue():
     conn = store.init_db(store.connect(":memory:"))
     _seed(conn, ["a", "b"])
-    results = {k: cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel") for k in ("a", "b")}
+    results = {k: cobalt.Result(kind="video", url="http://x/v.mp4", images=None, audio=None, error=None, status="tunnel") for k in ("a", "b")}
 
     calls = {"paused_once": False, "waits": 0}
 
@@ -224,11 +224,11 @@ def test_pause_then_continue():
 
 
 def test_concurrent_sync_processes_all_items():
-    """Locks in the ThreadPoolExecutor branch of _drive (every other test uses concurrency=1)."""
+    """Locks in the ThreadPoolExecutor branch of runs.drive (every other test uses concurrency=1)."""
     conn = store.init_db(store.connect(":memory:"))
     links = [f"v{n}" for n in range(8)]
     _seed(conn, links)  # ids 1..8
-    results = {link: cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel") for link in links}
+    results = {link: cobalt.Result(kind="video", url="http://x/v.mp4", images=None, audio=None, error=None, status="tunnel") for link in links}
 
     with tempfile.TemporaryDirectory() as dl:
         counts = _run_sync(conn, dl, deps=_fake_deps(results), concurrency=3)
@@ -237,6 +237,62 @@ def test_concurrent_sync_processes_all_items():
     for item_id in range(1, len(links) + 1):
         assert store.get_item(conn, item_id)["status"] == "done"
     assert store.get_run_state(conn)["state"] == "idle"
+
+
+def test_stop_halts_remaining_items_under_a_concurrent_pool():
+    """runs.drive's ThreadPoolExecutor branch must honor a stop request:
+    submission stops once the halt is observed (in-flight items finish)."""
+    conn = store.init_db(store.connect(":memory:"))
+    links = [f"v{n}" for n in range(8)]
+    _seed(conn, links)
+    results = {link: cobalt.Result(kind="video", url="http://x/v.mp4", images=None, audio=None,
+                                   error=None, status="tunnel") for link in links}
+    processed = []
+
+    def stopping_download(url, out):
+        processed.append(out)
+        if len(processed) == 2:
+            store.set_run_state(conn, state="stopping")
+        return True
+
+    deps = sync.Deps(
+        resolve=lambda link: results[link],
+        download_file=stopping_download,
+        build_slideshow=lambda *a: True,
+        save_assets=lambda *a, **k: None,
+        default_audio="/default.mp3",
+    )
+    with tempfile.TemporaryDirectory() as dl:
+        _run_sync(conn, dl, deps=deps, concurrency=3, indexer=None)
+
+    assert len(processed) < len(links)  # the stop actually cut the run short
+    assert store.get_run_state(conn)["state"] == "stopped"
+
+
+def test_cli_logs_and_continues_when_the_export_file_is_corrupt():
+    """Regression: a present-but-corrupt export must not kill `python -m core
+    sync` with a raw traceback — the run continues over the existing DB."""
+    from core import cobalt as cobalt_mod, export, importer as importer_mod, runs as runs_mod
+
+    with tempfile.TemporaryDirectory() as d:
+        db = os.path.join(d, "a.db")
+        saved_config = (sync.config.COBALT_API_URL, sync.config.DOWNLOAD_DIR, sync.config.VIDEO_LINKS_FILE)
+        calls = {}
+        orig_check = cobalt_mod.check_cobalt
+        orig_import = importer_mod.import_all
+        orig_execute = runs_mod.execute
+        cobalt_mod.check_cobalt = lambda url: True
+        importer_mod.import_all = lambda *a, **k: (_ for _ in ()).throw(export.ExportError("not json"))
+        runs_mod.execute = lambda *a, **k: calls.setdefault("ran", True) and {}
+        try:
+            sync.run_cli(["--db", db, "--download-dir", os.path.join(d, "dl")])
+        finally:
+            cobalt_mod.check_cobalt = orig_check
+            importer_mod.import_all = orig_import
+            runs_mod.execute = orig_execute
+            (sync.config.COBALT_API_URL, sync.config.DOWNLOAD_DIR, sync.config.VIDEO_LINKS_FILE) = saved_config
+
+    assert calls.get("ran") is True  # the Archive run still happened
 
 
 def test_items_needing_backfill_skips_offloaded_and_ignored_items():

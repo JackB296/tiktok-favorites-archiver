@@ -34,9 +34,9 @@ def _fake_deps(results):
 
 def _results():
     return {
-        "v": cobalt.Result("video", "http://x/v.mp4", None, None, None, "tunnel"),
-        "s": cobalt.Result("slideshow", None, ["http://x/1.jpg", "http://x/2.jpg"], "http://x/a.mp3", None, "picker"),
-        "dead": cobalt.Result("error", None, None, None, "gone", "error"),
+        "v": cobalt.Result(kind="video", url="http://x/v.mp4", images=None, audio=None, error=None, status="tunnel"),
+        "s": cobalt.Result(kind="slideshow", url=None, images=["http://x/1.jpg", "http://x/2.jpg"], audio="http://x/a.mp3", error=None, status="picker"),
+        "dead": cobalt.Result(kind="error", url=None, images=None, audio=None, error="gone", status="error"),
     }
 
 

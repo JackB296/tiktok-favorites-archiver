@@ -18,6 +18,9 @@ lib/
 # The Python build-output rule above must not hide the web app's source modules.
 !web/src/lib/
 !web/src/lib/*.ts
+!web/src/lib/*.tsx
+!web/src/lib/*.js
+!web/src/lib/*.d.ts
 lib64/
 parts/
 sdist/
@@ -175,3 +178,4 @@ appdata/
 # Local planning / scaffolding docs — not part of the published project
 docs/
 tasks/
+plans/

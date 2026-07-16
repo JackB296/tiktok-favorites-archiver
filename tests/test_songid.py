@@ -1,4 +1,4 @@
-"""Tests for core.songid (pure Shazam-response parsers) and core.audio_clip.
+"""Tests for core.songid (pure Shazam-response parsers) and the audio-source policy.
 
 No network and no shazamio/ffmpeg needed: the parsers run on captured payloads
 and clip extraction runs against an injected fake runner.
@@ -9,7 +9,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import songid, audio_clip
+from core import layout, media_index, songid
 
 
 # A recognize() response shaped like Shazam's, trimmed to the fields we read.
@@ -102,7 +102,7 @@ def test_extract_clip_builds_a_short_mono_ffmpeg_command():
     def fake_runner(cmd, **kwargs):
         calls.append((cmd, kwargs))
 
-    out = audio_clip.extract_clip("/x/12.mp4", "/tmp/clip.wav", seconds=5, runner=fake_runner)
+    out = media_index.extract_clip("/x/12.mp4", "/tmp/clip.wav", seconds=5, runner=fake_runner)
     assert out == "/tmp/clip.wav"
     cmd, kwargs = calls[0]
     assert cmd[0] == "ffmpeg"
@@ -116,13 +116,13 @@ def test_extract_clip_builds_a_short_mono_ffmpeg_command():
 def test_source_audio_prefers_slideshow_audio_then_falls_back_to_mp4():
     with tempfile.TemporaryDirectory() as d:
         # No slideshow audio -> the finished MP4.
-        assert audio_clip.source_audio(d, 7) == os.path.join(d, "7.mp4")
+        assert layout.source_audio(d, 7) == os.path.join(d, "7.mp4")
         # Slideshow soundtrack present -> preferred.
         os.makedirs(os.path.join(d, "7"))
         audio_path = os.path.join(d, "7", "audio.mp3")
         with open(audio_path, "wb") as f:
             f.write(b"\x00")
-        assert audio_clip.source_audio(d, 7) == audio_path
+        assert layout.source_audio(d, 7) == audio_path
 
 
 if __name__ == "__main__":

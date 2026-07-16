@@ -1,20 +1,21 @@
 """FastAPI routes.
 
-Thin wiring over the tested core/server logic. Compile-checked locally;
-exercised with TestClient at the Docker phase (fastapi isn't installed here).
-Each request opens its own SQLite connection (safe under WAL + busy_timeout).
+Thin wiring over the tested core/server logic, exercised end-to-end by
+``tests/test_api_http.py`` (TestClient + fake runners; skipped where FastAPI
+isn't installed). Each request opens its own SQLite connection (safe under
+WAL + busy_timeout).
 """
 import os
 import json
 import sqlite3
-import subprocess
 import tempfile
 from queue import Empty
 
+import anyio
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse
 
-from core import config, store, importer, cobalt, verify, inventory, legacy_bootstrap, manual_media, songid, media
+from core import config, store, importer, cobalt, curation, export, layout, verify, inventory, legacy_bootstrap, manual_media, media_index, songid
 from server import archive_items
 from server.archive_items import ArchiveItems
 from server.jobs import JobBusyError
@@ -43,67 +44,35 @@ def _archive_items(request: Request, conn):
 
 
 def _library_settings(conn):
-    settings = dict(store.get_library_settings(conn))
-    settings["index"] = store.library_index_status(conn)
-    return settings
+    row = store.get_library_settings(conn)
+    return {
+        "index_enabled": row["index_enabled"],
+        "thumbnail_width": row["thumbnail_width"],
+        "song_id_enabled": row["song_id_enabled"],
+        "default_audio_name": row["default_audio_name"],
+        "index": store.library_index_status(conn),
+    }
 
 
-def _gallery_term_list(body):
-    if not isinstance(body, dict):
-        raise ValueError("list must be an object")
-    name = body.get("name")
-    mode = body.get("mode")
-    terms = body.get("terms")
-    if not isinstance(name, str) or not (name := name.strip()) or len(name) > 80:
-        raise ValueError("name must be between 1 and 80 characters")
-    if mode not in ("include", "exclude"):
-        raise ValueError("mode must be include or exclude")
-    if not isinstance(terms, list) or not 1 <= len(terms) <= 100:
-        raise ValueError("terms must contain 1 to 100 entries")
-    cleaned = []
-    for term in terms:
-        if not isinstance(term, str):
-            raise ValueError("each term must be 1 to 100 characters")
-        term = term.strip()
-        if not term or len(term) > 100:
-            raise ValueError("each term must be 1 to 100 characters")
-        if term not in cleaned:
-            cleaned.append(term)
-    return name, mode, cleaned
+async def _json_body(request: Request):
+    """Parse the JSON request body; malformed JSON is a 400, not a 500."""
+    try:
+        return await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="request body must be valid JSON")
 
 
-def _playback_queue(body):
-    if not isinstance(body, dict):
-        raise ValueError("queue must be an object")
-    name = body.get("name")
-    item_ids = body.get("item_ids")
-    if not isinstance(name, str) or not (name := name.strip()) or len(name) > 80:
-        raise ValueError("name must be between 1 and 80 characters")
-    if (
-        not isinstance(item_ids, list)
-        or not 1 <= len(item_ids) <= 100
-        or len(set(item_ids)) != len(item_ids)
-        or any(type(item_id) is not int or item_id < 1 for item_id in item_ids)
-    ):
-        raise ValueError("item_ids must contain 1 to 100 unique positive integer IDs")
-    return name, item_ids
+async def _exclusive(request: Request, operation):
+    """Run exclusive maintenance (may take minutes, e.g. imports) on a worker thread.
 
-
-def _song_playlist(body):
-    if not isinstance(body, dict):
-        raise ValueError("playlist must be an object")
-    name = body.get("name")
-    song_ids = body.get("song_ids")
-    if not isinstance(name, str) or not (name := name.strip()) or len(name) > 80:
-        raise ValueError("name must be between 1 and 80 characters")
-    if (
-        not isinstance(song_ids, list)
-        or not 1 <= len(song_ids) <= 1000
-        or len(set(song_ids)) != len(song_ids)
-        or any(type(song_id) is not int or song_id < 1 for song_id in song_ids)
-    ):
-        raise ValueError("song_ids must contain 1 to 1000 unique positive integer IDs")
-    return name, song_ids
+    ``run_when_idle`` guards against a concurrent Archive-run start; the worker
+    thread keeps blocking work (library scans, file installs, imports) off the
+    event loop so ``/api/status`` and the SSE stream stay live meanwhile.
+    ``JobBusyError`` propagates for the caller's 409 mapping.
+    """
+    return await anyio.to_thread.run_sync(
+        lambda: request.app.state.jobs.run_when_idle(operation)
+    )
 
 
 @router.get("/health")
@@ -125,116 +94,54 @@ def suggest(request: Request, q: str = ""):
         conn.close()
 
 
-@router.get("/gallery-presets")
-def list_gallery_presets(request: Request):
-    conn = _open(request)
-    try:
-        return store.list_gallery_presets(conn)
-    finally:
-        conn.close()
+def _register_saved_list_routes(resource, kind, display_noun):
+    """GET/POST/DELETE for one saved named-list collection.
+
+    All four collections (Gallery presets, term lists, playback queues, song
+    playlists) share this implementation; per-collection validation lives in
+    ``archive_items.SAVED_LIST_RESOURCES``.
+    """
+
+    @router.get(f"/{resource}")
+    def list_entries(request: Request):
+        conn = _open(request)
+        try:
+            return store.list_saved_lists(conn, kind)
+        finally:
+            conn.close()
+
+    @router.post(f"/{resource}")
+    async def create_entry(request: Request):
+        try:
+            name, payload = archive_items.parse_saved_list(resource, await _json_body(request))
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        def write():
+            conn = _open(request)
+            try:
+                entry_id = store.save_saved_list(conn, kind, name, payload)
+                return {"id": entry_id, "name": name, **payload}
+            finally:
+                conn.close()
+
+        try:
+            return await anyio.to_thread.run_sync(write)
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail=f"a {display_noun} with that name already exists")
+
+    @router.delete(f"/{resource}/{{entry_id}}")
+    def delete_entry(request: Request, entry_id: int):
+        conn = _open(request)
+        try:
+            if not store.delete_saved_list(conn, kind, entry_id):
+                raise HTTPException(status_code=404, detail=f"{display_noun} not found")
+            return {"ok": True}
+        finally:
+            conn.close()
 
 
-@router.post("/gallery-presets")
-async def create_gallery_preset(request: Request):
-    body = await request.json()
-    name = body.get("name") if isinstance(body, dict) else None
-    if not isinstance(name, str) or not (name := name.strip()) or len(name) > 80:
-        raise HTTPException(status_code=400, detail="name must be between 1 and 80 characters")
-    try:
-        filters = archive_items.gallery_preset_filters(body.get("filters"))
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-    conn = _open(request)
-    try:
-        preset_id = store.save_gallery_preset(conn, name, filters)
-        return {"id": preset_id, "name": name, "filters": filters}
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="a preset with that name already exists")
-    finally:
-        conn.close()
-
-
-@router.delete("/gallery-presets/{preset_id}")
-def delete_gallery_preset(request: Request, preset_id: int):
-    conn = _open(request)
-    try:
-        if not store.delete_gallery_preset(conn, preset_id):
-            raise HTTPException(status_code=404, detail="preset not found")
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@router.get("/gallery-term-lists")
-def list_gallery_term_lists(request: Request):
-    conn = _open(request)
-    try:
-        return store.list_gallery_term_lists(conn)
-    finally:
-        conn.close()
-
-
-@router.post("/gallery-term-lists")
-async def create_gallery_term_list(request: Request):
-    try:
-        name, mode, terms = _gallery_term_list(await request.json())
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-    conn = _open(request)
-    try:
-        list_id = store.save_gallery_term_list(conn, name, mode, terms)
-        return {"id": list_id, "name": name, "mode": mode, "terms": terms}
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="a term list with that name already exists")
-    finally:
-        conn.close()
-
-
-@router.delete("/gallery-term-lists/{list_id}")
-def delete_gallery_term_list(request: Request, list_id: int):
-    conn = _open(request)
-    try:
-        if not store.delete_gallery_term_list(conn, list_id):
-            raise HTTPException(status_code=404, detail="term list not found")
-        return {"ok": True}
-    finally:
-        conn.close()
-
-
-@router.get("/playback-queues")
-def list_playback_queues(request: Request):
-    conn = _open(request)
-    try:
-        return store.list_playback_queues(conn)
-    finally:
-        conn.close()
-
-
-@router.post("/playback-queues")
-async def create_playback_queue(request: Request):
-    try:
-        name, item_ids = _playback_queue(await request.json())
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-    conn = _open(request)
-    try:
-        queue_id = store.save_playback_queue(conn, name, item_ids)
-        return {"id": queue_id, "name": name, "item_ids": item_ids}
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="a playback queue with that name already exists")
-    finally:
-        conn.close()
-
-
-@router.delete("/playback-queues/{queue_id}")
-def delete_playback_queue(request: Request, queue_id: int):
-    conn = _open(request)
-    try:
-        if not store.delete_playback_queue(conn, queue_id):
-            raise HTTPException(status_code=404, detail="playback queue not found")
-        return {"ok": True}
-    finally:
-        conn.close()
+for _resource, (_kind, _body_noun, _display_noun, _parse) in archive_items.SAVED_LIST_RESOURCES.items():
+    _register_saved_list_routes(_resource, _kind, _display_noun)
 
 
 @router.get("/songs")
@@ -243,42 +150,6 @@ def list_songs(request: Request):
     conn = _open(request)
     try:
         return {"songs": store.distinct_songs(conn)}
-    finally:
-        conn.close()
-
-
-@router.get("/song-playlists")
-def list_song_playlists(request: Request):
-    conn = _open(request)
-    try:
-        return store.list_song_playlists(conn)
-    finally:
-        conn.close()
-
-
-@router.post("/song-playlists")
-async def create_song_playlist(request: Request):
-    try:
-        name, song_ids = _song_playlist(await request.json())
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-    conn = _open(request)
-    try:
-        playlist_id = store.save_song_playlist(conn, name, song_ids)
-        return {"id": playlist_id, "name": name, "song_ids": song_ids}
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="a playlist with that name already exists")
-    finally:
-        conn.close()
-
-
-@router.delete("/song-playlists/{playlist_id}")
-def delete_song_playlist(request: Request, playlist_id: int):
-    conn = _open(request)
-    try:
-        if not store.delete_song_playlist(conn, playlist_id):
-            raise HTTPException(status_code=404, detail="playlist not found")
-        return {"ok": True}
     finally:
         conn.close()
 
@@ -314,10 +185,13 @@ def feed_ids(request: Request):
     play through exactly that filtered set. Same query vocabulary as /items/page."""
     try:
         query = archive_items.parse_page_query(request.query_params)
+        # Same policy as mark-by-filter: paging keys don't belong in a
+        # whole-set query (this endpoint returns every matching id at once).
+        for key in ("limit", "cursor", "feed"):
+            if key in query:
+                raise ValueError(f"{key} is not a filter")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    for key in ("limit", "cursor", "feed"):
-        query.pop(key, None)
     conn = _open(request)
     try:
         return store.feed_ids(conn, **query)
@@ -327,7 +201,7 @@ def feed_ids(request: Request):
 
 @router.post("/items/selection")
 async def item_selection(request: Request):
-    body = await request.json()
+    body = await _json_body(request)
     item_ids = body.get("ids", []) if isinstance(body, dict) else None
     if (
         not isinstance(item_ids, list)
@@ -335,17 +209,23 @@ async def item_selection(request: Request):
         or any(type(item_id) is not int or item_id < 1 for item_id in item_ids)
     ):
         raise HTTPException(status_code=400, detail="ids must contain at most 100 positive integer item IDs")
-    conn = _open(request)
-    try:
-        return _archive_items(request, conn).selected(item_ids)
-    finally:
-        conn.close()
+
+    def project():
+        # The projection walks the archive dir; keep it off the event loop
+        # (the Feed calls this repeatedly while scrolling).
+        conn = _open(request)
+        try:
+            return _archive_items(request, conn).selected(item_ids)
+        finally:
+            conn.close()
+
+    return await anyio.to_thread.run_sync(project)
 
 
 @router.post("/items/requeue")
 async def requeue_items(request: Request):
     """Queue selected failed/missing favorites without disturbing healthy media."""
-    body = await request.json()
+    body = await _json_body(request)
     item_ids = body.get("ids") if isinstance(body, dict) else None
     if (
         not isinstance(item_ids, list)
@@ -353,45 +233,38 @@ async def requeue_items(request: Request):
         or any(type(item_id) is not int or item_id < 1 for item_id in item_ids)
     ):
         raise HTTPException(status_code=400, detail="ids must contain 1 to 100 positive integer item IDs")
-    if request.app.state.jobs.is_running():
-        raise HTTPException(status_code=409, detail="wait for the current run to finish")
-    conn = _open(request)
+    def operation():
+        conn = _open(request)
+        try:
+            return curation.requeue_selected(conn, _download_dir(request), item_ids)
+        finally:
+            conn.close()
+
     try:
-        return verify.requeue_selected(conn, _download_dir(request), item_ids)
-    finally:
-        conn.close()
+        return await _exclusive(request, operation)
+    except JobBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error))
 
 
 @router.post("/items/mark")
 async def mark_items(request: Request):
     """Bulk offload/ignore marking by explicit ids, id range, or Gallery filter."""
-    body = await request.json()
+    body = await _json_body(request)
     try:
         action, kind, value, dry_run = archive_items.parse_mark_request(body)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    if request.app.state.jobs.is_running():
-        raise HTTPException(status_code=409, detail="wait for the current run to finish")
-    conn = _open(request)
+    def operation():
+        conn = _open(request)
+        try:
+            return curation.mark(conn, _download_dir(request), action, kind, value, dry_run=dry_run)
+        finally:
+            conn.close()
+
     try:
-        if kind == "ids":
-            ids = value
-        elif kind == "range":
-            ids = store.item_ids_in_range(conn, value["first_id"], value["last_id"])
-        else:
-            ids = store.item_ids_matching(conn, **value)
-        if dry_run:
-            return {"matched": len(ids), "changed": 0, "dry_run": True}
-        if action == "offload":
-            changed = store.set_offloaded(conn, ids, offloaded=True)
-        elif action == "unoffload":
-            result = verify.unoffload_items(conn, _download_dir(request), ids)
-            return {"matched": len(ids), **result}
-        else:
-            changed = store.set_ignored(conn, ids, ignored=(action == "ignore"))
-        return {"matched": len(ids), "changed": changed}
-    finally:
-        conn.close()
+        return await _exclusive(request, operation)
+    except JobBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error))
 
 
 @router.get("/items/offload-suggestion")
@@ -399,18 +272,6 @@ def items_offload_suggestion(request: Request):
     conn = _open(request)
     try:
         return verify.offload_suggestion(conn, _download_dir(request))
-    finally:
-        conn.close()
-
-
-@router.get("/items/{n}")
-def get_item(request: Request, n: int):
-    conn = _open(request)
-    try:
-        item = _archive_items(request, conn).get(n)
-        if item is None:
-            raise HTTPException(status_code=404, detail="item not found")
-        return item
     finally:
         conn.close()
 
@@ -430,25 +291,6 @@ MAX_REPLACEMENT_THUMBNAIL_BYTES = 20 * 1024 * 1024
 MAX_DEFAULT_AUDIO_BYTES = 20 * 1024 * 1024
 
 
-def _has_audio_stream(path):
-    """True when ffprobe finds a decodable audio stream in the file."""
-    try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "a",
-             "-show_entries", "stream=codec_type", "-of", "json", path],
-            capture_output=True, text=True, check=False,
-        )
-    except OSError:
-        return False
-    if result.returncode != 0:
-        return False
-    try:
-        data = json.loads(result.stdout or "{}")
-    except ValueError:
-        return False
-    return any(stream.get("codec_type") == "audio" for stream in data.get("streams", []))
-
-
 async def _stage_upload(upload, prefix, suffix, max_bytes=MAX_IMPORT_BYTES, directory=None):
     """Stream one multipart file to a unique temporary path."""
     if directory:
@@ -461,7 +303,7 @@ async def _stage_upload(upload, prefix, suffix, max_bytes=MAX_IMPORT_BYTES, dire
                 received += len(chunk)
                 if received > max_bytes:
                     raise HTTPException(status_code=413, detail=f"{upload.filename or 'upload'} is too large")
-                f.write(chunk)
+                await anyio.to_thread.run_sync(f.write, chunk)
         return path
     except Exception:
         try:
@@ -489,7 +331,7 @@ async def replace_item_media(
     """Replace one Favorite's local MP4 and/or custom Gallery thumbnail."""
     if video is None and thumbnail is None:
         raise HTTPException(status_code=400, detail="choose a replacement video or thumbnail")
-    upload_dir = os.path.join(_download_dir(request), ".archive", "uploads")
+    upload_dir = layout.uploads_dir(_download_dir(request))
     staged_video = None
     staged_thumbnail = None
     try:
@@ -526,7 +368,7 @@ async def replace_item_media(
             finally:
                 conn.close()
 
-        return request.app.state.jobs.run_when_idle(operation)
+        return await _exclusive(request, operation)
     except JobBusyError as error:
         raise HTTPException(status_code=409, detail=str(error))
     except manual_media.MediaReplacementError as error:
@@ -561,14 +403,11 @@ def search_songs(request: Request, q: str = ""):
 @router.post("/items/{n}/song")
 async def set_item_song(request: Request, n: int):
     """Attach a hand-picked song to a Favorite (manual identification)."""
-    body = await request.json()
-    if not isinstance(body, dict) or not body.get("title"):
-        raise HTTPException(status_code=400, detail="a song title is required")
-    match = songid.SongMatch(
-        key=body.get("key"), title=body["title"], artist=body.get("artist"),
-        album=body.get("album"), art_url=body.get("art_url"), shazam_url=body.get("shazam_url"),
-        apple_url=body.get("apple_url"), spotify_url=body.get("spotify_url"),
-    )
+    try:
+        fields = archive_items.parse_song_match(await _json_body(request))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    match = songid.SongMatch(**fields)
 
     def operation():
         conn = _open(request)
@@ -586,7 +425,7 @@ async def set_item_song(request: Request, n: int):
             conn.close()
 
     try:
-        return request.app.state.jobs.run_when_idle(operation)
+        return await _exclusive(request, operation)
     except JobBusyError as error:
         raise HTTPException(status_code=409, detail=str(error))
 
@@ -615,12 +454,14 @@ async def import_export(request: Request, file: UploadFile = File(...)):
             finally:
                 conn.close()
 
-        return request.app.state.jobs.run_when_idle(operation)
+        return await _exclusive(request, operation)
     except JobBusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except HTTPException:
         raise
-    except Exception as exc:
+    except export.ExportError as exc:
+        # The export module's typed error for unusable uploads (invalid JSON,
+        # wrong shape); unexpected failures (disk, DB) stay 500s.
         raise HTTPException(status_code=400, detail=f"Invalid export: {exc}")
     finally:
         if tmp_path:
@@ -655,7 +496,7 @@ async def _run_legacy_bootstrap(
                 mapping_segments=segments,
             )
 
-        return request.app.state.jobs.run_when_idle(lambda: operation(plan))
+        return await _exclusive(request, lambda: operation(plan))
     except JobBusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except legacy_bootstrap.LegacyBootstrapError as exc:
@@ -676,7 +517,7 @@ async def legacy_import_preview(
     def operation(plan):
         conn = _open(request)
         try:
-            if conn.execute("SELECT 1 FROM item LIMIT 1").fetchone() is not None:
+            if store.has_items(conn):
                 raise legacy_bootstrap.LegacyBootstrapError(
                     "Legacy bootstrap requires an empty library database."
                 )
@@ -741,13 +582,17 @@ def verify_archive(request: Request):
 
 @router.post("/verify/requeue")
 def requeue_missing(request: Request):
-    if request.app.state.jobs.is_running():
-        raise HTTPException(status_code=409, detail="wait for the current run to finish")
-    conn = _open(request)
+    def operation():
+        conn = _open(request)
+        try:
+            return verify.requeue_missing(conn, _download_dir(request))
+        finally:
+            conn.close()
+
     try:
-        return verify.requeue_missing(conn, _download_dir(request))
-    finally:
-        conn.close()
+        return request.app.state.jobs.run_when_idle(operation)
+    except JobBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error))
 
 
 @router.get("/library-settings")
@@ -787,20 +632,28 @@ def archive_inventory(request: Request):
 
 @router.put("/library-settings")
 async def update_library_settings(request: Request):
-    body = await request.json()
-    conn = _open(request)
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="settings must be an object")
+
+    def write():
+        # Off the event loop: a contended SQLite write waits busy_timeout (5s).
+        conn = _open(request)
+        try:
+            store.set_library_settings(
+                conn,
+                index_enabled=body.get("index_enabled"),
+                thumbnail_width=body.get("thumbnail_width"),
+                song_id_enabled=body.get("song_id_enabled"),
+            )
+            return _library_settings(conn)
+        finally:
+            conn.close()
+
     try:
-        store.set_library_settings(
-            conn,
-            index_enabled=body.get("index_enabled"),
-            thumbnail_width=body.get("thumbnail_width"),
-            song_id_enabled=body.get("song_id_enabled"),
-        )
-        return _library_settings(conn)
+        return await anyio.to_thread.run_sync(write)
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error))
-    finally:
-        conn.close()
 
 
 @router.post("/default-audio")
@@ -811,25 +664,31 @@ async def upload_default_audio(request: Request, audio: UploadFile = File(...)):
     if not name.lower().endswith(".mp3"):
         raise HTTPException(status_code=400, detail="upload an .mp3 file")
     download_dir = _download_dir(request)
-    target = os.path.join(download_dir, media.CUSTOM_DEFAULT_AUDIO)
+    target = layout.custom_default_audio(download_dir)
     staged = None
     try:
         staged = await _stage_upload(
             audio, ".default-audio-", ".upload",
             max_bytes=MAX_DEFAULT_AUDIO_BYTES,
-            directory=os.path.join(download_dir, ".archive", "uploads"),
+            directory=layout.uploads_dir(download_dir),
         )
-        if not _has_audio_stream(staged):
-            raise HTTPException(status_code=400, detail="that file has no readable audio")
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        os.replace(staged, target)
+        def install():
+            # Blocking probe + file install + DB write — runs on a worker
+            # thread so the event loop stays responsive.
+            if not media_index.has_audio_stream(staged):
+                raise HTTPException(status_code=400, detail="that file has no readable audio")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            os.replace(staged, target)
+            conn = _open(request)
+            try:
+                store.set_default_audio(conn, name)
+                return _library_settings(conn)
+            finally:
+                conn.close()
+
+        settings = await anyio.to_thread.run_sync(install)
         staged = None
-        conn = _open(request)
-        try:
-            store.set_default_audio(conn, name)
-            return _library_settings(conn)
-        finally:
-            conn.close()
+        return settings
     finally:
         if staged:
             _remove_temp_files([staged])
@@ -838,7 +697,7 @@ async def upload_default_audio(request: Request, audio: UploadFile = File(...)):
 @router.delete("/default-audio")
 def clear_default_audio(request: Request):
     """Revert to the bundled default track and remove the uploaded custom one."""
-    target = os.path.join(_download_dir(request), media.CUSTOM_DEFAULT_AUDIO)
+    target = layout.custom_default_audio(_download_dir(request))
     try:
         os.remove(target)
     except OSError:
@@ -862,21 +721,28 @@ def sync_settings(request: Request):
 
 @router.put("/sync-settings")
 async def update_sync_settings(request: Request):
-    body = await request.json()
+    body = await _json_body(request)
     concurrency = body.get("concurrency") if isinstance(body, dict) else None
     if type(concurrency) is not int or not 1 <= concurrency <= 16:
         raise HTTPException(status_code=400, detail="concurrency must be an integer from 1 to 16")
-    conn = _open(request)
-    try:
-        store.set_run_state(conn, concurrency=concurrency)
-        return {"concurrency": concurrency}
-    finally:
-        conn.close()
+
+    def write():
+        conn = _open(request)
+        try:
+            store.set_run_state(conn, concurrency=concurrency)
+            return {"concurrency": concurrency}
+        finally:
+            conn.close()
+
+    return await anyio.to_thread.run_sync(write)
 
 
 @router.post("/sync/{action}")
 def sync_control(request: Request, action: str):
     jm = request.app.state.jobs
+    # Policy: a refused start is a no-op, reported as {"started": false} (the
+    # Dashboard branches on it); refused pause/continue/stop are conflicts and
+    # 409. Deliberately different shapes — don't "unify" them.
     if action == "start":
         return {"started": jm.start("sync")}
     if action == "backfill":

@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { UploadSimple, X } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item } from "../lib/types";
-import { useDialogFocusTrap } from "./ui";
+import { Dialog } from "./ui";
 
 function fileSummary(file: File | null) {
   if (!file) return "No file selected";
@@ -15,21 +15,10 @@ function fileSummary(file: File | null) {
 
 export function MediaSettingsDialog({ item, onClose, onSaved }: { item: Item; onClose: () => void; onSaved: (item: Item) => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLFormElement>(null);
-  useDialogFocusTrap(panelRef);
   const [video, setVideo] = useState<File | null>(null);
   const [thumbnail, setThumbnail] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    closeRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !saving) onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, saving]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -48,8 +37,8 @@ export function MediaSettingsDialog({ item, onClose, onSaved }: { item: Item; on
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-labelledby="media-settings-title">
-      <form ref={panelRef} onSubmit={(event) => void submit(event)} className="w-full max-w-lg rounded-[var(--radius-media)] border border-white/15 bg-surface p-5 text-ink shadow-2xl">
+    <Dialog labelledBy="media-settings-title" onClose={onClose} closeDisabled={saving} initialFocusRef={closeRef} className="bg-black/75">
+      <form onSubmit={(event) => void submit(event)} className="w-full max-w-lg rounded-[var(--radius-media)] border border-white/15 bg-surface p-5 text-ink shadow-2xl">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="tabular text-xs text-ink-faint">Favorite #{item.id}</p>
@@ -82,6 +71,6 @@ export function MediaSettingsDialog({ item, onClose, onSaved }: { item: Item; on
           <button type="submit" disabled={saving || (!video && !thumbnail)} className="inline-flex items-center gap-2 rounded-[var(--radius-control)] bg-accent px-3 py-2 text-sm font-semibold text-on-accent hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40"><UploadSimple size={16} />{saving ? "Saving…" : "Save media"}</button>
         </div>
       </form>
-    </div>
+    </Dialog>
   );
 }

@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import type { SongSummary, SongPlaylist } from "../lib/types";
 import { Button, EmptyState, Skeleton, cx } from "../components/ui";
 import { spotifyUrl, appleMusicUrl, youtubeUrl } from "../lib/songLinks.js";
+import { useSavedList } from "../lib/useSavedList";
 
 function StreamLinks({ song }: { song: SongSummary }) {
   const link = "inline-flex items-center gap-1 rounded-full border border-line px-2 py-1 text-xs text-ink-dim transition hover:border-ink-faint hover:text-ink";
@@ -20,18 +21,20 @@ function StreamLinks({ song }: { song: SongSummary }) {
 export function Music() {
   const navigate = useNavigate();
   const [songs, setSongs] = useState<SongSummary[] | null>(null);
-  const [playlists, setPlaylists] = useState<SongPlaylist[]>([]);
+  const {
+    items: playlists, name: playlistName, setName: setPlaylistName,
+    message: error, setMessage: setError, save: savePlaylistEntry, remove: removePlaylist,
+  } = useSavedList<SongPlaylist>({
+    load: api.songPlaylists,
+    create: (name) => api.createSongPlaylist(name, [...selected]),
+    remove: (id) => api.deleteSongPlaylist(id), // failures surface via the hook's message
+  });
   const [activePlaylistId, setActivePlaylistId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [playlistName, setPlaylistName] = useState("");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const refreshPlaylists = () => api.songPlaylists().then(setPlaylists).catch(() => {});
 
   useEffect(() => {
     api.songs().then((r) => setSongs(r.songs)).catch(() => setSongs([]));
-    refreshPlaylists();
   }, []);
 
   const activePlaylist = playlists.find((p) => p.id === activePlaylistId) ?? null;
@@ -51,26 +54,21 @@ export function Music() {
   }
 
   async function savePlaylist() {
-    const name = playlistName.trim();
-    if (!name || !selected.size || saving) return;
+    if (!playlistName.trim() || !selected.size || saving) return;
     setSaving(true);
     setError(null);
     try {
-      await api.createSongPlaylist(name, [...selected]);
-      setPlaylistName("");
-      setSelected(new Set());
-      await refreshPlaylists();
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Could not save the playlist.");
+      const saved = await savePlaylistEntry();
+      if (saved) setSelected(new Set());
     } finally {
       setSaving(false);
     }
   }
 
   async function deletePlaylist(id: number) {
-    await api.deleteSongPlaylist(id).catch(() => {});
-    if (activePlaylistId === id) setActivePlaylistId(null);
-    refreshPlaylists();
+    const removed = await removePlaylist(id);
+    // A failed delete keeps the playlist, so don't jump the filter to "All songs".
+    if (removed && activePlaylistId === id) setActivePlaylistId(null);
   }
 
   function playSong(song: SongSummary) {

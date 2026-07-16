@@ -10,7 +10,7 @@ import os
 import csv
 import logging
 
-from core import config, export, inventory, store
+from core import config, export, inventory, layout, store
 
 
 def import_export(conn, export_file):
@@ -27,12 +27,11 @@ def import_existing_files(conn, download_dir):
         return 0
     marked = 0
     for name in os.listdir(download_dir):
-        stem = name.split(".")[0]
         # Exactly "<n>.mp4": a crashed encode's "<n>.mp4.part.mp4" temp must not
         # be imported as a finished item.
-        if not (stem.isdigit() and name == f"{stem}.mp4"):
+        if not layout.is_finished_movie_name(name):
             continue
-        n = int(stem)
+        n = int(name[:-4])
         item = store.get_item(conn, n)
         if item is None:
             store.insert_item(
@@ -45,7 +44,7 @@ def import_existing_files(conn, download_dir):
             )
         elif item["status"] != "done":
             store.set_status(conn, n, "done")
-        if os.path.isdir(os.path.join(download_dir, str(n))):
+        if os.path.isdir(layout.assets_dir(download_dir, n)):
             store.set_has_assets(conn, n, True)
         marked += 1
     return marked
@@ -62,8 +61,8 @@ def regenerate_manifest(conn, download_dir):
             writer = csv.writer(f)
             writer.writerow(["file", "link", "type", "status", "timestamp"])
             for row in store.all_items(conn):
-                if os.path.exists(os.path.join(download_dir, f"{row['id']}.mp4")):
-                    writer.writerow([f"{row['id']}.mp4", inventory._safe_cell(row["link"]),
+                if os.path.exists(layout.movie(download_dir, row["id"])):
+                    writer.writerow([layout.movie_name(row["id"]), inventory.safe_cell(row["link"]),
                                      row["kind"], row["status"], row["updated_at"]])
                     written += 1
     except OSError as e:

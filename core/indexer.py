@@ -2,12 +2,7 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 
-from core import media_index, store
-
-
-def _fingerprint(path):
-    stat = os.stat(path)
-    return f"{stat.st_size}:{stat.st_mtime_ns}"
+from core import layout, media_index, store
 
 
 def _default_workers():
@@ -24,7 +19,7 @@ def _index_items(conn, download_dir, items, inspect, thumbnail_width, progress, 
     """
     candidates = [
         item for item in items
-        if os.path.isfile(os.path.join(download_dir, f"{item['id']}.mp4"))
+        if os.path.isfile(layout.movie(download_dir, item["id"]))
     ]
     result = {"indexed": 0, "failed": 0}
     total = len(candidates)
@@ -37,8 +32,8 @@ def _index_items(conn, download_dir, items, inspect, thumbnail_width, progress, 
         nonlocal completed
         try:
             index = future_result()
-            movie = os.path.join(download_dir, f"{item['id']}.mp4")
-            store.record_media_index(conn, item["id"], index._asdict(), _fingerprint(movie))
+            movie = layout.movie(download_dir, item["id"])
+            store.record_media_index(conn, item["id"], index._asdict(), media_index.file_fingerprint(movie))
             result["indexed"] += 1
         except Exception as error:
             store.record_media_index_error(conn, item["id"], str(error))

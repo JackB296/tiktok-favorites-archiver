@@ -24,12 +24,16 @@ if "requests" not in sys.modules:
 
 from core import config, download
 
-config.RETRY_DELAY = 0  # keep retry tests instant
+# Retries stay instant by stubbing the sleep seam, NOT config.RETRY_DELAY —
+# the code must read the real attribute so a missing constant fails loudly here.
+_sleeps = []
+download._sleep = _sleeps.append
 
 
 class _Response:
     def __init__(self, chunks):
         self._chunks = chunks
+        self.closed = False
 
     def raise_for_status(self):
         pass
@@ -37,17 +41,23 @@ class _Response:
     def iter_content(self, chunk_size):
         return iter(self._chunks)
 
+    def close(self):
+        self.closed = True
+
 
 def _serve(*outcomes):
     """Queue per-call outcomes: a list of chunks, or an exception to raise."""
-    calls = {"count": 0}
+    _sleeps.clear()
+    calls = {"count": 0, "responses": []}
 
     def get(url, stream=True, timeout=None):
         outcome = outcomes[min(calls["count"], len(outcomes) - 1)]
         calls["count"] += 1
         if isinstance(outcome, Exception):
             raise outcome
-        return _Response(outcome)
+        response = _Response(outcome)
+        calls["responses"].append(response)
+        return response
 
     download.requests.get = get
     return calls
@@ -56,11 +66,12 @@ def _serve(*outcomes):
 def test_success_publishes_atomically_and_leaves_no_part_file():
     with tempfile.TemporaryDirectory() as d:
         target = os.path.join(d, "1.mp4")
-        _serve([b"video-", b"bytes"])
+        calls = _serve([b"video-", b"bytes"])
         assert download.download_file("http://x/v", target) is True
         with open(target, "rb") as f:
             assert f.read() == b"video-bytes"
         assert not os.path.exists(target + ".part")
+        assert all(r.closed for r in calls["responses"])
 
 
 def test_zero_byte_download_is_retried():
@@ -70,6 +81,15 @@ def test_zero_byte_download_is_retried():
         assert download.download_file("http://x/v", target) is True
         assert calls["count"] == 2
         assert os.path.getsize(target) == 4
+        # The retry pause read the real config constant (regression guard for
+        # the once-missing RETRY_DELAY) and closed the discarded response.
+        assert _sleeps == [config.RETRY_DELAY]
+        assert calls["responses"][0].closed
+
+
+def test_retry_delay_is_a_real_nonnegative_number():
+    assert isinstance(config.RETRY_DELAY, float)
+    assert config.RETRY_DELAY >= 0
 
 
 def test_connection_error_is_retried_then_succeeds():
@@ -78,6 +98,7 @@ def test_connection_error_is_retried_then_succeeds():
         calls = _serve(download.ConnectionError("reset"), [b"ok"])
         assert download.download_file("http://x/v", target) is True
         assert calls["count"] == 2
+        assert _sleeps == [config.RETRY_DELAY]
 
 
 def test_persistent_failure_returns_false_and_cleans_up():
@@ -86,6 +107,40 @@ def test_persistent_failure_returns_false_and_cleans_up():
         _serve(download.Timeout("slow"))
         assert download.download_file("http://x/v", target, max_retries=2) is False
         assert os.listdir(d) == []  # no target, no .part left behind
+
+
+class _FailingResponse:
+    def __init__(self, status_code):
+        self.status_code = status_code
+        self.closed = False
+
+    def raise_for_status(self):
+        error = download.requests.exceptions.HTTPError("boom")
+        error.response = self
+        raise error
+
+    def iter_content(self, chunk_size):
+        return iter([])
+
+    def close(self):
+        self.closed = True
+
+
+def test_http_5xx_is_retried_but_4xx_is_permanent():
+    with tempfile.TemporaryDirectory() as d:
+        target = os.path.join(d, "1.mp4")
+        calls = _serve(None)
+        responses = [_FailingResponse(503), _Response([b"ok"])]
+        download.requests.get = lambda url, stream=True, timeout=None: responses.pop(0)
+        assert download.download_file("http://x/v", target) is True
+        assert _sleeps == [config.RETRY_DELAY]        # one retry pause for the 503
+
+        _sleeps.clear()
+        gone = _FailingResponse(404)
+        download.requests.get = lambda url, stream=True, timeout=None: gone
+        assert download.download_file("http://x/v", target + "b") is False
+        assert _sleeps == []                          # 4xx breaks immediately
+        assert gone.closed                            # response still closed
 
 
 def test_unexpected_error_stops_without_retrying_and_cleans_up():

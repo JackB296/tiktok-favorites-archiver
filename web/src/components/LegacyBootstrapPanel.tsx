@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowClockwise, CaretDown } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import { parseLegacyMappingText } from "../lib/legacyBootstrap";
+import { isSafeHttpUrl } from "../lib/format";
 import type { LegacyBootstrapPreview, LegacyMappingSegment } from "../lib/types";
 import { Button, ConfirmDialog, Stat } from "./ui";
 
@@ -73,7 +74,9 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
       );
       setPreview(null);
       setVerified(false);
-      await onApplied();
+      // A rejecting refresh must not overwrite the success report — the
+      // bootstrap already committed. (onApplied's type permits rejection.)
+      await onApplied().catch(() => {});
     } catch (err) {
       setMsg(`Bootstrap failed: ${(err as Error).message}`);
     } finally {
@@ -191,7 +194,7 @@ export function LegacyBootstrapPanel({ running, onApplied }: { running: boolean;
                 </thead>
                 <tbody className="text-ink-dim">
                   {preview.samples.map((sample) => {
-                    const safeLink = /^https?:\/\//i.test(sample.link);
+                    const safeLink = isSafeHttpUrl(sample.link);
                     return (
                       <tr key={sample.archive_number} className="border-t border-line">
                         <td className="py-2 pr-3 text-ink">

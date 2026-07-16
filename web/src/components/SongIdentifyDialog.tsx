@@ -1,34 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { MagnifyingGlass, MusicNotes, X } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Item, SongCandidate } from "../lib/types";
 import { songLabel } from "../lib/songLinks.js";
-import { useDialogFocusTrap } from "./ui";
+import { Dialog } from "./ui";
 
 // Manual "match it myself" fallback: search Shazam's catalog by text and attach
 // the chosen track to this favorite. Used when auto-identification missed or
 // picked the wrong song.
 export function SongIdentifyDialog({ item, onClose, onSaved }: { item: Item; onClose: () => void; onSaved: (item: Item) => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  useDialogFocusTrap(panelRef);
   const [query, setQuery] = useState(item.song?.title ?? "");
   const [results, setResults] = useState<SongCandidate[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const busy = searching || savingKey !== null;
-
-  useEffect(() => {
-    inputRef.current?.focus();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, busy]);
 
   async function search(event: FormEvent) {
     event.preventDefault();
@@ -62,8 +51,8 @@ export function SongIdentifyDialog({ item, onClose, onSaved }: { item: Item; onC
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-labelledby="song-identify-title">
-      <form ref={panelRef} onSubmit={(event) => void search(event)} className="flex max-h-[85dvh] w-full max-w-lg flex-col rounded-[var(--radius-media)] border border-white/15 bg-surface p-5 text-ink shadow-2xl">
+    <Dialog labelledBy="song-identify-title" onClose={onClose} closeDisabled={busy} initialFocusRef={inputRef} className="bg-black/75">
+      <form onSubmit={(event) => void search(event)} className="flex max-h-[85dvh] w-full max-w-lg flex-col rounded-[var(--radius-media)] border border-white/15 bg-surface p-5 text-ink shadow-2xl">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="tabular text-xs text-ink-faint">Favorite #{item.id}</p>
@@ -100,6 +89,6 @@ export function SongIdentifyDialog({ item, onClose, onSaved }: { item: Item; onC
           )}
         </div>
       </form>
-    </div>
+    </Dialog>
   );
 }

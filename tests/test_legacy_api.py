@@ -16,6 +16,10 @@ try:
     from fastapi import UploadFile
 except ModuleNotFoundError:
     UploadFile = None
+    if "pytest" in sys.modules:  # visible skip instead of vacuous green
+        import pytest
+        pytest.skip("fastapi not installed — full run happens in the container",
+                    allow_module_level=True)
 
 
 def _make_export(path, favorites, section):

@@ -6,7 +6,7 @@ import { feedMediaKind } from "../lib/feedItems";
 import { cx } from "./ui";
 import { usePlayback } from "./playback";
 import { normalizationGain } from "../lib/playbackVolume.js";
-import { formatMediaTime } from "../lib/mediaPresentation.js";
+import { formatMediaTime } from "../lib/format";
 import { containedMediaBox } from "../lib/mediaLayout.js";
 
 /** Track an element's rendered size so overlays can align to letterboxed media. */
@@ -177,7 +177,8 @@ function SlideMedia({ images, audio, active }: { images: string[]; audio: string
   }, [active, muted, paused]);
   useMediaVolume(audioRef, active, volume, autoLevel, setAutoGain);
 
-  // Left/right arrow keys flip images while this slideshow is the active post.
+  // Seam: "viewer-slide-nav" — ViewerFeed (routes/Viewer.tsx) dispatches this
+  // window CustomEvent so ← / → flip images while this slideshow is the active post.
   useEffect(() => {
     if (!active || images.length <= 1) return;
     const onNav = (event: Event) => {

@@ -19,33 +19,35 @@ def _make_export(path, links):
         json.dump(data, f)
 
 
-def test_load_all_links_reverses_and_substitutes():
+def test_load_all_favorites_reverses_and_substitutes():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "e.json")
         _make_export(p, ["https://www.tiktokv.com/a", "https://www.tiktokv.com/b"])
-        assert export.load_all_links(p) == ["https://www.tiktok.com/b", "https://www.tiktok.com/a"]
+        assert [link for link, _date in export.load_all_favorites(p)] == [
+            "https://www.tiktok.com/b", "https://www.tiktok.com/a",
+        ]
 
 
-def test_load_all_links_missing_file_returns_empty():
+def test_load_all_favorites_missing_file_returns_empty():
     with tempfile.TemporaryDirectory() as d:
-        assert export.load_all_links(os.path.join(d, "nope.json")) == []
+        assert export.load_all_favorites(os.path.join(d, "nope.json")) == []
 
 
-def test_load_all_links_skips_items_without_link():
+def test_load_all_favorites_skips_items_without_link():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "e.json")
         data = {"Activity": {"Favorite Videos": {"FavoriteVideoList": [
             {"Link": "https://tiktok.com/x"}, {"Date": "2020-01-01"}]}}}
         with open(p, "w") as f:
             json.dump(data, f)
-        assert export.load_all_links(p) == ["https://tiktok.com/x"]
+        assert [link for link, _date in export.load_all_favorites(p)] == ["https://tiktok.com/x"]
 
 
 def test_normalization_rewrites_only_literal_tiktokv_domain():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "e.json")
         _make_export(p, ["https://www.tiktokv.com/a", "https://www.tiktokvXcom/b"])
-        assert export.load_all_links(p) == [
+        assert [link for link, _date in export.load_all_favorites(p)] == [
             "https://www.tiktokvXcom/b",
             "https://www.tiktok.com/a",
         ]
@@ -66,6 +68,62 @@ def test_load_all_favorites_accepts_current_likes_and_favorites_schema():
             ("https://www.tiktok.com/new", "2026-07-11"),
         ]
 
+
+
+def _raises_export_error(path):
+    try:
+        export.load_all_favorites(path)
+    except export.ExportError:
+        return True
+    return False
+
+
+def test_unusable_content_raises_the_typed_export_error():
+    with tempfile.TemporaryDirectory() as d:
+        malformed = os.path.join(d, "bad.json")
+        with open(malformed, "w") as f:
+            f.write("{not json")
+        assert _raises_export_error(malformed)          # invalid JSON -> error, not []
+
+        array = os.path.join(d, "array.json")
+        with open(array, "w") as f:
+            json.dump([1, 2], f)
+        assert _raises_export_error(array)              # not an object
+
+        wrong_shape = os.path.join(d, "shape.json")
+        with open(wrong_shape, "w") as f:
+            json.dump({"Activity": "text"}, f)
+        assert _raises_export_error(wrong_shape)        # section is not a dict (used to 500)
+
+        bad_link = os.path.join(d, "link.json")
+        with open(bad_link, "w") as f:
+            json.dump({"Activity": {"Favorite Videos": {"FavoriteVideoList": [{"Link": 5}]}}}, f)
+        assert _raises_export_error(bad_link)           # non-string link
+
+
+def test_present_but_malformed_favorites_list_gets_an_accurate_error():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "null.json")
+        with open(p, "w") as f:
+            json.dump({"Activity": {"Favorite Videos": {"FavoriteVideoList": None}}}, f)
+        try:
+            export.load_all_favorites(p)
+        except export.ExportError as error:
+            assert "malformed" in str(error)  # not "no favorites section found"
+        else:
+            raise AssertionError("expected ExportError")
+
+
+def test_missing_file_stays_a_soft_empty_result_for_the_cli():
+    with tempfile.TemporaryDirectory() as d:
+        assert export.load_all_favorites(os.path.join(d, "nope.json")) == []
+
+
+def test_present_but_empty_favorites_list_is_a_valid_empty_export():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "empty.json")
+        _make_export(p, [])
+        assert export.load_all_favorites(p) == []
 
 
 if __name__ == "__main__":

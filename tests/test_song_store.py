@@ -159,13 +159,13 @@ def test_song_playlist_crud():
     one = store.upsert_song(conn, "shazam:1", "One")
     two = store.upsert_song(conn, "shazam:2", "Two")
 
-    pid = store.save_song_playlist(conn, "Favorites", [one, two])
-    listed = store.list_song_playlists(conn)
+    pid = store.save_saved_list(conn, "song_playlist", "Favorites", {"song_ids": [one, two]})
+    listed = store.list_saved_lists(conn, "song_playlist")
     assert listed == [{"id": pid, "name": "Favorites", "song_ids": [one, two]}]
 
-    assert store.delete_song_playlist(conn, pid) is True
-    assert store.list_song_playlists(conn) == []
-    assert store.delete_song_playlist(conn, pid) is False
+    assert store.delete_saved_list(conn, "song_playlist", pid) is True
+    assert store.list_saved_lists(conn, "song_playlist") == []
+    assert store.delete_saved_list(conn, "song_playlist", pid) is False
 
 
 def test_library_settings_opt_in_off_by_default_and_migrates():

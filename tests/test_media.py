@@ -6,7 +6,7 @@ from collections import namedtuple
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import cobalt, media
+from core import layout, media
 
 
 Deps = namedtuple("Deps", "download_file save_assets default_audio")
@@ -25,7 +25,6 @@ def test_recover_slideshow_assets_saves_raw_media_before_callback():
         saved["image_count"] = len(images)
         saved["audio"] = audio
 
-    result = cobalt.Result("slideshow", None, ["one.jpg", "two.jpg"], "audio.mp3", None, "picker")
     deps = Deps(download_file, save_assets, "/default.mp3")
 
     with tempfile.TemporaryDirectory() as download_dir:
@@ -33,7 +32,8 @@ def test_recover_slideshow_assets_saves_raw_media_before_callback():
             deps,
             download_dir,
             7,
-            result,
+            ["one.jpg", "two.jpg"],
+            "audio.mp3",
             lambda images, audio: {"images": len(images), "audio": audio},
         )
 
@@ -43,11 +43,10 @@ def test_recover_slideshow_assets_saves_raw_media_before_callback():
 
 
 def test_recover_slideshow_assets_returns_none_when_no_images_download():
-    result = cobalt.Result("slideshow", None, ["one.jpg"], None, None, "picker")
     deps = Deps(lambda url, path: False, lambda *args: None, "/default.mp3")
 
     with tempfile.TemporaryDirectory() as download_dir:
-        assert media.recover_slideshow_assets(deps, download_dir, 7, result, lambda *_: "ready") is None
+        assert media.recover_slideshow_assets(deps, download_dir, 7, ["one.jpg"], None, lambda *_: "ready") is None
 
 
 def test_resolve_default_audio_prefers_present_custom_track():
@@ -59,7 +58,7 @@ def test_resolve_default_audio_prefers_present_custom_track():
         assert media.resolve_default_audio(download_dir, "mine.mp3", "/bundled.mp3") == "/bundled.mp3"
 
         # Configured and present at the fixed path -> the custom track.
-        custom = os.path.join(download_dir, media.CUSTOM_DEFAULT_AUDIO)
+        custom = layout.custom_default_audio(download_dir)
         os.makedirs(os.path.dirname(custom), exist_ok=True)
         with open(custom, "wb") as f:
             f.write(b"\x00")

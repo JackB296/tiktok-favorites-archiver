@@ -113,6 +113,57 @@ def test_index_media_uses_first_slideshow_image_as_thumbnail():
     assert calls[0][2] == 480
 
 
+def test_inspect_media_rejects_a_file_without_a_video_stream():
+    payload = {"format": {"duration": "3"}, "streams": [{"codec_type": "audio"}]}
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "1.mp4")
+        with open(path, "wb") as f:
+            f.write(b"x")
+        try:
+            media_index.inspect_media(path, runner=lambda *_a, **_k: _Result(payload))
+        except ValueError as error:
+            assert "no video stream" in str(error)  # not an empty StopIteration
+        else:
+            raise AssertionError("expected ValueError")
+
+
+class _ProbeResult:
+    def __init__(self, returncode=0, stdout=""):
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+def test_has_audio_stream_reads_the_ffprobe_stream_list():
+    def fake_runner(cmd, **kwargs):
+        assert cmd[0] == "ffprobe"
+        assert "-select_streams" in cmd and cmd[cmd.index("-select_streams") + 1] == "a"
+        return _ProbeResult(stdout='{"streams": [{"codec_type": "audio"}]}')
+
+    assert media_index.has_audio_stream("/x/1.mp4", runner=fake_runner) is True
+
+
+def test_has_audio_stream_is_false_on_probe_failure_bad_json_or_no_streams():
+    assert media_index.has_audio_stream("/x/1.mp4", runner=lambda *a, **k: _ProbeResult(returncode=1)) is False
+    assert media_index.has_audio_stream("/x/1.mp4", runner=lambda *a, **k: _ProbeResult(stdout="not json")) is False
+    assert media_index.has_audio_stream("/x/1.mp4", runner=lambda *a, **k: _ProbeResult(stdout='{"streams": []}')) is False
+
+    def exploding_runner(*_a, **_k):
+        raise OSError("no ffprobe on PATH")
+
+    assert media_index.has_audio_stream("/x/1.mp4", runner=exploding_runner) is False
+
+
+def test_make_poster_builds_a_single_frame_jpeg_command():
+    calls = []
+    media_index.make_poster("/x/1.mp4", "/x/1.jpg.tmp", runner=lambda cmd, **k: calls.append((cmd, k)))
+    cmd, kwargs = calls[0]
+    assert cmd[0] == "ffmpeg"
+    assert cmd[cmd.index("-frames:v") + 1] == "1"
+    assert cmd[cmd.index("-c:v") + 1] == "mjpeg"   # temp-suffix target needs explicit codec/muxer
+    assert cmd[-1] == "/x/1.jpg.tmp"
+    assert kwargs.get("check") is True
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

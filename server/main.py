@@ -2,7 +2,12 @@
 
 Serves the JSON API (``/api``), media files (``/media`` — range-capable via
 ``FileResponse``), and the built frontend (``web/dist``) if present. Run with:
-``uvicorn server.main:app``.
+``uvicorn --factory server.main:create_app``.
+
+No app is built at import time — importing this module must stay side-effect
+free so tests can construct apps against their own temp databases. Run with
+exactly one worker: the in-process JobManager is the single-run guard, so
+``--workers >1`` would allow concurrent Archive runs.
 """
 import os
 
@@ -11,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core import config, store
+from core import config, layout, store
 from server import spa
 from server.api import router
 from server.jobs import JobManager
@@ -32,7 +37,10 @@ class SPAStaticFiles(StaticFiles):
         return response
 
 
-def create_app(db_path=None, download_dir=None):
+def create_app(db_path=None, download_dir=None, jobs=None):
+    """Build the app. ``jobs`` is injectable — tests supply a JobManager with
+    fake runners so the whole HTTP surface is exercisable without moviepy or
+    requests; production uses the real one."""
     db_path = db_path or config.DB_FILE
     download_dir = os.path.abspath(download_dir or config.DOWNLOAD_DIR)
     os.makedirs(download_dir, exist_ok=True)
@@ -41,7 +49,7 @@ def create_app(db_path=None, download_dir=None):
     store.init_db(store.connect(db_path)).close()  # ensure schema exists at startup
     app.state.db_path = db_path
     app.state.download_dir = download_dir
-    app.state.jobs = JobManager(db_path, download_dir)
+    app.state.jobs = jobs if jobs is not None else JobManager(db_path, download_dir)
 
     app.include_router(router)
 
@@ -50,6 +58,8 @@ def create_app(db_path=None, download_dir=None):
         base = app.state.download_dir
         full = os.path.normpath(os.path.join(base, path))
         if full != base and not full.startswith(base + os.sep):  # path-traversal guard
+            raise HTTPException(status_code=403, detail="forbidden")
+        if layout.is_private_relpath(os.path.relpath(full, base)):  # staged uploads, backups
             raise HTTPException(status_code=403, detail="forbidden")
         if not os.path.isfile(full):
             raise HTTPException(status_code=404, detail="not found")
@@ -63,6 +73,3 @@ def create_app(db_path=None, download_dir=None):
         app.mount("/", SPAStaticFiles(directory=web_dist, html=True), name="web")
 
     return app
-
-
-app = create_app()

@@ -16,18 +16,12 @@ import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatisti
 import { Button, Stat, StatusBadge, cx } from "../components/ui";
 import { LegacyBootstrapPanel } from "../components/LegacyBootstrapPanel";
 import { OffloadPanel } from "../components/OffloadPanel";
+import { formatRuntime, formatSize } from "../lib/format";
 import { progressLabel } from "../lib/progressPresentation.js";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "ignored", "expired"];
 
-function formatBytes(bytes: number) {
-  return bytes >= 1_000_000_000 ? `${(bytes / 1_000_000_000).toFixed(1)} GB` : `${(bytes / 1_000_000).toFixed(1)} MB`;
-}
-
-function formatDuration(seconds: number) {
-  const hours = seconds / 3600;
-  return hours >= 1 ? `${hours.toFixed(hours >= 10 ? 0 : 1)} hours` : `${Math.round(seconds / 60)} min`;
-}
+type RunAction = "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "pause" | "continue" | "stop";
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -43,7 +37,8 @@ export function Dashboard() {
   const [sidecarsProgress, setSidecarsProgress] = useState<ProgressEvent | null>(null);
   const [enrichmentProgress, setEnrichmentProgress] = useState<ProgressEvent | null>(null);
   const [identificationProgress, setIdentificationProgress] = useState<ProgressEvent | null>(null);
-  const [runActionError, setRunActionError] = useState<string | null>(null);
+  const [runActionError, setRunActionError] = useState<{ action: RunAction; message: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [verifyReport, setVerifyReport] = useState<VerifyReport | null>(null);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
@@ -60,15 +55,25 @@ export function Dashboard() {
   const refreshLibrary = () => api.librarySettings().then(setLibrary).catch(() => {});
   const refreshStatistics = () => api.libraryStats().then(setStatistics).catch(() => {});
   const refreshRunHistory = () => api.runHistory().then(setRunHistory).catch(() => {});
-  const refreshSyncSettings = () => api.syncSettings().then(setSyncSettings).catch(() => {});
+
+  /** Initial page data. Unlike the silent periodic refreshes, a failure here means
+      the dashboard would render as an empty library, so surface it with a retry. */
+  async function loadCore() {
+    setLoadError(null);
+    const results = await Promise.allSettled([
+      api.status().then(setStatus),
+      api.librarySettings().then(setLibrary),
+      api.libraryStats().then(setStatistics),
+      api.runHistory().then(setRunHistory),
+      api.syncSettings().then(setSyncSettings),
+    ]);
+    const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) setLoadError((failed.reason as Error).message || "Request failed");
+  }
 
   useEffect(() => {
-    refresh();
+    void loadCore();
     api.health().then((h) => setCobaltOk(h.cobalt_reachable)).catch(() => setCobaltOk(false));
-    refreshLibrary();
-    refreshStatistics();
-    refreshRunHistory();
-    refreshSyncSettings();
     const poll = window.setInterval(refresh, 2000);
     const off = api.events((e) => {
       setEvents((prev) => [e, ...prev].slice(0, 200));
@@ -152,18 +157,23 @@ export function Dashboard() {
     }
   }
 
-  async function act(a: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "pause" | "continue" | "stop") {
+  async function act(a: RunAction) {
     setRunActionError(null);
     if (a === "enrich") setEnrichmentProgress(null);
     if (a === "identify") setIdentificationProgress(null);
     try {
       const result = await api.syncAction(a);
-      if ("started" in result && result.started === false) setRunActionError("Another Archive run is already active.");
+      if ("started" in result && result.started === false) setRunActionError({ action: a, message: "Another Archive run is already active." });
     } catch (error) {
-      setRunActionError((error as Error).message);
+      setRunActionError({ action: a, message: (error as Error).message });
     } finally {
       refresh();
     }
+  }
+
+  /** The error from the last run action, shown only next to the control that caused it. */
+  function actionError(...actions: RunAction[]) {
+    return runActionError && actions.includes(runActionError.action) ? runActionError.message : null;
   }
 
   async function runVerify() {
@@ -195,6 +205,12 @@ export function Dashboard() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl px-4 py-8">
+        {loadError && (
+          <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-control)] border border-bad/40 bg-bad/10 p-3 text-sm text-bad">
+            <span>Couldn't load the archive overview: {loadError}</span>
+            <Button variant="ghost" size="sm" onClick={() => void loadCore()}>Try again</Button>
+          </div>
+        )}
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-xl font-semibold text-ink">Sync</h1>
           <span className="inline-flex items-center gap-2 text-xs text-ink-dim">
@@ -252,7 +268,7 @@ export function Dashboard() {
               {`Checking ${enrichmentProgress.completed ?? 0} of ${enrichmentProgress.total ?? 0}: ${enrichmentProgress.enriched ?? 0} updated, ${enrichmentProgress.unavailable ?? 0} returned no metadata`}
             </p>
           )}
-          {runActionError && <p className="mt-3 text-sm text-bad" role="alert">{runActionError}</p>}
+          {actionError("enrich") && <p className="mt-3 text-sm text-bad" role="alert">{actionError("enrich")}</p>}
           </div>
         </details>
 
@@ -274,7 +290,7 @@ export function Dashboard() {
                 <MusicNotes size={16} /> Identify songs
               </Button>
             </div>
-            {runActionError && <p className="mt-3 text-sm text-bad" role="alert">{runActionError}</p>}
+            {actionError("identify") && <p className="mt-3 text-sm text-bad" role="alert">{actionError("identify")}</p>}
           </div>
         </details>
 
@@ -284,8 +300,8 @@ export function Dashboard() {
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Stat label="Favorites" value={statistics?.favorites ?? 0} hint={`${statistics?.ready ?? 0} ready`} />
             <Stat label="Media mix" value={`${statistics?.videos ?? 0} videos`} hint={`${statistics?.slideshows ?? 0} slideshows`} />
-            <Stat label="Indexed runtime" value={formatDuration(statistics?.duration_s ?? 0)} hint={`${statistics?.indexed ?? 0} indexed`} />
-            <Stat label="Indexed media" value={formatBytes(statistics?.media_size ?? 0)} hint="video files only" />
+            <Stat label="Indexed runtime" value={formatRuntime(statistics?.duration_s ?? 0)} hint={`${statistics?.indexed ?? 0} indexed`} />
+            <Stat label="Indexed media" value={formatSize(statistics?.media_size ?? 0)} hint="video files only" />
           </div>
         </section>
 
@@ -317,6 +333,7 @@ export function Dashboard() {
               <ArrowClockwise size={16} /> Rebuild index
             </Button>
           </div>
+          {actionError("reindex") && <p className="mt-3 text-sm text-bad" role="alert">{actionError("reindex")}</p>}
           <p className="mt-2 text-xs text-ink-faint">Rebuild refreshes existing thumbnails and media facts. It is available when indexing is enabled and can be paused or stopped like Sync.</p>
         </section>
 
@@ -372,12 +389,13 @@ export function Dashboard() {
               {`Writing ${sidecarsProgress.completed ?? 0} of ${sidecarsProgress.total ?? 0}${sidecarsProgress.failed ? ` · ${sidecarsProgress.failed} failed` : ""}`}
             </p>
           )}
+          {actionError("sidecars") && <p className="mt-3 text-sm text-bad" role="alert">{actionError("sidecars")}</p>}
         </section>
 
         <OffloadPanel
           running={running}
           onChanged={() => Promise.all([
-            verifyReport ? api.verify().then(setVerifyReport) : Promise.resolve(),
+            verifyReport ? api.verify().then(setVerifyReport).catch(() => {}) : Promise.resolve(),
             refreshStatistics(),
             refresh(),
           ]).then(() => {})}
@@ -461,6 +479,7 @@ export function Dashboard() {
               </span>
             </>
           )}
+          {actionError("start", "backfill", "pause", "continue", "stop") && <p className="w-full text-sm text-bad" role="alert">{actionError("start", "backfill", "pause", "continue", "stop")}</p>}
         </section>
 
         {/* Counts */}

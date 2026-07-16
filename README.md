@@ -38,15 +38,15 @@ File numbering is stable: `147.mp4` stays archive item 147 in the database. Favo
 - **Scales to a real library.** The Feed and Gallery stay responsive at 11,000+ favorites through row virtualization, media preloading, and range-based streaming from the backend.
 - **Identifies songs (opt-in).** Shazam names the track in each favorite and shows it in Feed and Gallery. A Music tab lists every identified song, opens each in Spotify, YouTube, or Apple Music, and saves playlists. It stays off until you turn it on; enabling it uploads a short audio clip per video to Shazam, the only time the app sends your media's audio to an outside service.
 - **Built to be operated.** Live per-item progress over Server-Sent Events, an archive integrity check, a one-click recovery inbox, saved and shareable filters, and a portable CSV inventory.
-- **Tested and typed.** The download engine is a standalone Python package with a stdlib-only unit suite (29 files). The frontend talks to a small typed API and never reaches Cobalt directly.
+- **Tested and typed.** The download engine is a standalone Python package with a stdlib-only unit suite (32 files; the HTTP-tier file additionally self-skips unless FastAPI is installed). The frontend talks to a small typed API and never reaches Cobalt directly.
 
 ## Quick start
 
 You need [Docker](https://www.docker.com/).
 
 ```bash
-git clone https://github.com/JackB296/tiktok-favorites-downloader.git
-cd tiktok-favorites-downloader
+git clone https://github.com/JackB296/tiktok-favorites-archiver.git
+cd tiktok-favorites-archiver
 docker compose up --build
 ```
 
@@ -91,7 +91,7 @@ The control center. Upload your export, then start, pause, resume, or stop a run
 ## Details worth knowing
 
 - **Dead links stay meaningful.** When TikTok reports that an original post is gone, the favorite becomes an unavailable archive marker instead of a recurring failure. Its number and position remain visible in Feed and Gallery, and automatic Sync runs do not retry it.
-- **Original slideshow audio.** Photo posts request the full original sound. If TikTok has already deleted it, a bundled default track fills in instead of failing the encode.
+- **Original slideshow audio.** Photo posts request the full original sound. If TikTok has already deleted it, a bundled default track fills in instead of failing the encode — replaceable with your own MP3 from the Sync tab's media settings.
 - **Backfill.** Already had downloads before this existed? The Sync tab's Backfill re-fetches the raw slideshow images for your existing files so they render in the viewer.
 - **Provenance.** `downloads/manifest.csv` maps each file to its source link, type, and status alongside the database.
 - **Gallery index.** Sync records duration, dimensions, codec, file size, and whether an audio stream exists, then renders a WebP thumbnail per favorite (480px or 320px), so the Gallery pages instantly instead of decoding video. Indexing runs on a small worker pool and can be rebuilt, paused, or turned off.
@@ -126,14 +126,14 @@ for f in tests/test_*.py; do python3 "$f"; done
 
 `python3 tests/test_store.py` runs one file; every test file is independently runnable.
 
-The web app needs Node 20.19+ (see `web/.nvmrc`). `npm run dev` serves the SPA with hot reload and proxies `/api` and `/media` to a backend on `localhost:8080`, so start the Docker app (or `uvicorn server.main:app`) first:
+The web app needs Node 20.19+ for Vite dev/build (see `web/.nvmrc`); the `npm test` behavior scripts run on any recent Node. `npm run dev` serves the SPA with hot reload and proxies `/api` and `/media` to a backend on `localhost:8080`, so start the Docker app (or `uvicorn --factory server.main:create_app --port 8080` — uvicorn defaults to 8000 otherwise) first:
 
 ```bash
 cd web
 npm ci
 npm run dev     # SPA on http://localhost:5173, API proxied to :8080
 npm run build   # type-check + production bundle
-npm test        # six behavior scripts over the pure-logic modules in web/src/lib/
+npm test        # twelve behavior scripts over the pure-logic modules in web/src/lib/
 ```
 
 ## Configuration
@@ -151,6 +151,8 @@ With Docker, set these on the `app` service in `docker-compose.yml`:
 | `RATE_MAX_CALLS` / `RATE_PERIOD` | `8` / `1.0` | Requests allowed per window, in seconds |
 | `DB_FILE` | `/app/data/archive.db` | Path of the SQLite archive database |
 | `APP_PORT` | `8080` | Port the web app listens on |
+| `RETRY_DELAY` | `2.0` | Seconds between download retry attempts |
+| `SONG_ID_RATE_MAX_CALLS` / `SONG_ID_RATE_PERIOD` | `1` / `2.0` | Shazam recognitions allowed per window, in seconds |
 
 If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATELIMIT_WINDOW` in the same file to match. If you change `APP_PORT`, update the `ports:` mapping too.
 
@@ -243,7 +245,7 @@ the image does not copy the media into Docker or erase it.
 <details>
 <summary>Run the archive without the web app</summary>
 
-The headless Archive command needs its own Cobalt instance (see Cobalt's [run-an-instance guide](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md)) and Python 3.9+ with FFmpeg on your `PATH`.
+The headless Archive command needs its own Cobalt instance (see Cobalt's [run-an-instance guide](https://github.com/imputnet/cobalt/blob/main/docs/run-an-instance.md)) and Python 3.12 with FFmpeg on your `PATH` (older Pythons may need a Rust toolchain to build `shazamio`).
 
 ```bash
 python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate

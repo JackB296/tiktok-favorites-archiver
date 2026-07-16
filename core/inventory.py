@@ -12,7 +12,7 @@ FIELDS = (
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
-def _safe_cell(value):
+def safe_cell(value):
     """Prefix values Excel would execute as formulas (CSV injection guard)."""
     if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
         return "'" + value
@@ -28,4 +28,4 @@ def csv_lines(rows):
 
     yield render(FIELDS)
     for row in rows:
-        yield render([_safe_cell(row[field]) for field in FIELDS])
+        yield render([safe_cell(row[field]) for field in FIELDS])

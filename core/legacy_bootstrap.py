@@ -10,7 +10,7 @@ import os
 import re
 from typing import Optional
 
-from core import export, media, store
+from core import export, layout, store
 
 
 class LegacyBootstrapError(ValueError):
@@ -44,7 +44,7 @@ def _numeric_mp4_ids(download_dir):
         names = os.listdir(download_dir)
     except OSError as exc:
         raise LegacyBootstrapError(f"Could not scan the downloads directory: {exc}") from exc
-    ids = media.finished_movie_ids(names)
+    ids = layout.finished_movie_ids(names)
     if not ids:
         raise LegacyBootstrapError("No numeric MP4 files were found in the downloads directory.")
     if ids[0] < 1:
@@ -263,8 +263,11 @@ def plan_bootstrap(
     mapping_segments=None,
 ):
     """Validate legacy evidence and return a deterministic, read-only plan."""
-    old_favorites = tuple(export.load_all_favorites(old_export_path))
-    current_favorites = tuple(export.load_all_favorites(current_export_path))
+    try:
+        old_favorites = tuple(export.load_all_favorites(old_export_path))
+        current_favorites = tuple(export.load_all_favorites(current_export_path))
+    except export.ExportError as error:
+        raise LegacyBootstrapError(f"Unreadable export: {error}") from error
     if not old_favorites:
         raise LegacyBootstrapError("The old export contains no readable favorite links.")
     if not current_favorites:
@@ -356,63 +359,58 @@ def apply_bootstrap(conn, plan, preview_token):
     """Insert a validated plan into an empty library in one transaction."""
     if preview_token != plan.token:
         raise LegacyBootstrapError("The preview token is stale; run preview again before applying.")
-    if conn.execute("SELECT 1 FROM item LIMIT 1").fetchone() is not None:
+    if store.has_items(conn):
         raise LegacyBootstrapError("Legacy bootstrap requires an empty library database.")
 
     local_set = set(plan.local_ids)
-    now = store._now()
+    rows = []
 
     def insert(item_id, favorite_order, favorite, status, *, offloaded=0, error=None):
         link, favorited_at = favorite
-        conn.execute(
-            "INSERT INTO item "
-            "(id, favorite_order, link, favorited_at, kind, status, error, offloaded, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?)",
-            (item_id, favorite_order, link, favorited_at, status, error, offloaded, now, now),
+        rows.append({
+            "id": item_id, "favorite_order": favorite_order, "link": link,
+            "favorited_at": favorited_at, "status": status, "error": error,
+            "offloaded": offloaded,
+        })
+
+    for segment in plan.segments:
+        for item_id in range(segment.start_id, segment.end_id + 1):
+            old_position = item_id - segment.offset
+            favorite = plan.old_favorites[old_position - 1]
+            if item_id in local_set:
+                insert(item_id, old_position, favorite, "done")
+            else:
+                insert(
+                    item_id,
+                    old_position,
+                    favorite,
+                    "ignored",
+                    error="legacy CLI gap: no local MP4 was present during bootstrap",
+                )
+
+    next_id = plan.local_last_id + 1
+    for favorite_order, favorite in enumerate(
+        plan.current_favorites[:plan.mapped_first_position - 1], start=1
+    ):
+        insert(next_id, favorite_order, favorite, "done", offloaded=1)
+        next_id += 1
+    for favorite_order in plan.reused_number_positions:
+        insert(
+            next_id,
+            favorite_order,
+            plan.old_favorites[favorite_order - 1],
+            "ignored",
+            error="legacy CLI restart reused archive number; no local MP4 exists",
         )
+        next_id += 1
+    for favorite_order, favorite in enumerate(
+        plan.current_favorites[plan.checkpoint_current_position:],
+        start=plan.checkpoint_current_position + 1,
+    ):
+        insert(next_id, favorite_order, favorite, "pending")
+        next_id += 1
 
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        for segment in plan.segments:
-            for item_id in range(segment.start_id, segment.end_id + 1):
-                old_position = item_id - segment.offset
-                favorite = plan.old_favorites[old_position - 1]
-                if item_id in local_set:
-                    insert(item_id, old_position, favorite, "done")
-                else:
-                    insert(
-                        item_id,
-                        old_position,
-                        favorite,
-                        "ignored",
-                        error="legacy CLI gap: no local MP4 was present during bootstrap",
-                    )
-
-        next_id = plan.local_last_id + 1
-        for favorite_order, favorite in enumerate(
-            plan.current_favorites[:plan.mapped_first_position - 1], start=1
-        ):
-            insert(next_id, favorite_order, favorite, "done", offloaded=1)
-            next_id += 1
-        for favorite_order in plan.reused_number_positions:
-            insert(
-                next_id,
-                favorite_order,
-                plan.old_favorites[favorite_order - 1],
-                "ignored",
-                error="legacy CLI restart reused archive number; no local MP4 exists",
-            )
-            next_id += 1
-        for favorite_order, favorite in enumerate(
-            plan.current_favorites[plan.checkpoint_current_position:],
-            start=plan.checkpoint_current_position + 1,
-        ):
-            insert(next_id, favorite_order, favorite, "pending")
-            next_id += 1
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+    store.bulk_insert_items(conn, rows)
 
     return {
         "items_created": plan.total_rows,

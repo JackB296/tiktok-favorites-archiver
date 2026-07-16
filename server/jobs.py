@@ -8,10 +8,11 @@ The runners are injectable, so the manager's control logic (single-job guard,
 pause/continue/stop → run_state, event fan-out) is unit-testable with a fake
 runner — no requests/moviepy needed.
 """
+import os
 import queue
 import threading
 
-from core import enrich, identify, runs, sidecars, store, sync
+from core import enrich, identify, layout, runs, sidecars, store, sync
 
 
 class JobBusyError(RuntimeError):
@@ -60,7 +61,25 @@ class JobManager:
         self._lock = threading.Lock()
         conn = store.init_db(store.connect(db_path))  # once, not per status poll
         store.reset_interrupted_downloads(conn)  # heal rows stranded by a crash
+        runs.recover(conn)                       # heal a run_state stranded by a crash
         conn.close()
+        self._sweep_stranded_uploads()
+
+    def _sweep_stranded_uploads(self):
+        """Remove staged uploads stranded by a crash mid-request.
+
+        Nothing else cleans ``.archive/uploads`` (verify's leftover scan covers
+        only the downloads root), and no request can be in flight during
+        manager construction.
+        """
+        uploads = layout.uploads_dir(self.download_dir)
+        if not os.path.isdir(uploads):
+            return
+        for name in os.listdir(uploads):
+            try:
+                os.unlink(os.path.join(uploads, name))
+            except OSError:
+                pass
 
     def _conn(self):
         return store.connect(self.db_path)
@@ -69,7 +88,12 @@ class JobManager:
         return bool(self._thread and self._thread.is_alive())
 
     def start(self, kind="sync"):
-        with self._lock:
+        # Non-blocking: while exclusive maintenance (e.g. a long import) holds
+        # the lock, a Start is refused fast ({"started": false}) instead of
+        # hanging the request until the maintenance finishes.
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
             if self.is_running():
                 return False
             runner = self.runners.get(kind)
@@ -77,9 +101,9 @@ class JobManager:
                 return False
 
             def run():
+                # runs.execute owns run_state and the run-history row; this
+                # thread only surfaces errors and completion to subscribers.
                 conn = self._conn()
-                history_id = store.start_run_history(conn, kind)
-                outcome = "completed"
                 try:
                     runs.execute(
                         conn,
@@ -89,12 +113,17 @@ class JobManager:
                         progress=self._broadcaster.publish,
                     )
                 except Exception as e:  # surface, don't crash the thread silently
-                    outcome = "failed"
+                    try:
+                        # A failure before execute's own bookkeeping (e.g. the
+                        # history insert) must not strand the "running" state
+                        # begin() wrote. Guarded transition: only an ACTIVE
+                        # state becomes failed — a terminal idle/stopped that
+                        # execute already persisted is never clobbered.
+                        store.set_active_run_state(conn, "failed")
+                    except Exception:
+                        pass
                     self._broadcaster.publish({"event": "error", "error": str(e)})
                 finally:
-                    if outcome == "completed" and store.get_run_state(conn)["state"] == "stopped":
-                        outcome = "stopped"
-                    store.finish_run_history(conn, history_id, outcome, store.counts_by_status(conn))
                     self._broadcaster.publish({"event": "complete"})
                     conn.close()
 
@@ -102,17 +131,19 @@ class JobManager:
             # immediately after Start are not rejected while the thread spins up.
             conn = self._conn()
             try:
-                store.set_run_state(conn, state="running", phase=kind)
+                runs.begin(conn, kind)
                 self._thread = threading.Thread(target=run, name=f"job-{kind}", daemon=True)
                 try:
                     self._thread.start()
                 except Exception:
                     # A failed spawn must not leave a phantom "running" row.
-                    store.set_run_state(conn, state="idle", phase=None)
+                    runs.abandon(conn)
                     raise
             finally:
                 conn.close()
             return True
+        finally:
+            self._lock.release()
 
     def run_when_idle(self, operation):
         """Run short exclusive maintenance without racing a job start.

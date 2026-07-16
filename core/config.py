@@ -26,6 +26,7 @@ DEFAULT_AUDIO = os.path.abspath(
 # slow-but-progressing download is not killed while a truly stalled socket is.
 REQUEST_TIMEOUT = (10, 30)
 DOWNLOAD_CHUNK_SIZE = 1024 * 256  # 256 KB per streamed chunk
+RETRY_DELAY = float(os.environ.get("RETRY_DELAY", "2.0"))  # seconds between download retry attempts
 
 # Sync engine: worker concurrency + client-side Cobalt rate limit (env-overridable).
 CONCURRENCY = int(os.environ.get("CONCURRENCY", "4"))          # simultaneous item workers

@@ -45,4 +45,16 @@ assert.equal(grid.canLoadNextPage(42, false), true);
 assert.equal(grid.canLoadNextPage(null, false), false);
 assert.equal(grid.canLoadNextPage(42, true), false);
 
-console.log("PASS virtual grid geometry and visible-row bounds");
+// Near-bottom detection, the other half of the paging policy.
+assert.equal(grid.shouldLoadMore(4_600, 700, 6_000, 800), true);
+assert.equal(grid.shouldLoadMore(2_000, 700, 6_000, 800), false);
+assert.equal(grid.shouldLoadMore(4_200, 700, 6_000), true); // default 1 200px threshold
+assert.equal(grid.shouldLoadMore(3_000, 700, 6_000), false);
+assert.equal(grid.shouldLoadMore(0, 0, 6_000, 800), false); // unmeasured scroller
+
+// Persisted thumbnail-size step parsing.
+assert.equal(grid.readGallerySize(null), "m");
+assert.equal(grid.readGallerySize("xl"), "xl");
+assert.equal(grid.readGallerySize("bogus"), "m");
+
+console.log("PASS virtual grid geometry, visible-row bounds, and paging policy");

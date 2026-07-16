@@ -46,4 +46,4 @@ ENV DOWNLOAD_DIR=/app/downloads \
     APP_PORT=8080
 
 EXPOSE 8080
-CMD ["sh", "-c", "uvicorn server.main:app --host 0.0.0.0 --port ${APP_PORT:-8080}"]
+CMD ["sh", "-c", "uvicorn --factory server.main:create_app --host 0.0.0.0 --port ${APP_PORT:-8080}"]

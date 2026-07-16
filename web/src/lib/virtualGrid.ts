@@ -1,5 +1,10 @@
 export type GallerySize = "s" | "m" | "l" | "xl";
 
+/** Parse the persisted thumbnail-size step, defaulting to medium. */
+export function readGallerySize(raw: string | null): GallerySize {
+  return raw === "s" || raw === "m" || raw === "l" || raw === "xl" ? raw : "m";
+}
+
 export interface GridMetrics {
   columns: number;
   gap: number;
@@ -62,4 +67,11 @@ export function visibleRows({
 /** Guard the bottom observer so paging stays cursor-bounded and single-flight. */
 export function canLoadNextPage(nextCursor: number | null, loading: boolean): nextCursor is number {
   return nextCursor !== null && !loading;
+}
+
+/** The other half of the paging policy: ask for the next page once the scroller
+    is within `threshold` px of the bottom of the grid. */
+export function shouldLoadMore(scrollTop: number, clientHeight: number, scrollHeight: number, threshold = 1_200): boolean {
+  if (clientHeight <= 0 || scrollHeight <= 0) return false;
+  return scrollHeight - (scrollTop + clientHeight) <= threshold;
 }

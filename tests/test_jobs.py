@@ -47,9 +47,9 @@ def test_start_guard_and_progress_and_completion():
         release = threading.Event()
         started = threading.Event()
 
-        def fake_runner(conn, download_dir, progress=None):
+        def fake_runner(conn, download_dir, control=None):
             started.set()
-            progress({"id": 1, "status": "done"})
+            control.progress({"id": 1, "status": "done"})
             release.wait(3)  # hold the job "running" until released
 
         jm = jobs.JobManager(dbp, d, runners={"sync": fake_runner})
@@ -111,7 +111,7 @@ def test_controls_set_run_state_while_a_job_is_running():
         release = threading.Event()
         started = threading.Event()
 
-        def fake_runner(conn, download_dir, progress=None):
+        def fake_runner(conn, download_dir, control=None):
             started.set()
             release.wait(3)  # hold the job "running" until released
 
@@ -139,7 +139,7 @@ def test_stop_is_not_cancelled_by_pause_or_continue():
         release = threading.Event()
         started = threading.Event()
 
-        def fake_runner(conn, download_dir, progress=None):
+        def fake_runner(conn, download_dir, control=None):
             started.set()
             release.wait(3)  # hold the job "running" until released
 
@@ -166,7 +166,7 @@ def test_controls_work_immediately_after_start_returns():
 
         release = threading.Event()
 
-        def fake_runner(conn, download_dir, progress=None):
+        def fake_runner(conn, download_dir, control=None):
             release.wait(3)  # block immediately
 
         jm = jobs.JobManager(dbp, d, runners={"sync": fake_runner})
@@ -197,6 +197,95 @@ def test_manager_startup_heals_items_stranded_downloading_by_a_crash():
             assert "interrupted" in row["error"]
         finally:
             conn.close()
+
+
+def test_manager_startup_heals_a_crash_stale_run_state():
+    """A run_state left 'paused' by a hard kill must not survive a restart —
+    execute's adopt-active-state logic would otherwise block the next run."""
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        conn = store.init_db(store.connect(dbp))
+        store.set_run_state(conn, state="paused", phase="sync")
+        conn.close()
+
+        jobs.JobManager(dbp, d, runners={"sync": lambda *a, **k: None})
+
+        assert _run_state(dbp) == "idle"
+
+
+def test_failure_before_execute_bookkeeping_does_not_strand_running():
+    """The scenario the heal write actually targets: start_run_history raising
+    between begin() and the worker. The state must end failed, not running."""
+    from core import runs as runs_module
+
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+        jm = jobs.JobManager(dbp, d, runners={"sync": lambda *a, **k: None})
+        q = jm.subscribe()
+
+        original = store.start_run_history
+        store.start_run_history = lambda conn, kind: (_ for _ in ()).throw(RuntimeError("db locked"))
+        try:
+            assert jm.start("sync") is True
+            events = _drain_until_complete(q)
+        finally:
+            store.start_run_history = original
+
+        assert events[0]["event"] == "error"
+        assert _run_state(dbp) == "failed"          # not a stranded "running"
+
+
+def test_heal_write_never_clobbers_a_terminal_state():
+    """If execute persisted idle and only its LAST bookkeeping raised, the
+    jobs-thread heal must not rewrite the legitimate idle to failed."""
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+        jm = jobs.JobManager(dbp, d, runners={"sync": lambda *a, **k: None})
+        q = jm.subscribe()
+
+        original = store.finish_run_history
+
+        def failing_finish(conn, run_id, outcome, counts):
+            raise RuntimeError("disk full at the last write")
+
+        store.finish_run_history = failing_finish
+        try:
+            assert jm.start("sync") is True
+            events = _drain_until_complete(q)
+        finally:
+            store.finish_run_history = original
+
+        assert events[0]["event"] == "error"
+        assert _run_state(dbp) == "idle"            # terminal state preserved
+
+
+def test_start_fails_fast_while_exclusive_maintenance_holds_the_lock():
+    """A long import under run_when_idle must not make Start hang — it now
+    returns started=false immediately on lock contention."""
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+        jm = jobs.JobManager(dbp, d, runners={"sync": lambda *a, **k: None})
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_maintenance():
+            entered.set()
+            release.wait(3)
+            return "done"
+
+        worker = threading.Thread(target=lambda: jm.run_when_idle(slow_maintenance))
+        worker.start()
+        assert entered.wait(3)
+        try:
+            assert jm.start("sync") is False        # fast refusal, no hang
+        finally:
+            release.set()
+            worker.join(3)
+        assert jm.start("sync") is True             # and works once free
 
 
 def test_unknown_runner_returns_false():

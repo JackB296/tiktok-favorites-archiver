@@ -68,6 +68,42 @@ export function useDialogFocusTrap(ref: RefObject<HTMLElement | null>) {
   }, [ref]);
 }
 
+/** Shared modal scaffold: dimmed overlay, dialog semantics, focus trap, Escape
+    to close, and initial focus. Callers render their own panel as children. */
+export function Dialog({ role = "dialog", labelledBy, describedBy, onClose, closeDisabled = false, initialFocusRef, className, children }: {
+  role?: "dialog" | "alertdialog";
+  labelledBy: string;
+  describedBy?: string;
+  onClose: () => void;
+  /** Ignore Escape (e.g. while a mutation is in flight). */
+  closeDisabled?: boolean;
+  /** Focused once when the dialog mounts. */
+  initialFocusRef?: RefObject<HTMLElement | null>;
+  /** Overlay extras — the backdrop tint differs between dialogs. */
+  className?: string;
+  children: ReactNode;
+}) {
+  const overlayRef = useRef<HTMLDivElement>(null);
+  useDialogFocusTrap(overlayRef);
+  useEffect(() => {
+    initialFocusRef?.current?.focus();
+    // Initial focus happens once on mount, not on later re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !closeDisabled) onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose, closeDisabled]);
+  return (
+    <div ref={overlayRef} role={role} aria-modal="true" aria-labelledby={labelledBy} aria-describedby={describedBy} className={cx("fixed inset-0 z-50 flex items-center justify-center p-4", className)}>
+      {children}
+    </div>
+  );
+}
+
 export function ConfirmDialog({ title = "Please confirm", message, confirmLabel, busy = false, onConfirm, onCancel }: {
   title?: string;
   message: string;
@@ -76,20 +112,11 @@ export function ConfirmDialog({ title = "Please confirm", message, confirmLabel,
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const messageId = useId();
-  useDialogFocusTrap(panelRef);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onCancel]);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="alertdialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={messageId}>
-      <div ref={panelRef} className="w-full max-w-sm rounded-[var(--radius-media)] border border-line bg-surface p-5 shadow-2xl">
+    <Dialog role="alertdialog" labelledBy={titleId} describedBy={messageId} onClose={onCancel} closeDisabled={busy} className="bg-black/70">
+      <div className="w-full max-w-sm rounded-[var(--radius-media)] border border-line bg-surface p-5 shadow-2xl">
         <h2 id={titleId} className="text-base font-semibold text-ink">{title}</h2>
         <p id={messageId} className="mt-2 text-sm leading-relaxed text-ink-dim">{message}</p>
         <div className="mt-5 flex justify-end gap-2">
@@ -97,7 +124,7 @@ export function ConfirmDialog({ title = "Please confirm", message, confirmLabel,
           <Button size="sm" onClick={onConfirm} disabled={busy} autoFocus>{busy ? "Working…" : confirmLabel}</Button>
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 }
 

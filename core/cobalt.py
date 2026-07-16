@@ -15,6 +15,9 @@ from core import config
 
 # A resolved link. ``kind`` is one of: 'video', 'slideshow', 'error',
 # 'unsupported', 'unknown'.
+# kind vocabulary: video / slideshow / error (post gone) / unsupported /
+# unknown (parse-level), plus 'transient' added by resolve for transport-level
+# failures — the sync seam treats transient/unknown as retryable.
 Result = namedtuple("Result", "kind url images audio error status")
 
 

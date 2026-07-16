@@ -2,7 +2,7 @@
 import os
 import tempfile
 
-from core import media_index, store
+from core import layout, media_index, store
 
 
 class MediaReplacementError(ValueError):
@@ -32,11 +32,6 @@ def _image_extension(path):
     if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
         return "webp"
     raise MediaReplacementError("replacement thumbnail must be JPEG, PNG, or WebP")
-
-
-def _fingerprint(path):
-    stat = os.stat(path)
-    return f"{stat.st_size}:{stat.st_mtime_ns}"
 
 
 def replace_item_media(
@@ -70,7 +65,7 @@ def replace_item_media(
                 facts = inspect(staged_video)
             except Exception as error:
                 raise MediaReplacementError("replacement MP4 could not be inspected by FFprobe") from error
-            thumbnail_dir = os.path.join(download_dir, ".archive", "thumbnails")
+            thumbnail_dir = layout.thumbnails_dir(download_dir)
             os.makedirs(thumbnail_dir, exist_ok=True)
             fd, generated_temp = tempfile.mkstemp(prefix=f".{item_id}-", suffix=".webp", dir=thumbnail_dir)
             os.close(fd)
@@ -80,19 +75,19 @@ def replace_item_media(
                 make_thumbnail(staged_video, generated_temp, width)
             except Exception as error:
                 raise MediaReplacementError("replacement MP4 thumbnail could not be created") from error
-            index = facts.to_index(f".archive/thumbnails/{item_id}.webp")._asdict()
+            index = facts.to_index(layout.thumbnail_relpath(item_id))._asdict()
 
         if staged_thumbnail:
             extension = _image_extension(staged_thumbnail)
-            custom_relative = f".archive/custom-thumbnails/{item_id}.{extension}"
+            custom_relative = layout.custom_thumbnail_relpath(item_id, extension)
             custom_target = os.path.join(download_dir, custom_relative)
             os.makedirs(os.path.dirname(custom_target), exist_ok=True)
 
-        target_video = os.path.join(download_dir, f"{item_id}.mp4")
+        target_video = layout.movie(download_dir, item_id)
         if staged_video:
             backup = None
             if os.path.exists(target_video):
-                backup = os.path.join(download_dir, ".archive", "replaced", f"{item_id}.mp4")
+                backup = layout.replaced_movie(download_dir, item_id)
                 os.makedirs(os.path.dirname(backup), exist_ok=True)
                 os.replace(target_video, backup)
             try:
@@ -110,7 +105,7 @@ def replace_item_media(
             conn,
             item_id,
             index=index,
-            fingerprint=_fingerprint(target_video) if index else None,
+            fingerprint=media_index.file_fingerprint(target_video) if index else None,
             custom_thumbnail_path=custom_relative,
         )
         return {

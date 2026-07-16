@@ -6,7 +6,14 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import store
-from server.archive_items import ArchiveItems, gallery_preset_filters, parse_mark_request, parse_page_query
+from server.archive_items import (
+    ArchiveItems,
+    gallery_preset_filters,
+    parse_mark_request,
+    parse_page_query,
+    parse_saved_list,
+    parse_song_match,
+)
 
 
 def test_video_item_exposes_video_url():
@@ -218,11 +225,104 @@ def test_parse_page_query_maps_the_offloaded_filter():
     assert parse_page_query({"offloaded": "without"}) == {"offloaded": False}
 
 
+def test_parse_saved_list_accepts_each_collection():
+    """The four saved named-list collections validate through one parser.
+    Previously these validators lived in api.py behind the FastAPI import and
+    were untestable on the bare host."""
+    assert parse_saved_list("gallery-presets", {"name": " Games ", "filters": {"search": "games"}}) == (
+        "Games", {"filters": {"search": "games"}},
+    )
+    assert parse_saved_list("gallery-term-lists", {"name": "No FYP", "mode": "exclude",
+                                                   "terms": [" #fyp ", "#fyp", "for you"]}) == (
+        "No FYP", {"mode": "exclude", "terms": ["#fyp", "for you"]},  # stripped + deduped
+    )
+    assert parse_saved_list("playback-queues", {"name": "Weekend", "item_ids": [9, 3, 7]}) == (
+        "Weekend", {"item_ids": [9, 3, 7]},
+    )
+    assert parse_saved_list("song-playlists", {"name": "Drive", "song_ids": [1, 2]}) == (
+        "Drive", {"song_ids": [1, 2]},
+    )
+
+
+def test_parse_saved_list_rejects_bad_bodies():
+    rejected = [
+        ("gallery-presets", None),                                        # not an object
+        ("gallery-presets", {"name": "", "filters": {}}),                 # empty name
+        ("gallery-presets", {"name": "x" * 81, "filters": {}}),           # name too long
+        ("gallery-presets", {"name": "ok", "filters": {"nope": "x"}}),    # unknown filter
+        ("gallery-term-lists", {"name": "ok", "mode": "banish", "terms": ["a"]}),
+        ("gallery-term-lists", {"name": "ok", "mode": "include", "terms": []}),
+        ("gallery-term-lists", {"name": "ok", "mode": "include", "terms": [1]}),
+        ("playback-queues", {"name": "ok", "item_ids": []}),
+        ("playback-queues", {"name": "ok", "item_ids": [1, 1]}),          # duplicate
+        ("playback-queues", {"name": "ok", "item_ids": [0]}),             # not positive
+        ("playback-queues", {"name": "ok", "item_ids": [True]}),          # bool is not an ID
+        ("song-playlists", {"name": "ok", "song_ids": ["1"]}),            # string is not an ID
+    ]
+    for resource, body in rejected:
+        try:
+            parse_saved_list(resource, body)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{resource} must reject {body!r}")
+
+
+def test_parse_song_match_requires_string_fields():
+    """Non-string fields once reached dedup_key's .strip() (AttributeError ->
+    500) or sqlite as un-bindable values. Every field must be str-or-None."""
+    fields = parse_song_match({"title": " Blinding Lights ", "artist": "The Weeknd", "key": "40522491"})
+    assert fields["title"] == " Blinding Lights "  # preserved verbatim; dedup_key normalizes
+    assert fields["artist"] == "The Weeknd"
+    assert fields["album"] is None
+
+    for bad in (
+        None,                                    # not an object
+        {"title": ""},                           # empty title
+        {"title": "  "},                         # blank title
+        {"title": 123},                          # non-string title
+        {"title": "ok", "artist": {"x": 1}},     # non-string artist
+        {"title": "ok", "key": 40522491},        # non-string key
+        {"title": "ok", "spotify_url": ["x"]},   # non-string url
+    ):
+        try:
+            parse_song_match(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"must reject {bad!r}")
+
+
 def test_gallery_presets_accept_the_offloaded_filter():
     assert gallery_preset_filters({"offloaded": "with", "search": "games"}) == {
         "offloaded": "with",
         "search": "games",
     }
+
+
+def test_gallery_presets_accept_the_audio_filter():
+    assert gallery_preset_filters({"audio": "with"}) == {"audio": "with"}
+    assert gallery_preset_filters({"audio": "without"}) == {"audio": "without"}
+
+
+def test_gallery_presets_accept_every_field_the_gallery_sends():
+    """Regression: Gallery's currentFilters() sends every key, empty string when
+    unset (Gallery.tsx / types.ts GalleryPresetFilters). Validation runs before
+    empties are dropped, so one missing allowlist entry fails EVERY preset save
+    — the audio filter shipped without one."""
+    snapshot = {
+        "search": "cats", "kind": "video", "status": "done", "order": "latest",
+        "minDuration": "1", "maxDuration": "60", "minSize": "1000", "maxSize": "5000000",
+        "minWidth": "480", "maxWidth": "1920", "minHeight": "480", "maxHeight": "1920",
+        "minAttempts": "1", "maxAttempts": "5", "recovery": False,
+        "codec": "h264", "dateFrom": "2024-01-01", "dateTo": "2024-12-31",
+        "orientation": "portrait", "assets": "with", "audio": "without",
+        "offloaded": "with", "indexState": "indexed", "include": "a,b", "exclude": "c",
+    }
+    assert gallery_preset_filters(snapshot) == {k: v for k, v in snapshot.items() if v}
+
+    unset = {key: False if key == "recovery" else "" for key in snapshot}
+    assert gallery_preset_filters(unset) == {}
 
 
 def test_public_projection_includes_the_offloaded_flag():
@@ -235,6 +335,28 @@ def test_public_projection_includes_the_offloaded_flag():
         items = ArchiveItems(conn, dl)
         assert items.get(1)["offloaded"] is True
         assert items.get(2)["offloaded"] is False
+
+
+def test_page_projection_agrees_with_the_per_item_path():
+    """The batched page/window/selected projection (one listdir + one song
+    query) must produce exactly what the per-item get() path produces."""
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://tiktok.com/a", status="done")
+    store.insert_item(conn, 2, "https://tiktok.com/b", status="done")
+    store.insert_item(conn, 3, "https://tiktok.com/c", status="pending")
+    song_id = store.upsert_song(conn, "shazam:9", "Track", artist="Artist")
+    store.set_item_song(conn, 2, song_id, source="auto")
+
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "1.mp4"), "w").close()  # only Favorite 1 has media
+        items = ArchiveItems(conn, dl)
+        paged = items.page(limit=50)["items"]
+        assert paged == [items.get(n) for n in (3, 2, 1)]  # latest-first
+        by_id = {item["id"]: item for item in paged}
+        assert by_id[1]["video_url"] is not None
+        assert by_id[2]["video_url"] is None
+        assert by_id[2]["song"]["title"] == "Track"
+        assert items.selected([2, 1]) == [items.get(2), items.get(1)]
 
 
 def test_public_projection_embeds_the_identified_song():

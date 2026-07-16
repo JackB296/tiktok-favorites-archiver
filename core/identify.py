@@ -12,12 +12,9 @@ unit-testable with fakes — no ffmpeg, no shazamio, no network.
 import logging
 import os
 import tempfile
-import time
 
-from core import audio_clip, config, songid, store
+from core import config, layout, media_index, runs, songid, store
 from core.cobalt import RateLimiter
-
-_HALT = ("stopping", "stopped")
 
 
 def _identify_one(download_dir, item_id, identifier, source, extractor):
@@ -43,8 +40,8 @@ def identify_items(conn, download_dir, identifier=None, source=None, extractor=N
                    limiter=None, progress=None, should_continue=None, retry_no_match=False):
     """Identify songs for items that need it. Returns the count newly identified."""
     identifier = identifier or songid.recognize
-    source = source or audio_clip.source_audio
-    extractor = extractor or audio_clip.extract_clip
+    source = source or layout.source_audio
+    extractor = extractor or media_index.extract_clip
     if limiter is None:
         limiter = RateLimiter(config.SONG_ID_RATE_MAX_CALLS, config.SONG_ID_RATE_PERIOD)
 
@@ -86,17 +83,11 @@ def identify_items(conn, download_dir, identifier=None, source=None, extractor=N
 
 
 def run_identification(conn, download_dir, progress=None, wait=None, identifier=None,
-                       source=None, extractor=None, limiter=None):
+                       source=None, extractor=None, limiter=None, control=None):
     """Identify songs as a pausable Archive run (mirrors ``run_enrichment``)."""
-    if wait is None:
-        wait = lambda: time.sleep(0.1)  # noqa: E731
-
-    def keep_going():
-        while store.get_run_state(conn)["state"] == "paused":
-            wait()
-        return store.get_run_state(conn)["state"] not in _HALT
-
+    if control is None:
+        control = runs.RunControl(conn, progress=progress, wait=wait)
     return identify_items(
         conn, download_dir, identifier=identifier, source=source, extractor=extractor,
-        limiter=limiter, progress=progress, should_continue=keep_going,
+        limiter=limiter, progress=control.progress, should_continue=control.should_continue,
     )

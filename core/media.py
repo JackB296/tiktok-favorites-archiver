@@ -1,17 +1,14 @@
-"""Archive-media work shared by Sync and Asset backfill.
+"""Slideshow asset recovery + fallback-audio selection for the Sync orchestrators.
 
-This module owns temporary slideshow downloads, fallback-audio selection, and
-raw asset persistence. Callers provide the one policy that differs after assets
-are ready: encode an MP4 for Sync or simply classify recovery for backfill.
+Both orchestrators (``sync.run_sync`` and ``sync.run_backfill``) share this
+work; the caller provides the one policy that differs after assets are ready:
+encode an MP4 for Sync or simply classify recovery for backfill.
 """
 import os
 import shutil
 import tempfile
 
-# A user-supplied slideshow fallback track lives at a fixed path inside the
-# download directory, so it persists in the media volume (not baked into the
-# image like the bundled default).
-CUSTOM_DEFAULT_AUDIO = os.path.join(".archive", "default-audio.mp3")
+from core import layout
 
 
 def resolve_default_audio(download_dir, custom_name, bundled):
@@ -22,29 +19,20 @@ def resolve_default_audio(download_dir, custom_name, bundled):
     gracefully instead of breaking the encode.
     """
     if custom_name:
-        path = os.path.join(download_dir, CUSTOM_DEFAULT_AUDIO)
+        path = layout.custom_default_audio(download_dir)
         if os.path.isfile(path):
             return path
     return bundled
 
 
-def finished_movie_ids(names):
-    """Sorted archive numbers of finished ``<n>.mp4`` files among directory entries."""
-    return sorted(
-        int(name[:-4])
-        for name in names
-        if name.endswith(".mp4") and name[:-4].isdigit()
-    )
-
-
-def recover_slideshow_assets(deps, download_dir, item_id, result, on_ready):
+def recover_slideshow_assets(deps, download_dir, item_id, image_urls, audio_url, on_ready):
     """Recover raw slideshow assets, then call ``on_ready(images, audio)``.
 
-    Returns ``None`` when no source image was recovered. Temporary files remain
-    available only for the callback, while raw Archive media is persisted before
-    the callback runs.
+    Takes plain ``image_urls``/``audio_url`` so the resolver's response shape
+    stays behind the Sync seam. Returns ``None`` when no source image was
+    recovered. Temporary files remain available only for the callback, while
+    raw Archive media is persisted before the callback runs.
     """
-    image_urls = result.images or []
     if not image_urls:
         return None
 
@@ -59,9 +47,9 @@ def recover_slideshow_assets(deps, download_dir, item_id, result, on_ready):
             return None
 
         audio = deps.default_audio
-        if result.audio:
+        if audio_url:
             audio_tmp = os.path.join(work, "audio.mp3")
-            if deps.download_file(result.audio, audio_tmp):
+            if deps.download_file(audio_url, audio_tmp):
                 audio = audio_tmp
 
         deps.save_assets(download_dir, item_id, images, audio)

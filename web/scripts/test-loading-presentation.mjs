@@ -8,11 +8,33 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const loading = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 
-assert.equal(loading.loadingPhase(true, 0, null), "quiet");
-assert.equal(loading.loadingPhase(true, loading.LOADING_DELAY_MS - 1, null), "quiet");
-assert.equal(loading.loadingPhase(true, loading.LOADING_DELAY_MS, 0), "indicator");
-assert.equal(loading.loadingPhase(false, 300, 100), "indicator");
-assert.equal(loading.loadingPhase(false, 700, loading.MINIMUM_INDICATOR_MS), "content");
-assert.equal(loading.loadingPhase(false, 100, null), "content");
+// A request starts quiet and schedules the indicator to appear after the delay.
+assert.deepEqual(loading.loadingStep(true, "content", null), {
+  phase: "quiet",
+  timer: { afterMs: loading.LOADING_DELAY_MS, phase: "indicator" },
+});
+// A new request restarts the same schedule regardless of what was showing.
+assert.deepEqual(loading.loadingStep(true, "indicator", 120), {
+  phase: "quiet",
+  timer: { afterMs: loading.LOADING_DELAY_MS, phase: "indicator" },
+});
 
-console.log("PASS delayed loading presentation policy");
+// Finishing before the delay elapsed never shows the indicator.
+assert.deepEqual(loading.loadingStep(false, "quiet", null), { phase: "content", timer: null });
+
+// Finishing while the indicator is young holds it for the remaining minimum.
+assert.deepEqual(loading.loadingStep(false, "indicator", 150), {
+  phase: "indicator",
+  timer: { afterMs: loading.MINIMUM_INDICATOR_MS - 150, phase: "content" },
+});
+assert.deepEqual(loading.loadingStep(false, "indicator", 1), {
+  phase: "indicator",
+  timer: { afterMs: loading.MINIMUM_INDICATOR_MS - 1, phase: "content" },
+});
+
+// Finishing once the indicator has held long enough settles immediately.
+assert.deepEqual(loading.loadingStep(false, "indicator", loading.MINIMUM_INDICATOR_MS), { phase: "content", timer: null });
+assert.deepEqual(loading.loadingStep(false, "indicator", null), { phase: "content", timer: null });
+assert.deepEqual(loading.loadingStep(false, "content", null), { phase: "content", timer: null });
+
+console.log("PASS delayed loading timer choreography");

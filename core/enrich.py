@@ -8,14 +8,12 @@ date/type/number for that item).
 
 ``requests`` is imported lazily; the pure ``parse_oembed`` stays testable.
 """
-import time
 import logging
 
-from core import config, store
+from core import config, runs, store
 from core.cobalt import RateLimiter
 
 OEMBED_URL = "https://www.tiktok.com/oembed"
-_HALT = ("stopping", "stopped")
 
 
 def parse_oembed(data):
@@ -82,19 +80,14 @@ def enrich_items(conn, getter=None, limiter=None, progress=None, should_continue
     return enriched
 
 
-def run_enrichment(conn, download_dir, progress=None, wait=None, getter=None, limiter=None):
+def run_enrichment(conn, download_dir, progress=None, wait=None, getter=None, limiter=None,
+                   control=None):
     """Fetch missing Gallery search metadata as a pausable Archive run."""
-    if wait is None:
-        wait = lambda: time.sleep(0.1)  # noqa: E731
-
-    def keep_going():
-        while store.get_run_state(conn)["state"] == "paused":
-            wait()
-        return store.get_run_state(conn)["state"] not in _HALT
-
+    if control is None:
+        control = runs.RunControl(conn, progress=progress, wait=wait)
     return enrich_items(
-        conn, getter=getter, limiter=limiter, progress=progress,
-        should_continue=keep_going,
+        conn, getter=getter, limiter=limiter, progress=control.progress,
+        should_continue=control.should_continue,
     )
 
 

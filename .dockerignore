@@ -1,7 +1,6 @@
 .git
 **/__pycache__
 **/*.py[cod]
-.pytest_cache
 .venv
 venv
 
@@ -9,7 +8,6 @@ venv
 downloads/
 appdata/
 data/
-img_dir/
 user_data_tiktok.json
 last_downloaded_link.txt
 

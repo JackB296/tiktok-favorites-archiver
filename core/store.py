@@ -192,11 +192,16 @@ def connect(path=":memory:"):
 
 def init_db(conn):
     """Create tables (idempotent) and ensure the singleton run_state row exists."""
+    # Add missing item columns BEFORE the schema script: SCHEMA's indexes
+    # reference the newest columns, and CREATE TABLE IF NOT EXISTS will not
+    # touch an existing table — so an old database must be migrated first or
+    # the index creation fails with "no such column".
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'item'").fetchone():
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(item)")}
+        for name, type_name in _ITEM_MIGRATIONS.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE item ADD COLUMN {name} {type_name}")
     conn.executescript(SCHEMA)
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(item)")}
-    for name, type_name in _ITEM_MIGRATIONS.items():
-        if name not in columns:
-            conn.execute(f"ALTER TABLE item ADD COLUMN {name} {type_name}")
     # Existing libraries used physical archive number as chronology. Preserve
     # that behavior while allowing legacy bootstrap to place collision-free
     # rows elsewhere in the filename namespace.
@@ -358,23 +363,8 @@ def item_ids_matching(conn, **query):
     for key in ("limit", "cursor", "order", "seed"):
         if query.get(key) is not None and query.get(key) != PAGE_QUERY_DEFAULTS[key]:
             raise ValueError(f"{key} is not a filter")
-    unknown = set(query) - set(PAGE_QUERY_DEFAULTS)
-    if unknown:
-        raise ValueError("unknown item filters: " + ", ".join(sorted(unknown)))
-    q = {**PAGE_QUERY_DEFAULTS, **query}
-    clauses, params = _item_filters(kinds=q["kinds"], statuses=q["statuses"])
-    more_clauses, more_params = _page_filter_clauses(q)
-    clauses += more_clauses
-    params += more_params
-    fts_query = _fts_query(q["query"])
-    if fts_query:
-        sql = "SELECT item.id FROM item JOIN item_search ON item_search.rowid = item.id"
-        clauses.append("item_search MATCH ?")
-        params.append(fts_query)
-    else:
-        sql = "SELECT id FROM item"
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
+    _q, clauses, params, fts_query = _page_query_base(query, "item")
+    sql, params = _page_sql("id", clauses, params, fts_query)
     return [row["id"] for row in conn.execute(sql + " ORDER BY id", params)]
 
 
@@ -589,6 +579,27 @@ def get_song(conn, song_id):
     return conn.execute("SELECT * FROM song WHERE id = ?", (song_id,)).fetchone()
 
 
+def get_items(conn, item_ids):
+    """Items by id in one query -> {id: row}. Missing ids are simply absent."""
+    ids = sorted({int(item_id) for item_id in item_ids})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(f"SELECT * FROM item WHERE id IN ({placeholders})", ids).fetchall()
+    return {row["id"]: row for row in rows}
+
+
+def get_songs(conn, song_ids):
+    """Songs by id in one query -> {id: row}. Kills the per-item N+1 when a
+    Gallery page of song-bearing favorites is projected."""
+    ids = sorted({int(song_id) for song_id in song_ids})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(f"SELECT * FROM song WHERE id IN ({placeholders})", ids).fetchall()
+    return {row["id"]: row for row in rows}
+
+
 def set_item_song(conn, item_id, song_id, source="auto"):
     """Attach an identified song to an item and mark it identified."""
     _update(conn, item_id, song_id=song_id, song_status="identified",
@@ -662,29 +673,36 @@ def distinct_songs(conn, item_cap=100):
     ]
 
 
-def list_song_playlists(conn):
-    rows = conn.execute(
-        "SELECT id, name, song_ids_json FROM song_playlist ORDER BY name COLLATE NOCASE, id"
-    ).fetchall()
-    return [
-        {"id": row["id"], "name": row["name"], "song_ids": json.loads(row["song_ids_json"])}
-        for row in rows
-    ]
+def has_items(conn):
+    """True when at least one Archive item row exists."""
+    return conn.execute("SELECT 1 FROM item LIMIT 1").fetchone() is not None
 
 
-def save_song_playlist(conn, name, song_ids):
-    cursor = conn.execute(
-        "INSERT INTO song_playlist (name, song_ids_json, created_at) VALUES (?, ?, ?)",
-        (name, json.dumps(song_ids, separators=(",", ":")), _now()),
-    )
-    conn.commit()
-    return cursor.lastrowid
+def bulk_insert_items(conn, rows):
+    """Insert fully-specified Archive item rows in one all-or-nothing transaction.
 
-
-def delete_song_playlist(conn, playlist_id):
-    cursor = conn.execute("DELETE FROM song_playlist WHERE id = ?", (playlist_id,))
-    conn.commit()
-    return cursor.rowcount > 0
+    For the legacy bootstrap: each row dict carries an explicit ``id`` and
+    ``favorite_order`` (plus ``link``/``favorited_at``/``status`` and optional
+    ``error``/``offloaded``). All rows share one timestamp; any failure rolls
+    the whole batch back.
+    """
+    now = _now()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.executemany(
+            "INSERT INTO item "
+            "(id, favorite_order, link, favorited_at, kind, status, error, offloaded, created_at, updated_at) "
+            "VALUES (:id, :favorite_order, :link, :favorited_at, 'unknown', :status, :error, :offloaded, "
+            ":created_at, :updated_at)",
+            [
+                {"error": None, "offloaded": 0, **row, "created_at": now, "updated_at": now}
+                for row in rows
+            ],
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def items_needing_index(conn):
@@ -732,21 +750,6 @@ def _fts_query(query):
     return " AND ".join(f'"{term}"*' for term in terms)
 
 
-def search_items(conn, query=None, kinds=None, statuses=None):
-    """Items filtered by a free-text ``query`` and optional classifications."""
-    clauses, params = _item_filters(kinds=kinds, statuses=statuses)
-    fts_query = _fts_query(query)
-    sql = "SELECT item.* FROM item"
-    if fts_query:
-        sql += " JOIN item_search ON item_search.rowid = item.id"
-        clauses.append("item_search MATCH ?")
-        params.append(fts_query)
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY bm25(item_search), item.id DESC" if fts_query else " ORDER BY item.id"
-    return conn.execute(sql, params).fetchall()
-
-
 _SUGGEST_STOPWORDS = frozenset({
     "the", "and", "for", "you", "your", "this", "that", "with", "was", "are",
     "day", "part", "how", "its", "out", "all", "not", "but", "one", "get",
@@ -761,7 +764,7 @@ def suggest(conn, q, limit=6):
     tokens = re.findall(r"[a-z0-9_]+", (q or "").lower())
     if not tokens:
         return {"creators": [], "hashtags": [], "terms": []}
-    match = " AND ".join(f'"{term}"*' for term in tokens)
+    match = _fts_query(" ".join(tokens))  # one safe-FTS-expression builder
     try:
         rows = conn.execute(
             "SELECT item.author AS author, item.caption AS caption "
@@ -976,32 +979,61 @@ def _page_filter_clauses(q):
     return clauses, params
 
 
-def page_items(conn, **query):
-    """Return one cursor page without materializing the whole Archive library."""
+def _page_query_base(query, caller):
+    """Validate + merge one Gallery query -> (q, clauses, params, fts_query).
+
+    The single filter-construction path shared by ``page_items``, ``feed_ids``
+    and ``item_ids_matching`` — a new filter lands in ``_page_filter_clauses``
+    once and every query shape picks it up.
+    """
     unknown = set(query) - set(PAGE_QUERY_DEFAULTS)
     if unknown:
-        raise ValueError("unknown page_items filters: " + ", ".join(sorted(unknown)))
+        raise ValueError(f"unknown {caller} filters: " + ", ".join(sorted(unknown)))
     q = {**PAGE_QUERY_DEFAULTS, **query}
     clauses, params = _item_filters(kinds=q["kinds"], statuses=q["statuses"])
     fts_query = _fts_query(q["query"])
     filter_clauses, filter_params = _page_filter_clauses(q)
-    clauses += filter_clauses
-    params += filter_params
+    return q, clauses + filter_clauses, params + filter_params, fts_query
+
+
+def _page_order(q, fts_query):
+    """Resolve the effective sort -> (order, order_sql, field, direction, seed)."""
     order = q["order"]
-    cursor = q["cursor"]
     seed = q["seed"]
-    limit = q["limit"]
     if fts_query and order == "latest":
         order = "relevance"
     if order == "random":
         if seed is None:
             raise ValueError("random order requires a shuffle seed")
         seed = int(seed) % _RANDOM_MODULUS
-        order_sql, field, direction = f"{_random_key_sql(seed)} ASC, id ASC", None, None
-    elif order not in _PAGE_ORDERS:
+        return order, f"{_random_key_sql(seed)} ASC, id ASC", None, None, seed
+    if order not in _PAGE_ORDERS:
         raise ValueError(f"unknown item order: {order}")
+    order_sql, field, direction = _PAGE_ORDERS[order]
+    return order, order_sql, field, direction, seed
+
+
+def _page_sql(select, clauses, params, fts_query):
+    """SQL head (FTS CTE or plain item scan) + WHERE for one Gallery query."""
+    if fts_query:
+        sql = (
+            "WITH matched AS (SELECT item.*, bm25(item_search) AS rank FROM item_search "
+            f"JOIN item ON item_search.rowid = item.id WHERE item_search MATCH ?) SELECT {select} FROM matched"
+        )
+        params = [fts_query, *params]
     else:
-        order_sql, field, direction = _PAGE_ORDERS[order]
+        sql = f"SELECT {select} FROM item"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    return sql, params
+
+
+def page_items(conn, **query):
+    """Return one cursor page without materializing the whole Archive library."""
+    q, clauses, params, fts_query = _page_query_base(query, "page_items")
+    cursor = q["cursor"]
+    limit = q["limit"]
+    order, order_sql, field, direction, seed = _page_order(q, fts_query)
     if cursor is not None:
         if order == "random":
             if get_item(conn, int(cursor)) is None:
@@ -1031,26 +1063,17 @@ def page_items(conn, **query):
             cursor_row = get_item(conn, int(cursor))
             if cursor_row is None:
                 raise ValueError("unknown pagination cursor")
-            if field is None:
-                comparator = "<" if order == "latest" else ">"
-                clauses.append(f"id {comparator} ?")
-                params.append(int(cursor))
-            else:
-                cursor_value = cursor_row[field]
-                if cursor_value is None:
-                    raise ValueError("cursor cannot be used for an unindexed item")
-                comparator = "<" if direction == "DESC" else ">"
-                clauses.append(f"({field} {comparator} ? OR ({field} = ? AND id {comparator} ?))")
-                params += [cursor_value, cursor_value, int(cursor)]
+            # Every field-less order (random/audio_missing/relevance) is handled
+            # above, so a plain order always carries a cursor field here.
+            cursor_value = cursor_row[field]
+            if cursor_value is None:
+                raise ValueError("cursor cannot be used for an unindexed item")
+            comparator = "<" if direction == "DESC" else ">"
+            clauses.append(f"({field} {comparator} ? OR ({field} = ? AND id {comparator} ?))")
+            params += [cursor_value, cursor_value, int(cursor)]
     if field is not None:
         clauses.append(f"{field} IS NOT NULL")
-    if fts_query:
-        sql = "WITH matched AS (SELECT item.*, bm25(item_search) AS rank FROM item_search JOIN item ON item_search.rowid = item.id WHERE item_search MATCH ?) SELECT * FROM matched"
-        params = [fts_query, *params]
-    else:
-        sql = "SELECT * FROM item"
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
+    sql, params = _page_sql("*", clauses, params, fts_query)
     sql += f" ORDER BY {order_sql} LIMIT ?"
     params.append(max(1, min(int(limit), 100)))
     return conn.execute(sql, params).fetchall()
@@ -1058,39 +1081,12 @@ def page_items(conn, **query):
 
 def feed_ids(conn, **query):
     """Every matching item's id in the Gallery's chosen sort order, unpaged. Lets
-    a filtered Gallery view open a bounded Feed of exactly those favorites. Mirrors
-    ``page_items``'s filter + order construction, without cursor/limit paging."""
-    unknown = set(query) - set(PAGE_QUERY_DEFAULTS)
-    if unknown:
-        raise ValueError("unknown feed_ids filters: " + ", ".join(sorted(unknown)))
-    q = {**PAGE_QUERY_DEFAULTS, **query}
-    clauses, params = _item_filters(kinds=q["kinds"], statuses=q["statuses"])
-    fts_query = _fts_query(q["query"])
-    filter_clauses, filter_params = _page_filter_clauses(q)
-    clauses += filter_clauses
-    params += filter_params
-    order = q["order"]
-    seed = q["seed"]
-    if fts_query and order == "latest":
-        order = "relevance"
-    if order == "random":
-        if seed is None:
-            raise ValueError("random order requires a shuffle seed")
-        seed = int(seed) % _RANDOM_MODULUS
-        order_sql, field = f"{_random_key_sql(seed)} ASC, id ASC", None
-    elif order not in _PAGE_ORDERS:
-        raise ValueError(f"unknown item order: {order}")
-    else:
-        order_sql, field, _direction = _PAGE_ORDERS[order]
+    a filtered Gallery view open a bounded Feed of exactly those favorites."""
+    q, clauses, params, fts_query = _page_query_base(query, "feed_ids")
+    _order, order_sql, field, _direction, _seed = _page_order(q, fts_query)
     if field is not None:
         clauses.append(f"{field} IS NOT NULL")
-    if fts_query:
-        sql = "WITH matched AS (SELECT item.*, bm25(item_search) AS rank FROM item_search JOIN item ON item_search.rowid = item.id WHERE item_search MATCH ?) SELECT id FROM matched"
-        params = [fts_query, *params]
-    else:
-        sql = "SELECT id FROM item"
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
+    sql, params = _page_sql("id", clauses, params, fts_query)
     sql += f" ORDER BY {order_sql}"
     return [row["id"] for row in conn.execute(sql, params).fetchall()]
 
@@ -1136,6 +1132,9 @@ _CONTROL_TRANSITIONS = {
     "paused": ("running", "paused"),
     "running": ("running", "paused"),
     "stopping": ("running", "paused", "stopping"),
+    # The failure heal (jobs thread) may only fail a run that is still active —
+    # it must never clobber a terminal idle/stopped that execute already wrote.
+    "failed": ("running", "paused", "stopping"),
 }
 
 
@@ -1230,78 +1229,61 @@ def set_default_audio(conn, name):
     conn.commit()
 
 
-# --- saved Gallery filters -------------------------------------------------
+# --- saved named lists -------------------------------------------------------
+# One CRUD implementation for every user-named saved collection (Gallery
+# presets, term lists, playback queues, song playlists). A kind maps to its
+# table plus the payload fields persisted beside ``name``; adding the next
+# collection is one row here (plus its schema table).
 
-def list_gallery_presets(conn):
-    rows = conn.execute("SELECT id, name, filters_json FROM gallery_preset ORDER BY name COLLATE NOCASE, id").fetchall()
-    return [{"id": row["id"], "name": row["name"], "filters": json.loads(row["filters_json"])} for row in rows]
-
-
-def save_gallery_preset(conn, name, filters):
-    cursor = conn.execute(
-        "INSERT INTO gallery_preset (name, filters_json, created_at) VALUES (?, ?, ?)",
-        (name, json.dumps(filters, separators=(",", ":"), sort_keys=True), _now()),
-    )
-    conn.commit()
-    return cursor.lastrowid
+def _dump_json(value):
+    return json.dumps(value, separators=(",", ":"))
 
 
-def delete_gallery_preset(conn, preset_id):
-    cursor = conn.execute("DELETE FROM gallery_preset WHERE id = ?", (preset_id,))
-    conn.commit()
-    return cursor.rowcount > 0
+def _dump_json_sorted(value):
+    return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 
-# --- saved Gallery author/hashtag lists ------------------------------------
+_RAW = (lambda value: value, lambda value: value)
+_JSON = (_dump_json, json.loads)
+_JSON_SORTED = (_dump_json_sorted, json.loads)
 
-def list_gallery_term_lists(conn):
-    rows = conn.execute(
-        "SELECT id, name, mode, terms_json FROM gallery_term_list ORDER BY name COLLATE NOCASE, id"
-    ).fetchall()
+# kind -> (table, ((public_field, column, (encode, decode)), ...))
+SAVED_LIST_KINDS = {
+    "gallery_preset": ("gallery_preset", (("filters", "filters_json", _JSON_SORTED),)),
+    "gallery_term_list": ("gallery_term_list", (("mode", "mode", _RAW), ("terms", "terms_json", _JSON))),
+    "playback_queue": ("playback_queue", (("item_ids", "item_ids_json", _JSON),)),
+    "song_playlist": ("song_playlist", (("song_ids", "song_ids_json", _JSON),)),
+}
+
+
+def list_saved_lists(conn, kind):
+    """Every saved entry of one kind, name-ordered, payload decoded."""
+    table, fields = SAVED_LIST_KINDS[kind]
+    columns = ", ".join(["id", "name", *(column for _field, column, _codec in fields)])
+    rows = conn.execute(f"SELECT {columns} FROM {table} ORDER BY name COLLATE NOCASE, id").fetchall()
     return [
-        {"id": row["id"], "name": row["name"], "mode": row["mode"], "terms": json.loads(row["terms_json"])}
+        {"id": row["id"], "name": row["name"],
+         **{field: codec[1](row[column]) for field, column, codec in fields}}
         for row in rows
     ]
 
 
-def save_gallery_term_list(conn, name, mode, terms):
+def save_saved_list(conn, kind, name, payload):
+    """Insert one named entry; raises ``sqlite3.IntegrityError`` on a name clash."""
+    table, fields = SAVED_LIST_KINDS[kind]
+    columns = ["name", *(column for _field, column, _codec in fields), "created_at"]
+    values = (name, *(codec[0](payload[field]) for field, _column, codec in fields), _now())
+    placeholders = ", ".join("?" for _ in columns)
     cursor = conn.execute(
-        "INSERT INTO gallery_term_list (name, mode, terms_json, created_at) VALUES (?, ?, ?, ?)",
-        (name, mode, json.dumps(terms, separators=(",", ":")), _now()),
+        f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})", values,
     )
     conn.commit()
     return cursor.lastrowid
 
 
-def delete_gallery_term_list(conn, list_id):
-    cursor = conn.execute("DELETE FROM gallery_term_list WHERE id = ?", (list_id,))
-    conn.commit()
-    return cursor.rowcount > 0
-
-
-# --- saved playback queues --------------------------------------------------
-
-def list_playback_queues(conn):
-    rows = conn.execute(
-        "SELECT id, name, item_ids_json FROM playback_queue ORDER BY name COLLATE NOCASE, id"
-    ).fetchall()
-    return [
-        {"id": row["id"], "name": row["name"], "item_ids": json.loads(row["item_ids_json"])}
-        for row in rows
-    ]
-
-
-def save_playback_queue(conn, name, item_ids):
-    cursor = conn.execute(
-        "INSERT INTO playback_queue (name, item_ids_json, created_at) VALUES (?, ?, ?)",
-        (name, json.dumps(item_ids, separators=(",", ":")), _now()),
-    )
-    conn.commit()
-    return cursor.lastrowid
-
-
-def delete_playback_queue(conn, queue_id):
-    cursor = conn.execute("DELETE FROM playback_queue WHERE id = ?", (queue_id,))
+def delete_saved_list(conn, kind, entry_id):
+    table, _fields = SAVED_LIST_KINDS[kind]
+    cursor = conn.execute(f"DELETE FROM {table} WHERE id = ?", (entry_id,))
     conn.commit()
     return cursor.rowcount > 0
 

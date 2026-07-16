@@ -105,24 +105,25 @@ def test_reset_interrupted_downloads_requeues_stranded_items_as_failed():
 
 def test_gallery_term_lists_round_trip_and_can_be_deleted():
     conn = _db()
-    list_id = store.save_gallery_term_list(conn, "No FYP", "exclude", ["#fyp", "for you"])
+    list_id = store.save_saved_list(conn, "gallery_term_list", "No FYP",
+                                    {"mode": "exclude", "terms": ["#fyp", "for you"]})
 
-    assert store.list_gallery_term_lists(conn) == [
+    assert store.list_saved_lists(conn, "gallery_term_list") == [
         {"id": list_id, "name": "No FYP", "mode": "exclude", "terms": ["#fyp", "for you"]},
     ]
-    assert store.delete_gallery_term_list(conn, list_id) is True
-    assert store.list_gallery_term_lists(conn) == []
+    assert store.delete_saved_list(conn, "gallery_term_list", list_id) is True
+    assert store.list_saved_lists(conn, "gallery_term_list") == []
 
 
 def test_playback_queues_round_trip_and_keep_selection_order():
     conn = _db()
-    queue_id = store.save_playback_queue(conn, "Weekend games", [9, 3, 7])
+    queue_id = store.save_saved_list(conn, "playback_queue", "Weekend games", {"item_ids": [9, 3, 7]})
 
-    assert store.list_playback_queues(conn) == [
+    assert store.list_saved_lists(conn, "playback_queue") == [
         {"id": queue_id, "name": "Weekend games", "item_ids": [9, 3, 7]},
     ]
-    assert store.delete_playback_queue(conn, queue_id) is True
-    assert store.list_playback_queues(conn) == []
+    assert store.delete_saved_list(conn, "playback_queue", queue_id) is True
+    assert store.list_saved_lists(conn, "playback_queue") == []
 
 
 def test_run_history_records_terminal_outcome_and_counts():
@@ -296,18 +297,18 @@ def test_set_active_run_state_refuses_to_leave_stopping():
     assert store.get_run_state(conn)["state"] == "stopping"
 
 
-def test_search_items():
+def test_page_items_matches_hashtags_authors_and_classifications():
     conn = _db()
     store.insert_item(conn, 1, "https://tiktok.com/a", kind="video", status="done")
     store.insert_item(conn, 2, "https://tiktok.com/b", kind="slideshow", status="pending")
     store.set_metadata(conn, 1, "cats are great #cats", "alice")
     store.set_metadata(conn, 2, "dogs everywhere #dogs", "bob")
-    assert [r["id"] for r in store.search_items(conn, query="cats")] == [1]
-    assert [r["id"] for r in store.search_items(conn, query="#dogs")] == [2]
-    assert [r["id"] for r in store.search_items(conn, query="alice")] == [1]        # author match
-    assert [r["id"] for r in store.search_items(conn, kinds=["slideshow"])] == [2]
-    assert [r["id"] for r in store.search_items(conn, statuses=["done"])] == [1]
-    assert [r["id"] for r in store.search_items(conn)] == [1, 2]                     # no filter
+    assert [r["id"] for r in store.page_items(conn, query="cats")] == [1]
+    assert [r["id"] for r in store.page_items(conn, query="#dogs")] == [2]
+    assert [r["id"] for r in store.page_items(conn, query="alice")] == [1]          # author match
+    assert [r["id"] for r in store.page_items(conn, kinds=["slideshow"])] == [2]
+    assert [r["id"] for r in store.page_items(conn, statuses=["done"])] == [1]
+    assert sorted(r["id"] for r in store.page_items(conn)) == [1, 2]                # no filter
 
 
 def test_page_items_returns_latest_first_with_a_cursor():
@@ -451,15 +452,16 @@ def test_library_index_status_reports_indexed_pending_and_failed_items():
 def test_gallery_presets_round_trip_and_can_be_deleted():
     conn = _db()
 
-    preset_id = store.save_gallery_preset(conn, "Games without fyp", {"include": "games", "exclude": "fyp", "kind": "video"})
+    preset_id = store.save_saved_list(conn, "gallery_preset", "Games without fyp",
+                                      {"filters": {"include": "games", "exclude": "fyp", "kind": "video"}})
 
-    assert store.list_gallery_presets(conn) == [{
+    assert store.list_saved_lists(conn, "gallery_preset") == [{
         "id": preset_id,
         "name": "Games without fyp",
         "filters": {"include": "games", "exclude": "fyp", "kind": "video"},
     }]
-    assert store.delete_gallery_preset(conn, preset_id) is True
-    assert store.list_gallery_presets(conn) == []
+    assert store.delete_saved_list(conn, "gallery_preset", preset_id) is True
+    assert store.list_saved_lists(conn, "gallery_preset") == []
 
 
 def test_page_items_searches_metadata_with_relevance_and_updates_index():
@@ -683,6 +685,58 @@ def test_default_audio_column_migrates_onto_a_legacy_settings_table():
     assert store.get_library_settings(conn)["default_audio_name"] is None
     store.set_default_audio(conn, "kept.mp3")
     assert store.get_library_settings(conn)["default_audio_name"] == "kept.mp3"
+
+
+def test_get_items_and_get_songs_batch_lookups():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/a")
+    store.insert_item(conn, 3, "https://tiktok.com/c")
+    song_id = store.upsert_song(conn, "shazam:1", "Track")
+
+    items = store.get_items(conn, [3, 1, 3, 999])   # duplicates + missing ids
+    assert sorted(items) == [1, 3]
+    assert items[3]["link"] == "https://tiktok.com/c"
+    assert store.get_items(conn, []) == {}
+
+    songs = store.get_songs(conn, [song_id, song_id, 999])
+    assert list(songs) == [song_id]
+    assert songs[song_id]["title"] == "Track"
+    assert store.get_songs(conn, []) == {}
+
+
+def test_init_db_upgrades_a_pre_attempt_count_database():
+    """Regression: SCHEMA's indexes reference the newest item columns, so an
+    old database must get its column migrations BEFORE the schema script runs
+    — otherwise init_db dies with "no such column: attempt_count"."""
+    conn = store.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE TABLE item (
+            id           INTEGER PRIMARY KEY,
+            link         TEXT NOT NULL UNIQUE,
+            favorited_at TEXT,
+            kind         TEXT NOT NULL DEFAULT 'unknown',
+            status       TEXT NOT NULL DEFAULT 'pending',
+            has_assets   INTEGER NOT NULL DEFAULT 0,
+            error        TEXT,
+            caption      TEXT,
+            author       TEXT,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        );
+        INSERT INTO item (id, link, status, created_at, updated_at)
+        VALUES (1, 'https://tiktok.com/old', 'done', '2020-01-01', '2020-01-01');
+        """
+    )
+    conn.commit()
+
+    store.init_db(conn)  # must not raise
+
+    row = store.get_item(conn, 1)
+    assert row["status"] == "done"
+    assert row["attempt_count"] == 0          # migrated column, defaulted
+    assert row["favorite_order"] == 1         # backfilled from id
+    assert [r["id"] for r in store.page_items(conn)] == [1]
 
 
 if __name__ == "__main__":

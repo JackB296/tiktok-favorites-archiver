@@ -94,10 +94,9 @@ export const api = {
     return json<ItemPage>(`/api/items/page?${p}`);
   },
 
-  item: (n: number) => json<Item>(`/api/items/${n}`),
   itemIds: () => json<number[]>("/api/items/ids"),
   itemSelection: (ids: number[]) => json<Item[]>("/api/items/selection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }),
-  itemWindow: (n: number) => json<ItemPage>(`/api/items/${n}/window`),
+  itemWindow: (n: number) => json<{ items: Item[] }>(`/api/items/${n}/window`),
   replaceItemMedia: (n: number, files: { video?: File; thumbnail?: File }) => {
     const body = new FormData();
     if (files.video) body.append("video", files.video);

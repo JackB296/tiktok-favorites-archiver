@@ -2,16 +2,31 @@ import { useState } from "react";
 import { ArrowClockwise } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { OffloadSuggestion } from "../lib/api";
+import { useDryRunConfirm } from "../lib/useDryRunConfirm";
 import { Button, ConfirmDialog } from "./ui";
+
+type RangeAction = { action: "offload" | "unoffload"; range: { first_id: number; last_id: number } };
 
 /** Mark favorite ranges as archived on external storage (or clear the mark). */
 export function OffloadPanel({ running, onChanged }: { running: boolean; onChanged: () => Promise<void> }) {
   const [info, setInfo] = useState<OffloadSuggestion | null>(null);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [pending, setPending] = useState<{ action: "offload" | "unoffload"; matched: number; range: { first_id: number; last_id: number } } | null>(null);
+
+  /** "Mark range offloaded / unmark": dry-run for a count, confirm, apply. */
+  const mark = useDryRunConfirm<RangeAction>({
+    preview: async ({ action, range }) => (await api.markItems(action, { range }, true)).matched,
+    apply: async ({ action, range }) => {
+      const result = await api.markItems(action, { range });
+      // The marks landed — a failed refresh must not report the mutation as
+      // failed. Stale panels are fine; the dashboard poll catches them up.
+      await Promise.all([refreshSuggestion(), onChanged()]).catch(() => {});
+      const requeued = result.requeued ? ` ${result.requeued} had no local video and returned to the download queue.` : "";
+      return `${result.changed} favorite${result.changed === 1 ? "" : "s"} updated.${requeued}`;
+    },
+    emptyMessage: "No favorites in that range need changing.",
+  });
+  const { pending, busy, message: msg, setMessage: setMsg } = mark;
 
   async function refreshSuggestion(prefillRange = false) {
     const next = await api.offloadSuggestion();
@@ -32,44 +47,14 @@ export function OffloadPanel({ running, onChanged }: { running: boolean; onChang
     }
   }
 
-  async function markRange(action: "offload" | "unoffload") {
+  function markRange(action: "offload" | "unoffload") {
     const first = Number(from);
     const last = Number(to);
     if (!Number.isInteger(first) || !Number.isInteger(last) || first < 1 || last < first) {
       setMsg("Enter a valid range (from ≤ to).");
       return;
     }
-    setBusy(true);
-    setMsg(null);
-    try {
-      const range = { first_id: first, last_id: last };
-      const preview = await api.markItems(action, { range }, true);
-      if (!preview.matched) {
-        setMsg("No favorites in that range need changing.");
-        return;
-      }
-      setPending({ action, matched: preview.matched, range });
-    } catch (err) {
-      setMsg((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function confirmMarkRange() {
-    if (!pending || busy) return;
-    setBusy(true);
-    try {
-      const result = await api.markItems(pending.action, { range: pending.range });
-      await Promise.all([refreshSuggestion(), onChanged()]);
-      const requeued = result.requeued ? ` ${result.requeued} had no local video and returned to the download queue.` : "";
-      setMsg(`${result.changed} favorite${result.changed === 1 ? "" : "s"} updated.${requeued}`);
-    } catch (err) {
-      setMsg((err as Error).message);
-    } finally {
-      setPending(null);
-      setBusy(false);
-    }
+    void mark.request({ action, range: { first_id: first, last_id: last } });
   }
 
   return (
@@ -107,12 +92,12 @@ export function OffloadPanel({ running, onChanged }: { running: boolean; onChang
       )}
       {msg && <p className="mt-2 text-sm text-ink-dim">{msg}</p>}
       {pending && <ConfirmDialog
-        title={pending.action === "offload" ? "Mark range offloaded?" : "Unmark range?"}
-        message={`This will ${pending.action === "offload" ? "mark" : "unmark"} ${pending.matched} favorite${pending.matched === 1 ? "" : "s"} (#${pending.range.first_id}-#${pending.range.last_id}) ${pending.action === "offload" ? "as offloaded" : "as no longer offloaded"}. Nothing is downloaded or deleted.`}
-        confirmLabel={pending.action === "offload" ? "Mark offloaded" : "Unmark range"}
+        title={pending.payload.action === "offload" ? "Mark range offloaded?" : "Unmark range?"}
+        message={`This will ${pending.payload.action === "offload" ? "mark" : "unmark"} ${pending.matched} favorite${pending.matched === 1 ? "" : "s"} (#${pending.payload.range.first_id}-#${pending.payload.range.last_id}) ${pending.payload.action === "offload" ? "as offloaded" : "as no longer offloaded"}. Nothing is downloaded or deleted.`}
+        confirmLabel={pending.payload.action === "offload" ? "Mark offloaded" : "Unmark range"}
         busy={busy}
-        onConfirm={() => void confirmMarkRange()}
-        onCancel={() => setPending(null)}
+        onConfirm={() => void mark.confirm()}
+        onCancel={mark.cancel}
       />}
     </section>
   );

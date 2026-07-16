@@ -8,14 +8,11 @@ otherwise they grab the first video frame; both go through ffmpeg, like the
 Gallery indexer.
 """
 import os
-import time
-import subprocess
 from xml.sax.saxutils import escape
 
-from core import store
+from core import layout, media_index, runs, store
 
 
-_HALT = ("stopping", "stopped")
 _TITLE_LIMIT = 120
 
 
@@ -45,21 +42,8 @@ def nfo_xml(item):
     return "\n".join(lines) + "\n"
 
 
-def make_poster(source, target, runner=subprocess.run):
-    """Write one JPEG poster frame without changing the source media.
-
-    The explicit muxer/codec flags let the target carry a temp suffix; the
-    caller publishes it atomically.
-    """
-    runner(
-        ["ffmpeg", "-y", "-i", source, "-frames:v", "1", "-q:v", "3", "-c:v", "mjpeg", "-f", "image2", target],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
-def write_sidecars(conn, download_dir, progress=None, should_continue=None, make_poster=make_poster):
+def write_sidecars(conn, download_dir, progress=None, should_continue=None,
+                   make_poster=media_index.make_poster):
     """Write NFO + poster sidecars for every finished local video.
 
     Idempotent and resumable: the NFO is always rewritten (cheap, and picks up
@@ -67,7 +51,7 @@ def write_sidecars(conn, download_dir, progress=None, should_continue=None, make
     """
     candidates = [
         item for item in store.items_by_status(conn, ["done"])
-        if os.path.isfile(os.path.join(download_dir, f"{item['id']}.mp4"))
+        if os.path.isfile(layout.movie(download_dir, item["id"]))
     ]
     result = {"written": 0, "failed": 0}
     total = len(candidates)
@@ -89,17 +73,17 @@ def write_sidecars(conn, download_dir, progress=None, should_continue=None, make
 def _write_one(download_dir, item, make_poster):
     item_id = item["id"]
     xml = nfo_xml(item)  # build before opening so a failure leaves no temp file
-    nfo_path = os.path.join(download_dir, f"{item_id}.nfo")
+    nfo_path = layout.nfo(download_dir, item_id)
     tmp_path = nfo_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         f.write(xml)
     os.replace(tmp_path, nfo_path)
 
-    poster_path = os.path.join(download_dir, f"{item_id}.jpg")
+    poster_path = layout.poster(download_dir, item_id)
     if os.path.exists(poster_path):
         return
     thumbnail = item["thumbnail_path"] and os.path.join(download_dir, item["thumbnail_path"])
-    source = thumbnail if thumbnail and os.path.isfile(thumbnail) else os.path.join(download_dir, f"{item_id}.mp4")
+    source = thumbnail if thumbnail and os.path.isfile(thumbnail) else layout.movie(download_dir, item_id)
     poster_tmp = poster_path + ".tmp"
     try:
         make_poster(source, poster_tmp)
@@ -112,17 +96,9 @@ def _write_one(download_dir, item, make_poster):
                 pass
 
 
-def run_sidecars(conn, download_dir, progress=None, wait=None):
+def run_sidecars(conn, download_dir, progress=None, wait=None, control=None):
     """Write metadata sidecars as a controllable Archive run."""
-    if wait is None:
-        wait = lambda: time.sleep(0.1)  # noqa: E731
-
-    def state():
-        return store.get_run_state(conn)["state"]
-
-    def keep_going():
-        while state() == "paused":
-            wait()
-        return state() not in _HALT
-
-    return write_sidecars(conn, download_dir, progress=progress, should_continue=keep_going)
+    if control is None:
+        control = runs.RunControl(conn, progress=progress, wait=wait)
+    return write_sidecars(conn, download_dir, progress=control.progress,
+                          should_continue=control.should_continue)

@@ -11,15 +11,13 @@ import os
 import shutil
 import logging
 
-
-def slideshow_dir(download_dir, n):
-    return os.path.join(download_dir, str(n))
+from core import layout
 
 
 def save_assets(download_dir, n, image_paths, audio_path=None):
-    """Copy raw images (``01.jpg``, ``02.jpg``, ...) and ``audio.mp3`` into
-    ``downloads/<n>/``. Returns the folder path."""
-    dest = slideshow_dir(download_dir, n)
+    """Copy raw images (``01.jpg``, ``02.jpg``, ...) and the soundtrack into
+    the Favorite's asset folder (paths from ``core.layout``). Returns it."""
+    dest = layout.assets_dir(download_dir, n)
     os.makedirs(dest, exist_ok=True)
     pad = max(2, len(str(len(image_paths))))
     for idx, src in enumerate(image_paths, 1):
@@ -31,7 +29,7 @@ def save_assets(download_dir, n, image_paths, audio_path=None):
             logging.error(f"Could not copy slide {src} -> {out}: {e}")
     if audio_path and os.path.exists(audio_path):
         try:
-            shutil.copy(audio_path, os.path.join(dest, "audio.mp3"))
+            shutil.copy(audio_path, layout.slideshow_audio(download_dir, n))
         except OSError as e:
             logging.error(f"Could not copy audio {audio_path}: {e}")
     return dest

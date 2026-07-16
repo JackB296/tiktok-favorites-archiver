@@ -5,15 +5,12 @@ The module hides SQLite rows and archive-file layout behind ``page`` and
 """
 import os
 
-from core import store
-
-
-_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+from core import layout, store
 
 _GALLERY_PRESET_FIELDS = {
     "search", "kind", "status", "order", "minDuration", "maxDuration",
     "minSize", "maxSize", "minWidth", "maxWidth", "minHeight", "maxHeight", "codec",
-    "dateFrom", "dateTo", "orientation", "assets", "offloaded", "indexState", "include", "exclude",
+    "dateFrom", "dateTo", "orientation", "assets", "audio", "offloaded", "indexState", "include", "exclude",
     "minAttempts", "maxAttempts", "recovery",
 }
 
@@ -30,6 +27,102 @@ def gallery_preset_filters(value):
     ):
         raise ValueError("filters contain an unsupported value")
     return {key: item for key, item in value.items() if item}
+
+
+# --- saved named-list request bodies -----------------------------------------
+# One parser per collection the web app can save. ``parse_saved_list`` returns
+# (name, payload) ready for ``store.save_saved_list``; the payload keys double
+# as the create-response fields, so wire shapes stay per-collection.
+
+def _valid_name(body, noun):
+    if not isinstance(body, dict):
+        raise ValueError(f"{noun} must be an object")
+    name = body.get("name")
+    if not isinstance(name, str) or not (name := name.strip()) or len(name) > 80:
+        raise ValueError("name must be between 1 and 80 characters")
+    return name
+
+
+def _unique_positive_ids(values, field, limit):
+    if (
+        not isinstance(values, list)
+        or not 1 <= len(values) <= limit
+        or len(set(values)) != len(values)
+        or any(type(value) is not int or value < 1 for value in values)
+    ):
+        raise ValueError(f"{field} must contain 1 to {limit} unique positive integer IDs")
+    return values
+
+
+def _preset_body(body):
+    return {"filters": gallery_preset_filters(body.get("filters"))}
+
+
+def _term_list_body(body):
+    mode = body.get("mode")
+    terms = body.get("terms")
+    if mode not in ("include", "exclude"):
+        raise ValueError("mode must be include or exclude")
+    if not isinstance(terms, list) or not 1 <= len(terms) <= 100:
+        raise ValueError("terms must contain 1 to 100 entries")
+    cleaned = []
+    for term in terms:
+        if not isinstance(term, str):
+            raise ValueError("each term must be 1 to 100 characters")
+        term = term.strip()
+        if not term or len(term) > 100:
+            raise ValueError("each term must be 1 to 100 characters")
+        if term not in cleaned:
+            cleaned.append(term)
+    return {"mode": mode, "terms": cleaned}
+
+
+def _queue_body(body):
+    return {"item_ids": _unique_positive_ids(body.get("item_ids"), "item_ids", 100)}
+
+
+def _playlist_body(body):
+    return {"song_ids": _unique_positive_ids(body.get("song_ids"), "song_ids", 1000)}
+
+
+# resource path -> (store kind, body noun, display noun, payload parser)
+SAVED_LIST_RESOURCES = {
+    "gallery-presets": ("gallery_preset", "preset", "preset", _preset_body),
+    "gallery-term-lists": ("gallery_term_list", "list", "term list", _term_list_body),
+    "playback-queues": ("playback_queue", "queue", "playback queue", _queue_body),
+    "song-playlists": ("song_playlist", "playlist", "playlist", _playlist_body),
+}
+
+
+_SONG_MATCH_FIELDS = ("key", "artist", "album", "art_url", "shazam_url", "apple_url", "spotify_url")
+
+
+def parse_song_match(body):
+    """Validate a manual song-attach body -> field dict for ``songid.SongMatch``.
+
+    Every field must be a string (or absent); a non-string title once reached
+    ``dedup_key``'s ``.strip()`` and 500'd, and non-string metadata reached
+    sqlite as un-bindable values.
+    """
+    if not isinstance(body, dict):
+        raise ValueError("song must be an object")
+    title = body.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("a song title is required")
+    fields = {"title": title}
+    for field in _SONG_MATCH_FIELDS:
+        value = body.get(field)
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{field} must be a string")
+        fields[field] = value
+    return fields
+
+
+def parse_saved_list(resource, body):
+    """Validate one saved-list create body -> ``(name, payload)``. ValueError on bad input."""
+    _kind, body_noun, _display_noun, parse_payload = SAVED_LIST_RESOURCES[resource]
+    name = _valid_name(body, body_noun)
+    return name, parse_payload(body)
 
 
 def _csv(value):
@@ -159,17 +252,26 @@ class ArchiveItems:
     def page(self, **query):
         query["limit"] = max(1, min(int(query.get("limit", 50)), 100))  # match the store's clamp, or next_cursor lies
         rows = store.page_items(self._conn, **query)
-        items = [self._public(row) for row in rows]
+        items = self._public_batch(rows)
         return {"items": items, "next_cursor": items[-1]["id"] if len(items) == query["limit"] else None}
 
     def window(self, item_id, limit=50):
-        return {"items": [self._public(row) for row in store.window_items(self._conn, item_id, limit)]}
+        return {"items": self._public_batch(store.window_items(self._conn, item_id, limit))}
 
     def selected(self, item_ids):
-        rows = [store.get_item(self._conn, item_id) for item_id in item_ids]
-        return [self._public(row) for row in rows if row is not None]
+        by_id = store.get_items(self._conn, item_ids)
+        rows = [by_id[item_id] for item_id in item_ids if item_id in by_id]
+        return self._public_batch(rows)
 
-    def _public(self, row):
+    def _public_batch(self, rows):
+        """Project many rows with one directory listing and one song query
+        instead of a per-row ``os.path.exists`` and ``get_song`` (N+1)."""
+        files = os.listdir(self._download_dir) if os.path.isdir(self._download_dir) else []
+        movies = set(layout.finished_movie_ids(files))
+        songs = store.get_songs(self._conn, [row["song_id"] for row in rows if row["song_id"]])
+        return [self._public(row, movies=movies, songs=songs) for row in rows]
+
+    def _public(self, row, movies=None, songs=None):
         item_id = row["id"]
         data = {
             "id": item_id,
@@ -200,7 +302,11 @@ class ArchiveItems:
             "audio": None,
             "thumbnail_url": None,
         }
-        if os.path.exists(os.path.join(self._download_dir, f"{item_id}.mp4")):
+        movie_present = (
+            item_id in movies if movies is not None
+            else os.path.exists(layout.movie(self._download_dir, item_id))
+        )
+        if movie_present:
             version = f"?v={row['media_fingerprint']}" if row["media_fingerprint"] else ""
             data["video_url"] = f"/media/{item_id}.mp4{version}"
         if row["has_assets"]:
@@ -209,7 +315,7 @@ class ArchiveItems:
         if thumbnail_path:
             data["thumbnail_url"] = f"/media/{thumbnail_path}"
         if row["song_id"]:
-            song = store.get_song(self._conn, row["song_id"])
+            song = songs.get(row["song_id"]) if songs is not None else store.get_song(self._conn, row["song_id"])
             if song is not None:
                 data["song"] = {
                     "title": song["title"],
@@ -223,15 +329,11 @@ class ArchiveItems:
         return data
 
     def _slideshow_assets(self, item_id):
-        folder = os.path.join(self._download_dir, str(item_id))
-        if not os.path.isdir(folder):
+        images = layout.slideshow_images(self._download_dir, item_id)
+        if not images and not os.path.isdir(layout.assets_dir(self._download_dir, item_id)):
             return {"images": [], "audio": None}
-        names = sorted(os.listdir(folder))
         return {
-            "images": [
-                f"/media/{item_id}/{name}"
-                for name in names
-                if name.lower().endswith(_IMAGE_EXTS)
-            ],
-            "audio": f"/media/{item_id}/audio.mp3" if "audio.mp3" in names else None,
+            "images": [f"/media/{item_id}/{name}" for name in images],
+            "audio": f"/media/{item_id}/audio.mp3"
+            if os.path.isfile(layout.slideshow_audio(self._download_dir, item_id)) else None,
         }
