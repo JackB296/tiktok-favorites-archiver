@@ -133,9 +133,12 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
   const [fullscreen, setFullscreen] = useState(false);
   const [settingsItem, setSettingsItem] = useState<Item | null>(null);
   const [identifyItem, setIdentifyItem] = useState<Item | null>(null);
+  // Fullscreen targets the non-scrolling wrapper: the control overlays hang off
+  // it (staying pinned while the feed scrolls) and remain visible in fullscreen.
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
   const toggleFullscreen = useCallback(async () => {
-    const target = containerRef.current;
+    const target = wrapperRef.current;
     if (!target) return;
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
@@ -143,14 +146,14 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
     } catch {
       // Fullscreen can be denied by browser policy; playback still works normally.
     }
-  }, [containerRef]);
+  }, []);
 
   useEffect(() => {
-    const updateFullscreen = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement === wrapperRef.current);
     document.addEventListener("fullscreenchange", updateFullscreen);
     updateFullscreen();
     return () => document.removeEventListener("fullscreenchange", updateFullscreen);
-  }, [containerRef]);
+  }, []);
 
   useEffect(() => {
     setPaused(false);
@@ -186,7 +189,7 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
   }, [activeIndex, containerRef, items, setActiveId, toggleFullscreen, toggleMuted, togglePaused]);
 
   return (
-    <div ref={containerRef} className="relative h-full snap-y snap-mandatory overflow-y-scroll bg-black">
+    <div ref={wrapperRef} className="relative h-full bg-black">
       <p className="sr-only" aria-live="polite">{paused ? "Paused" : "Playing"}</p>
       <div className="absolute left-3 top-3 z-20 flex items-center gap-1 rounded-xl border border-white/10 bg-black/55 p-1 text-white shadow-lg shadow-black/25 backdrop-blur-md">
         {onGoToLastWatched && <><button onClick={onGoToLastWatched} aria-label="Go to last watched" title="Return to the last favorite you watched" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition hover:bg-white/15 active:translate-y-px"><ClockCounterClockwise size={16} /><span>Last watched</span></button><span aria-hidden="true" className="mx-0.5 h-5 w-px bg-white/15" /></>}
@@ -198,6 +201,7 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
       {!randomMode && queueTotal > 0 && <div className="absolute left-3 top-16 z-20 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">Gallery queue · {queueReadyTotal} ready of {queueTotal} selected</div>}
       {!randomMode && queueTotal === 0 && (backHref || filterActive) && <div className="absolute left-3 top-16 z-20 flex items-center gap-2 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">{backHref ? <Link to={backHref} state={{ restore: true }} className="inline-flex items-center gap-1 font-medium hover:underline"><ArrowLeft size={13} weight="bold" /> {filterActive ? "Back to results" : "Back to gallery"}</Link> : <span>Search results</span>}{filterActive && <span className="text-white/70">· {filteredTotal}</span>}</div>}
       {showShortcuts && <div className={`absolute left-3 z-20 rounded-xl border border-white/10 bg-black/70 px-3 py-2 text-xs leading-5 text-white shadow-xl backdrop-blur-md ${randomMode || queueTotal > 0 || filterActive ? "top-28" : "top-16"}`}>↑ ↓: previous or next post<br />← →: slideshow image<br />Space or video click: play or pause<br />M: mute or unmute<br />F: enter or exit fullscreen</div>}
+      <div ref={containerRef} className="h-full snap-y snap-mandatory overflow-y-scroll">
       {items.map((item, index) => (
         <section
           key={item.id}
@@ -256,6 +260,7 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
           </div>
         </section>
       ))}
+      </div>
       {settingsItem && <MediaSettingsDialog item={settingsItem} onClose={() => setSettingsItem(null)} onSaved={(updated) => { updateItem(updated); setSettingsItem(null); }} />}
       {identifyItem && <SongIdentifyDialog item={identifyItem} onClose={() => setIdentifyItem(null)} onSaved={(updated) => { updateItem(updated); setIdentifyItem(null); }} />}
     </div>

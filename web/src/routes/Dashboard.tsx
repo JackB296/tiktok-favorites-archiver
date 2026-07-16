@@ -37,6 +37,7 @@ export function Dashboard() {
   const [sidecarsProgress, setSidecarsProgress] = useState<ProgressEvent | null>(null);
   const [enrichmentProgress, setEnrichmentProgress] = useState<ProgressEvent | null>(null);
   const [identificationProgress, setIdentificationProgress] = useState<ProgressEvent | null>(null);
+  const [backfillProgress, setBackfillProgress] = useState<ProgressEvent | null>(null);
   const [runActionError, setRunActionError] = useState<{ action: RunAction; message: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [verifyReport, setVerifyReport] = useState<VerifyReport | null>(null);
@@ -81,6 +82,7 @@ export function Dashboard() {
       if (e.event === "sidecars") setSidecarsProgress(e);
       if (e.event === "enrichment") setEnrichmentProgress(e);
       if (e.event === "identification") setIdentificationProgress(e);
+      if (e.event === "backfill") setBackfillProgress(e);
       if (e.event === "complete") {
         refresh();
         refreshLibrary();
@@ -161,6 +163,7 @@ export function Dashboard() {
     setRunActionError(null);
     if (a === "enrich") setEnrichmentProgress(null);
     if (a === "identify") setIdentificationProgress(null);
+    if (a === "backfill") setBackfillProgress(null);
     try {
       const result = await api.syncAction(a);
       if ("started" in result && result.started === false) setRunActionError({ action: a, message: "Another Archive run is already active." });
@@ -258,7 +261,7 @@ export function Dashboard() {
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-semibold text-ink"><span>Gallery search metadata{running && status?.phase === "enrich" ? <span className="ml-2 text-xs font-normal text-active">running</span> : null}</span><CaretDown size={16} className="text-ink-faint transition group-open:rotate-180" /></summary>
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-5 py-4">
             <div>
-              <p className="mt-1 text-sm text-ink-dim">Fetches missing captions and creators from TikTok so author, hashtag, and caption search cover more of the archive. This makes one rate-limited request per favorite that has no caption yet; it can be paused or stopped.</p>
+              <p className="mt-1 text-sm text-ink-dim">Fetches missing captions and creators from TikTok so author, hashtag, and caption search cover more of the archive. This makes one rate-limited request per favorite that has no caption yet; it can be paused or stopped. It also runs automatically after every Sync, so new favorites get their metadata without another click.</p>
             </div>
             <Button variant="ghost" disabled={running} onClick={() => act("enrich")}>
               <ArrowClockwise size={16} /> Fetch missing metadata
@@ -275,7 +278,7 @@ export function Dashboard() {
         <details open={songIdOpen} onToggle={(event) => setSongIdOpen(event.currentTarget.open)} className="group mb-4 rounded-[var(--radius-media)] border border-line bg-surface">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-semibold text-ink"><span>Song identification{running && status?.phase === "identify" ? <span className="ml-2 text-xs font-normal text-active">running</span> : null}</span><CaretDown size={16} className="text-ink-faint transition group-open:rotate-180" /></summary>
           <div className="border-t border-line px-5 py-4">
-            <p className="text-sm text-ink-dim">Identifies the song in each favorite with Shazam and shows it in Feed and Gallery. This is the one feature that leaves your machine: when enabled, a short audio clip per video is sent to Shazam's servers to match it. It runs one rate-limited request at a time and can be paused or stopped.</p>
+            <p className="text-sm text-ink-dim">Identifies the song in each favorite with Shazam and shows it in Feed and Gallery. This is the one feature that leaves your machine: when enabled, a short audio clip per video is sent to Shazam's servers to match it. It runs one rate-limited request at a time and can be paused or stopped. While enabled, it also runs automatically after every Sync, so newly downloaded favorites get their songs without another click.</p>
             <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-ink">
               <input type="checkbox" checked={library?.song_id_enabled === 1} onChange={(e) => updateLibrary({ song_id_enabled: e.target.checked })} />
               <span><span className="font-medium">Enable song identification</span><span className="mt-0.5 block text-ink-dim">Off by default. Turning this on allows short audio clips to be sent to Shazam. While it is off, no audio ever leaves your machine and the run cannot start.</span></span>
@@ -480,6 +483,11 @@ export function Dashboard() {
             </>
           )}
           {actionError("start", "backfill", "pause", "continue", "stop") && <p className="w-full text-sm text-bad" role="alert">{actionError("start", "backfill", "pause", "continue", "stop")}</p>}
+          {backfillProgress?.event === "backfill" && (
+            <span className="basis-full text-sm text-ink-dim">
+              {`Backfill: checked ${backfillProgress.completed ?? 0} of ${backfillProgress.total ?? 0} favorites, ${backfillProgress.recovered ?? 0} slideshows recovered`}
+            </span>
+          )}
         </section>
 
         {/* Counts */}

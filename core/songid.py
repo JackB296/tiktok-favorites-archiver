@@ -95,6 +95,41 @@ def build_search_results(raw, limit=None):
     return matches
 
 
+def _itunes_art(url):
+    """Upgrade an iTunes 100x100 artwork URL to a crisper 400x400, if present."""
+    if not url:
+        return None
+    return url.replace("100x100bb", "400x400bb").replace("100x100", "400x400")
+
+
+def build_itunes_results(raw, limit=None):
+    """Parse an iTunes Search API response into candidate SongMatches (pure).
+
+    The manual "match it myself" search uses Apple's public catalog because
+    Shazam's reverse-engineered text-search endpoint is defunct (it now 404s).
+    Apple returns no Shazam key, so these dedup on normalized title+artist.
+    """
+    results = (raw or {}).get("results") or []
+    matches = []
+    for track in results:
+        title = track.get("trackName")
+        if not title:
+            continue
+        matches.append(SongMatch(
+            key=None,
+            title=title,
+            artist=track.get("artistName"),
+            album=track.get("collectionName"),
+            art_url=_itunes_art(track.get("artworkUrl100")),
+            shazam_url=None,
+            apple_url=track.get("trackViewUrl"),
+            spotify_url=None,
+        ))
+        if limit and len(matches) >= limit:
+            break
+    return matches
+
+
 _WS = re.compile(r"\s+")
 
 
@@ -110,6 +145,12 @@ def dedup_key(match):
     return f"ta:{title}|{artist}"
 
 
+# Hard cap per Shazam request. shazamio issues requests without a timeout, so a
+# throttled/blackholed connection would otherwise hang the identification run
+# forever; a timeout surfaces as a normal per-item error and the run moves on.
+REQUEST_TIMEOUT_S = 60
+
+
 def recognize(clip_path):  # pragma: no cover - network + native dependency
     """Identify the song in an audio file via Shazam; SongMatch or None.
 
@@ -120,17 +161,27 @@ def recognize(clip_path):  # pragma: no cover - network + native dependency
     from shazamio import Shazam
 
     async def _run():
-        return await Shazam().recognize(clip_path)
+        return await asyncio.wait_for(Shazam().recognize(clip_path), REQUEST_TIMEOUT_S)
 
     return build_recognition(asyncio.run(_run()))
 
 
-def search(query, limit=8):  # pragma: no cover - network + native dependency
-    """Search Shazam's catalog by text for the manual 'match it myself' flow."""
-    import asyncio
-    from shazamio import Shazam
+ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
 
-    async def _run():
-        return await Shazam().search_track(query=query, limit=limit)
 
-    return build_search_results(asyncio.run(_run()), limit=limit)
+def search(query, limit=8):  # pragma: no cover - network dependency
+    """Search Apple's public catalog by text for the manual 'match it myself' flow.
+
+    Uses the iTunes Search API (no auth, returns JSON) because Shazam's
+    reverse-engineered text-search endpoint is defunct. Only the typed query
+    leaves the machine — never any audio.
+    """
+    import requests  # lazy: keeps the module importable without requests
+
+    resp = requests.get(
+        ITUNES_SEARCH_URL,
+        params={"term": query, "entity": "song", "limit": limit},
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return build_itunes_results(resp.json(), limit=limit)

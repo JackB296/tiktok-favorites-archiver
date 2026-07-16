@@ -92,9 +92,9 @@ export interface RunStatus {
 export interface ProgressEvent {
   id?: number;
   status?: Status;
-  kind?: Kind;
+  kind?: Kind | "transient";
   has_assets?: number;
-  event?: "complete" | "error" | "indexing" | "sidecars" | "enrichment" | "identification" | "verify";
+  event?: "complete" | "error" | "indexing" | "sidecars" | "enrichment" | "identification" | "verify" | "backfill";
   error?: string;
   indexed?: number;
   failed?: number;
@@ -105,6 +105,7 @@ export interface ProgressEvent {
   identified?: number;
   no_match?: number;
   errors?: number;
+  recovered?: number;
   title?: string | null;
 }
 

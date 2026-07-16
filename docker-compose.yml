@@ -10,9 +10,13 @@ services:
     restart: unless-stopped
     environment:
       API_URL: "http://cobalt:9000/"
-      # Raise these if you want faster syncs (the app's rate limiter should stay under them):
-      # RATELIMIT_MAX: "200"
-      # RATELIMIT_WINDOW: "60"
+      # Cobalt's built-in rate limit. Its default (~20 requests/minute) is meant
+      # for public instances and makes bulk syncs/backfills crawl: every call
+      # gets a 429 and a ~53s backoff. This instance is private (not exposed
+      # outside the compose network), so give the app real headroom. The app's
+      # own limiter (RATE_MAX_CALLS/RATE_PERIOD below) must stay under this.
+      RATELIMIT_MAX: "300"
+      RATELIMIT_WINDOW: "60"
     expose:
       - "9000"
 
@@ -27,9 +31,15 @@ services:
       DB_FILE: "/app/data/archive.db"
       APP_PORT: "8080"
       # Keep this comfortably below Cobalt's RATELIMIT_MAX/WINDOW above:
+      # 4 calls/second = 240/minute < Cobalt's 300/minute budget.
       CONCURRENCY: "4"
-      RATE_MAX_CALLS: "8"
+      RATE_MAX_CALLS: "4"
       RATE_PERIOD: "1.0"
+      # Shazam pace: 1 recognition per N seconds. Shazam has no official API and
+      # throttles sustained traffic — at 1/2s it began rejecting after ~150
+      # requests, so pace bulk identification over a large library gently.
+      SONG_ID_RATE_MAX_CALLS: "1"
+      SONG_ID_RATE_PERIOD: "6.0"
     ports:
       # Bound to localhost: the app has no authentication, so it should not be
       # reachable from the rest of the network. (Plex reads ./downloads from

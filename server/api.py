@@ -379,10 +379,10 @@ async def replace_item_media(
 
 @router.get("/songs/search")
 def search_songs(request: Request, q: str = ""):
-    """Search Shazam's catalog by text for the manual 'match it myself' flow.
+    """Search Apple's public catalog by text for the manual 'match it myself' flow.
 
-    Gated on the opt-in setting: this contacts Shazam's servers, so it stays off
-    until the owner enables song identification.
+    Gated on the opt-in setting to keep the whole song feature behind one switch;
+    only the typed query leaves the machine (never any audio).
     """
     query = q.strip()
     if not query:
@@ -395,8 +395,8 @@ def search_songs(request: Request, q: str = ""):
         conn.close()
     try:
         matches = songid.search(query, limit=8)
-    except Exception as error:  # network / reverse-engineered client can fail
-        raise HTTPException(status_code=502, detail=f"Shazam search failed: {error}")
+    except Exception as error:  # network failure / unexpected response
+        raise HTTPException(status_code=502, detail=f"song search failed: {error}")
     return {"results": [dict(match._asdict()) for match in matches]}
 
 

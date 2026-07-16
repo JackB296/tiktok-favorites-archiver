@@ -19,6 +19,14 @@ class JobBusyError(RuntimeError):
     """Raised when exclusive maintenance is attempted during an active job."""
 
 
+# A user-started Sync chains its incremental follow-up phases, so favorites from
+# a new export come out fully described without further clicks: Gallery search
+# metadata (captions/creators), then song identification when the owner has
+# opted in. A follow-up is skipped when it has nothing to do, and the chain
+# halts when a stage is stopped by the user or fails.
+PIPELINES = {"sync": ("sync", "enrich", "identify")}
+
+
 class Broadcaster:
     """Thread-safe fan-out of events to subscriber queues."""
 
@@ -87,6 +95,15 @@ class JobManager:
     def is_running(self):
         return bool(self._thread and self._thread.is_alive())
 
+    def _stage_has_work(self, conn, stage):
+        """Whether a chained follow-up stage would do anything at all."""
+        if stage == "enrich":
+            return bool(enrich.items_needing_enrichment(conn))
+        if stage == "identify":
+            return bool(store.get_library_settings(conn)["song_id_enabled"]) \
+                and bool(store.items_needing_identification(conn))
+        return True
+
     def start(self, kind="sync"):
         # Non-blocking: while exclusive maintenance (e.g. a long import) holds
         # the lock, a Start is refused fast ({"started": false}) instead of
@@ -96,22 +113,32 @@ class JobManager:
         try:
             if self.is_running():
                 return False
-            runner = self.runners.get(kind)
-            if runner is None:
+            stages = PIPELINES.get(kind, (kind,))
+            if self.runners.get(stages[0]) is None:
                 return False
 
             def run():
-                # runs.execute owns run_state and the run-history row; this
-                # thread only surfaces errors and completion to subscribers.
+                # runs.execute owns run_state and the run-history row per
+                # stage; this thread sequences the pipeline and surfaces
+                # errors and completion to subscribers.
                 conn = self._conn()
                 try:
-                    runs.execute(
-                        conn,
-                        kind,
-                        runner,
-                        self.download_dir,
-                        progress=self._broadcaster.publish,
-                    )
+                    for position, stage in enumerate(stages):
+                        runner = self.runners.get(stage)
+                        # The stage the user asked for always runs; follow-ups
+                        # are best-effort and skipped when they have no work.
+                        if runner is None or (position > 0 and not self._stage_has_work(conn, stage)):
+                            continue
+                        runs.execute(
+                            conn,
+                            stage,
+                            runner,
+                            self.download_dir,
+                            progress=self._broadcaster.publish,
+                        )
+                        # A user Stop ends the whole chain, not just the stage.
+                        if store.get_run_state(conn)["state"] == "stopped":
+                            break
                 except Exception as e:  # surface, don't crash the thread silently
                     try:
                         # A failure before execute's own bookkeeping (e.g. the
@@ -131,8 +158,8 @@ class JobManager:
             # immediately after Start are not rejected while the thread spins up.
             conn = self._conn()
             try:
-                runs.begin(conn, kind)
-                self._thread = threading.Thread(target=run, name=f"job-{kind}", daemon=True)
+                runs.begin(conn, stages[0])
+                self._thread = threading.Thread(target=run, name=f"job-{stages[0]}", daemon=True)
                 try:
                     self._thread.start()
                 except Exception:

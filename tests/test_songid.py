@@ -87,6 +87,36 @@ def test_build_search_results_returns_candidates_and_respects_limit():
     assert songid.build_search_results({}) == []
 
 
+def test_build_itunes_results_maps_fields_and_respects_limit():
+    raw = {"resultCount": 3, "results": [
+        {"trackName": "Juice", "artistName": "Lizzo", "collectionName": "Cuz I Love You",
+         "artworkUrl100": "https://is1.mzstatic.com/image/100x100bb.jpg",
+         "trackViewUrl": "https://music.apple.com/us/album/juice/1?i=2"},
+        {"trackName": "Juice", "artistName": "Ycee", "collectionName": "The First Wave",
+         "artworkUrl100": "https://is1.mzstatic.com/image/other100x100.jpg"},
+        {"collectionName": "No track name here"},  # dropped: no trackName
+        {"trackName": "Juice WRLD", "artistName": "Someone"},
+    ]}
+    results = songid.build_itunes_results(raw, limit=2)
+    assert [m.title for m in results] == ["Juice", "Juice"]
+    first = results[0]
+    assert first.artist == "Lizzo" and first.album == "Cuz I Love You"
+    assert first.art_url == "https://is1.mzstatic.com/image/400x400bb.jpg"  # upscaled
+    assert first.apple_url.endswith("i=2")
+    assert first.key is None and first.shazam_url is None
+    assert songid.build_itunes_results({}) == []
+    assert songid.build_itunes_results(None) == []
+
+
+def test_itunes_result_dedups_with_a_shazam_match_on_title_artist():
+    # A manually-picked Apple result and a Shazam auto-match of the same track
+    # collapse onto one song row (both key-less Apple picks use title+artist).
+    itunes = songid.build_itunes_results(
+        {"results": [{"trackName": "Blinding Lights", "artistName": "The Weeknd"}]})[0]
+    manual = songid.SongMatch(key=None, title="blinding lights", artist="the weeknd")
+    assert songid.dedup_key(itunes) == songid.dedup_key(manual)
+
+
 def test_dedup_key_prefers_shazam_key_else_normalizes_title_artist():
     with_key = songid.SongMatch(key="40522491", title="Blinding Lights", artist="The Weeknd")
     assert songid.dedup_key(with_key) == "shazam:40522491"

@@ -4,3 +4,4 @@ fastapi>=0.110
 anyio>=4                  # imported directly by server/api.py (thread offloads)
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9   # multipart/form-data parsing for the export upload
+httpx2>=0.1               # starlette TestClient backend, so tests/test_api_http.py runs in the image

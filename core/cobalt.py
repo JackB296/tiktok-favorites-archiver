@@ -50,7 +50,10 @@ def parse_response(data):
             return _result("slideshow", images=images, audio=data.get("audio"), status=status)
         return _result("unsupported", error="picker contains unsupported media", status=status)
     if status == "error":
-        return _result("error", error=data.get("error"), status=status)
+        error = data.get("error")
+        if isinstance(error, dict):  # modern Cobalt: {"error": {"code": "..."}}
+            error = error.get("code") or str(error)
+        return _result("error", error=error, status=status)
     return _result("unknown", error=f"unknown status: {status}", status=status)
 
 
@@ -129,6 +132,16 @@ def resolve(link, poster=None, limiter=None, max_retries=5, base_backoff=1.0, sl
                 return parse_response(resp.json())
             except Exception as e:
                 return _result("transient", error=f"bad JSON from Cobalt: {e}")
+        if 400 <= code < 500:
+            # Modern Cobalt reports definitive failures (post deleted, region
+            # blocked, unsupported) as 4xx with a JSON error body. Parse it so a
+            # gone post is classified 'error' instead of retried forever.
+            try:
+                data = resp.json()
+            except Exception:
+                data = None
+            if isinstance(data, dict) and data.get("status") == "error":
+                return parse_response(data)
         return _result("transient", error=f"HTTP {code}", status=str(code))
     return _result("transient", error="rate limited (max retries exceeded)")
 

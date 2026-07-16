@@ -157,7 +157,12 @@ def run_index(conn, download_dir, progress=None, wait=None, indexer=archive_inde
 
 
 def backfill_item(deps, download_dir, item):
-    """Re-resolve one item to recover raw slideshow assets (does not change status)."""
+    """Re-resolve one item to recover raw slideshow assets (does not change status).
+
+    Returns None for a transient failure (e.g. rate limited out of retries): the
+    row is left untouched — including any kind learned on an earlier pass — so
+    the item is retried on the next run.
+    """
     result = deps.resolve(item["link"])
     kind = result.kind
     if kind == "video":
@@ -176,6 +181,8 @@ def backfill_item(deps, download_dir, item):
         return outcome
     if kind == "error":
         return {"kind": "unresolved", "has_assets": 0}
+    if kind == "transient":
+        return None
     return {"kind": "unknown", "has_assets": 0}
 
 
@@ -206,17 +213,32 @@ def run_backfill(conn, download_dir, deps=None, concurrency=None, progress=None,
         eff_concurrency = int(concurrency or (rs["concurrency"] if rs else config.CONCURRENCY) or config.CONCURRENCY)
         items = items_needing_backfill(conn)
 
+    total = len(items)
+    tally = {"completed": 0, "recovered": 0}
+    control.progress({"event": "backfill", "completed": 0, "total": total, "recovered": 0})
+
     def handle(item):
         if not control.should_continue():
             return
         try:
             outcome = backfill_item(deps, download_dir, item)
-        except Exception as error:
+        except Exception:
+            # Leave the row untouched (a transient crash must not clobber a
+            # learned kind); the item stays selected for the next run.
             logging.exception("Asset backfill failed for item %s", item["id"])
-            outcome = {"kind": "unknown", "has_assets": 0, "error": _errstr(error)}
+            outcome = None
         with control.db_lock:
-            store.record_asset_recovery(conn, item["id"], outcome)
-        control.progress({"id": item["id"], **outcome})
+            if outcome is not None:
+                store.record_asset_recovery(conn, item["id"], outcome)
+            tally["completed"] += 1
+            if outcome and outcome.get("has_assets"):
+                tally["recovered"] += 1
+            event = {"event": "backfill", "id": item["id"],
+                     "kind": outcome["kind"] if outcome else "transient",
+                     "has_assets": outcome.get("has_assets", 0) if outcome else 0,
+                     "completed": tally["completed"], "total": total,
+                     "recovered": tally["recovered"]}
+        control.progress(event)
 
     runs.drive(items, eff_concurrency, control, handle)
 
@@ -277,6 +299,9 @@ def run_cli(argv=None):
 def run_backfill_cli(argv=None):
     """`python -m core backfill` — recover raw slideshow assets for past favorites."""
     def progress(event):
+        if event.get("id") is None:
+            logging.info(f"backfill: {event.get('total', 0)} favorites to check")
+            return
         logging.info(f"[{event['id']}] backfill: kind={event.get('kind')} assets={event.get('has_assets')}")
 
     _cli("backfill", "Recover raw slideshow images+audio for already-downloaded favorites.",

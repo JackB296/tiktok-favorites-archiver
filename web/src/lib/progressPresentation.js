@@ -11,6 +11,9 @@ export function progressLabel(event) {
     const errors = event.errors ? ` · ${event.errors} errors` : "";
     return `Songs ${event.completed || 0}/${event.total || 0} · ${event.identified || 0} identified${errors}`;
   }
+  if (event.event === "backfill") {
+    return `Assets ${event.completed || 0}/${event.total || 0} · ${event.recovered || 0} recovered`;
+  }
   if (event.event === "verify") return `Verifying ${event.completed || 0}/${event.total || 0}`;
   return null;
 }

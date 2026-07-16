@@ -16,6 +16,11 @@ import tempfile
 from core import config, layout, media_index, runs, songid, store
 from core.cobalt import RateLimiter
 
+# A run of consecutive failures means Shazam is throttling or unreachable, not
+# that these particular items are bad. Stop the run instead of recording an
+# error on every remaining item; the failed ones stay retryable for a re-run.
+MAX_CONSECUTIVE_ERRORS = 10
+
 
 def _identify_one(download_dir, item_id, identifier, source, extractor):
     """Cut a temp clip for one item and identify it; SongMatch or None.
@@ -46,7 +51,7 @@ def identify_items(conn, download_dir, identifier=None, source=None, extractor=N
         limiter = RateLimiter(config.SONG_ID_RATE_MAX_CALLS, config.SONG_ID_RATE_PERIOD)
 
     items = store.items_needing_identification(conn, retry_no_match=retry_no_match)
-    identified = no_match = errors = 0
+    identified = no_match = errors = consecutive_errors = 0
     total = len(items)
     if progress:
         progress({"event": "identification", "completed": 0, "total": total,
@@ -71,14 +76,27 @@ def identify_items(conn, download_dir, identifier=None, source=None, extractor=N
             else:
                 store.set_item_song_no_match(conn, item_id)
                 no_match += 1
+            consecutive_errors = 0
         except Exception as e:  # keep the run going; the item stays retryable
             logging.warning(f"song identification failed for item {item_id}: {e}")
             store.set_item_song_error(conn, item_id, str(e))
             errors += 1
+            consecutive_errors += 1
         if progress:
             progress({"event": "identification", "id": item_id, "title": title,
                       "completed": completed, "total": total,
                       "identified": identified, "no_match": no_match, "errors": errors})
+        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+            logging.warning(
+                f"stopping identification after {consecutive_errors} consecutive failures "
+                "(Shazam is likely throttling); re-run later to retry"
+            )
+            if progress:
+                progress({"event": "error",
+                          "error": f"Song identification halted after {consecutive_errors} "
+                                   "failures in a row — Shazam is likely throttling. "
+                                   "The failed favorites stay retryable; run it again later."})
+            break
     return identified
 
 

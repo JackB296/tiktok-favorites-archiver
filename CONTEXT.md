@@ -14,10 +14,12 @@ classification, lifecycle state, metadata, and recovered slideshow assets.
 ## Archive run
 
 One user-directed pass over Archive items. A Sync run downloads pending or
-failed Favorites; an Asset backfill run recovers slideshow assets for archived
+failed Favorites, then automatically chains its incremental follow-up phases:
+Gallery indexing, metadata enrichment, and (when opted in) song
+identification. An Asset backfill run recovers slideshow assets for archived
 Favorites; further run kinds rebuild the Gallery index, fetch oEmbed metadata,
-identify songs, and write media-server sidecars. A run can be running, paused,
-stopping, stopped, idle, or failed.
+identify songs, and write media-server sidecars on their own. A run can be
+running, paused, stopping, stopped, idle, or failed.
 
 ## Archive media
 

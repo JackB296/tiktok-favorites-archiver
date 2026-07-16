@@ -321,6 +321,118 @@ def test_run_when_idle_is_serialized_with_background_job_start():
         release.set()
 
 
+def _seed_followup_work(dbp, song_id_enabled):
+    """One finished favorite that still needs enrichment and identification."""
+    conn = store.connect(dbp)
+    try:
+        store.insert_item(conn, 1, "https://x/1", status="done")  # caption None, song None
+        store.set_library_settings(conn, song_id_enabled=song_id_enabled)
+    finally:
+        conn.close()
+
+
+def _recording_runners(calls, kinds=("sync", "enrich", "identify")):
+    def make(kind):
+        def runner(conn, download_dir, control=None):
+            calls.append(kind)
+        return runner
+    return {kind: make(kind) for kind in kinds}
+
+
+def _run_history_kinds(dbp):
+    conn = store.connect(dbp)
+    try:
+        return [entry["kind"] for entry in store.list_run_history(conn, 10)]
+    finally:
+        conn.close()
+
+
+def test_sync_chains_enrichment_and_identification_when_opted_in():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+        _seed_followup_work(dbp, song_id_enabled=True)
+
+        calls = []
+        jm = jobs.JobManager(dbp, d, runners=_recording_runners(calls))
+        q = jm.subscribe()
+        assert jm.start("sync") is True
+        _drain_until_complete(q)
+
+        assert calls == ["sync", "enrich", "identify"]
+        assert _run_history_kinds(dbp) == ["identify", "enrich", "sync"]
+        assert _run_state(dbp) == "idle"
+
+
+def test_sync_chain_skips_identification_without_the_opt_in():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+        _seed_followup_work(dbp, song_id_enabled=False)
+
+        calls = []
+        jm = jobs.JobManager(dbp, d, runners=_recording_runners(calls))
+        q = jm.subscribe()
+        assert jm.start("sync") is True
+        _drain_until_complete(q)
+
+        assert calls == ["sync", "enrich"]
+
+
+def test_sync_chain_skips_followups_with_nothing_to_do():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+        # No items at all: enrich and identify have no work; only sync runs.
+        conn = store.connect(dbp)
+        store.set_library_settings(conn, song_id_enabled=True)
+        conn.close()
+
+        calls = []
+        jm = jobs.JobManager(dbp, d, runners=_recording_runners(calls))
+        q = jm.subscribe()
+        assert jm.start("sync") is True
+        _drain_until_complete(q)
+
+        assert calls == ["sync"]
+
+
+def test_stop_during_sync_halts_the_chain():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+        _seed_followup_work(dbp, song_id_enabled=True)
+
+        calls = []
+        runners = _recording_runners(calls)
+
+        def stopping_sync(conn, download_dir, control=None):
+            calls.append("sync")
+            store.set_active_run_state(conn, "stopping")  # the user pressed Stop
+
+        runners["sync"] = stopping_sync
+        jm = jobs.JobManager(dbp, d, runners=runners)
+        q = jm.subscribe()
+        assert jm.start("sync") is True
+        _drain_until_complete(q)
+
+        assert calls == ["sync"]
+        assert _run_state(dbp) == "stopped"
+
+
+def test_explicitly_started_followup_still_runs_alone():
+    with tempfile.TemporaryDirectory() as d:
+        dbp = os.path.join(d, "a.db")
+        store.init_db(store.connect(dbp)).close()
+        # No eligible work, but a direct start must still run its own stage.
+        calls = []
+        jm = jobs.JobManager(dbp, d, runners=_recording_runners(calls))
+        q = jm.subscribe()
+        assert jm.start("enrich") is True
+        _drain_until_complete(q)
+        assert calls == ["enrich"]
+
+
 def test_runner_failure_is_persisted_and_broadcast():
     with tempfile.TemporaryDirectory() as d:
         dbp = os.path.join(d, "a.db")

@@ -622,8 +622,9 @@ def items_needing_identification(conn, retry_no_match=False):
 
     NULL ``song_status`` = never attempted. ``'no_match'`` is remembered so a
     re-run does not re-hammer Shazam (unless ``retry_no_match``); ``'error'`` is
-    always retried. Confirmed-silent items (``has_audio = 0``) have no song to
-    find and are skipped.
+    always retried. Only confirmed audio-less items (``has_audio = 0``) are
+    skipped — NULL means the item was never indexed for audio (or was indexed
+    before audio detection existed), so it is still eligible.
     """
     skip = ["identified"]
     if not retry_no_match:
@@ -631,7 +632,7 @@ def items_needing_identification(conn, retry_no_match=False):
     placeholders = ",".join("?" for _ in skip)
     return conn.execute(
         "SELECT * FROM item WHERE status = 'done' AND offloaded = 0 AND archive_missing = 0 "
-        "AND has_audio = 1 "
+        "AND (has_audio = 1 OR has_audio IS NULL) "
         f"AND (song_status IS NULL OR song_status NOT IN ({placeholders})) "
         "ORDER BY id",
         tuple(skip),
