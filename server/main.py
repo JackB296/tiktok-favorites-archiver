@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core import config, layout, store
+from core import config, layout, scheduler, store
 from server import spa
 from server.api import router
 from server.jobs import JobManager
@@ -50,6 +50,15 @@ def create_app(db_path=None, download_dir=None, jobs=None):
     app.state.db_path = db_path
     app.state.download_dir = download_dir
     app.state.jobs = jobs if jobs is not None else JobManager(db_path, download_dir)
+    app.state.scheduler = scheduler.Scheduler(db_path, app.state.jobs)
+
+    @app.on_event("startup")
+    def start_scheduler():
+        app.state.scheduler.start()
+
+    @app.on_event("shutdown")
+    def stop_scheduler():
+        app.state.scheduler.stop()
 
     app.include_router(router)
 

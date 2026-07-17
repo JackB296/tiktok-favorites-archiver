@@ -31,8 +31,14 @@ class RunControl:
     def __init__(self, conn, progress=None, wait=None):
         self._conn = conn
         self._progress = progress
+        self._run_id = None
+        self._kind = None
         self._wait = wait if wait is not None else (lambda: time.sleep(0.1))
         self.db_lock = threading.Lock()
+
+    def bind(self, run_id, kind):
+        self._run_id = run_id
+        self._kind = kind
 
     def state(self):
         with self.db_lock:
@@ -49,7 +55,18 @@ class RunControl:
 
     def progress(self, event):
         if self._progress:
-            self._progress(event)
+            normalized = dict(event)
+            if "kind" in normalized:
+                normalized["item_kind"] = normalized.pop("kind")
+            normalized = {
+                "run_id": self._run_id,
+                "kind": self._kind,
+                "phase": self._kind,
+                "completed": normalized.get("completed"),
+                "total": normalized.get("total"),
+                **normalized,
+            }
+            self._progress(normalized)
 
     def set_phase(self, phase):
         """Update only the phase: writing ``state`` here would overwrite a
@@ -109,7 +126,19 @@ def drive(items, concurrency, control, handle):
             f.result()
 
 
-def execute(conn, kind, worker, download_dir, progress=None, wait=None, **kwargs):
+def execute(
+    conn,
+    kind,
+    worker,
+    download_dir,
+    progress=None,
+    wait=None,
+    pipeline_id=None,
+    parent_kind=None,
+    phase_index=0,
+    retry_of=None,
+    **kwargs,
+):
     """Run one worker under a ``RunControl``; persist state and run history.
 
     Adopts an active control state written by ``begin`` rather than rewriting
@@ -122,12 +151,26 @@ def execute(conn, kind, worker, download_dir, progress=None, wait=None, **kwargs
         store.set_run_state(conn, phase=kind)  # adopt; preserve the control state
     else:
         store.set_run_state(conn, state="running", phase=kind)
-    history_id = store.start_run_history(conn, kind)
+    history_id = store.start_run_history(
+        conn, kind, retry_of=retry_of, params=kwargs,
+    )
+    store.set_run_history_context(
+        conn,
+        history_id,
+        pipeline_id,
+        parent_kind or kind,
+        kind,
+        phase_index,
+    )
+    control.bind(history_id, kind)
     try:
         result = worker(conn, download_dir, control=control, **kwargs)
-    except Exception:
+    except Exception as error:
         store.set_run_state(conn, state="failed", phase=kind)
-        store.finish_run_history(conn, history_id, "failed", store.counts_by_status(conn))
+        store.finish_run_history(
+            conn, history_id, "failed", store.counts_by_status(conn),
+            error=str(error),
+        )
         raise
 
     final = "stopped" if store.get_run_state(conn)["state"] in _HALT else "idle"

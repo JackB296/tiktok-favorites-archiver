@@ -51,6 +51,10 @@ def test_health_and_status_routes():
             body = client.get("/api/status").json()
             assert body["state"] == "idle" and body["running"] is False
             assert client.get("/api/run-history").json() == []
+            assert client.get("/api/incremental/stop-marker").status_code == 404
+            # The absent POST falls through to the SPA static mount, which
+            # correctly rejects unsupported methods with 405.
+            assert client.post("/api/incremental/import").status_code == 405
 
 
 def test_saved_list_trios_roundtrip_for_all_four_collections():
@@ -323,6 +327,129 @@ def _import_response(client, payload_bytes):
     )
 
 
+def test_storage_location_crud_health_and_conflicts():
+    if TestClient is None:
+        return
+    from core import store
+
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as mounted:
+        app, _jobs, db_path, _dl = _build(tmp)
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/storage-locations", json={"name": "NAS", "path": mounted},
+            )
+            assert created.status_code == 200, created.text
+            location = created.json()
+            assert location["available"] is True
+            assert client.get("/api/storage-locations").json()[0]["id"] == location["id"]
+
+            renamed = client.patch(
+                f"/api/storage-locations/{location['id']}", json={"name": "Archive NAS"},
+            )
+            assert renamed.status_code == 200
+            assert renamed.json()["name"] == "Archive NAS"
+            assert client.post(
+                f"/api/storage-locations/{location['id']}/check"
+            ).json()["available"] is True
+
+            conn = store.connect(db_path)
+            store.insert_item(conn, 1, "https://tiktok.com/1")
+            store.record_media_placement(
+                conn, 1, location["id"], "items/1", 1, "a" * 64, verified=True,
+            )
+            conn.close()
+            assert client.delete(
+                f"/api/storage-locations/{location['id']}"
+            ).status_code == 409
+
+            assert client.post(
+                "/api/storage-locations", json={"name": "Bad", "path": _dl},
+            ).status_code == 400
+            assert client.patch("/api/storage-locations/999", json={"name": "x"}).status_code == 404
+            assert client.delete("/api/storage-locations/999").status_code == 404
+
+
+def test_storage_transfer_preview_rejects_stale_plan_and_runs_copy():
+    if TestClient is None:
+        return
+    from core import storage, store
+
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as mounted:
+        app, jobs, db_path, downloads = _build(
+            tmp, runners={"storage-copy": storage.run_copy},
+        )
+        conn = store.connect(db_path)
+        location = storage.create_location(conn, "NAS", mounted, downloads, db_path)
+        store.insert_item(conn, 1, "https://tiktok.com/1", status="done")
+        conn.close()
+        movie = os.path.join(downloads, "1.mp4")
+        with open(movie, "wb") as target:
+            target.write(b"first")
+
+        with TestClient(app) as client:
+            first = client.post("/api/storage-transfers/preview", json={
+                "action": "copy", "location_id": location["id"], "ids": [1],
+            })
+            assert first.status_code == 200, first.text
+            with open(movie, "wb") as target:
+                target.write(b"changed after preview")
+            stale = client.post(
+                "/api/storage-transfers", json={"plan_id": first.json()["plan_id"]},
+            )
+            assert stale.status_code == 409
+
+            preview = client.post("/api/storage-transfers/preview", json={
+                "action": "copy", "location_id": location["id"], "ids": [1],
+            }).json()
+            started = client.post(
+                "/api/storage-transfers", json={"plan_id": preview["plan_id"]},
+            )
+            assert started.status_code == 200, started.text
+            jobs._thread.join(3)
+            status = client.get(
+                f"/api/storage-transfers/{started.json()['id']}"
+            ).json()
+            assert status["action"] == "copy"
+
+        copied = os.path.join(mounted, "items", "1", "1.mp4")
+        assert open(copied, "rb").read() == b"changed after preview"
+
+
+def test_snapshot_create_list_validate_and_metadata_download():
+    if TestClient is None:
+        return
+    import io
+    import zipfile
+    from core import snapshots, storage, store
+
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as mounted:
+        app, jobs, db_path, downloads = _build(
+            tmp, runners={"snapshot": snapshots.run_create},
+        )
+        conn = store.connect(db_path)
+        location = storage.create_location(conn, "NAS", mounted, downloads, db_path)
+        store.insert_item(conn, 1, "https://tiktok.com/1")
+        conn.close()
+
+        with TestClient(app) as client:
+            started = client.post("/api/snapshots", json={
+                "location_id": location["id"], "name": "portable", "mode": "metadata",
+            })
+            assert started.status_code == 200, started.text
+            jobs._thread.join(3)
+            resources = client.get("/api/snapshots").json()
+            assert len(resources) == 1 and resources[0]["state"] == "complete"
+            snapshot_id = resources[0]["id"]
+            assert client.post(f"/api/snapshots/{snapshot_id}/validate").json()["valid"] is True
+            downloaded = client.get(f"/api/snapshots/{snapshot_id}/download")
+            assert downloaded.status_code == 200
+            with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+                names = archive.namelist()
+                assert "snapshot.json" in names
+                assert "database/archive.db" in names
+                assert all(not name.startswith("/") and ".." not in name.split("/") for name in names)
+
+
 def test_import_upload_end_to_end():
     """First multipart coverage: a valid export imports; unusable ones 400
     (malformed JSON used to silently succeed with zero favorites, and a
@@ -351,6 +478,47 @@ def test_import_upload_end_to_end():
             assert wrong_shape.status_code == 400  # was an AttributeError 500
 
 
+def test_spotify_routes_cover_status_connect_and_guards():
+    if TestClient is None:
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, _db, _dl = _build(tmp)
+        with TestClient(app) as client:
+            status = client.get("/api/spotify/status").json()
+            assert status["connected"] is False
+            assert status["redirect_uri"].endswith("/api/spotify/callback")
+
+            # No client id anywhere yet: a clear 400, not a broken authorize URL.
+            missing = client.post("/api/spotify/connect", json={})
+            assert missing.status_code == 400
+
+            ok = client.post("/api/spotify/connect", json={"client_id": "cid123"}).json()
+            assert "accounts.spotify.com/authorize" in ok["authorize_url"]
+            assert "code_challenge=" in ok["authorize_url"]
+            assert client.get("/api/spotify/status").json()["client_id"] == "cid123"
+
+            # A stale/forged callback never exchanges; it bounces to Music with an error.
+            stale = client.get("/api/spotify/callback?code=x&state=wrong", follow_redirects=False)
+            assert stale.status_code == 303
+            assert "spotify_error" in stale.headers["location"]
+
+            # Pushing without a connected account is a clear 400.
+            created = client.post("/api/song-playlists", json={"name": "P", "song_ids": [1]})
+            assert created.status_code == 200, created.text
+            push = client.post(f"/api/song-playlists/{created.json()['id']}/push")
+            assert push.status_code == 400
+            assert "not connected" in push.json()["detail"]
+
+            # A missing playlist is its own clear 400.
+            gone = client.post("/api/song-playlists/9999/push")
+            assert gone.status_code == 400
+            assert "no longer exists" in gone.json()["detail"]
+
+            disconnected = client.post("/api/spotify/disconnect").json()
+            assert disconnected == {"connected": False}
+
+
 def test_verify_and_library_stats_routes():
     if TestClient is None:
         return
@@ -369,6 +537,91 @@ def test_verify_and_library_stats_routes():
 
             requeued = client.post("/api/verify/requeue").json()
             assert requeued == {"requeued": 1}
+
+
+def test_stats_route_returns_the_aggregate_payload():
+    if TestClient is None:
+        return
+    from core import store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, db_path, _dl = _build(tmp)
+        conn = store.connect(db_path)
+        store.insert_item(conn, 1, "https://tiktok.com/a",
+                          favorited_at="2023-05-01 10:00:00", kind="video", status="done")
+        conn.close()
+
+        with TestClient(app) as client:
+            payload = client.get("/api/stats").json()
+            assert payload["hero"]["total"] == 1
+            assert payload["growth"]["monthly"] == [{"month": "2023-05", "count": 1}]
+            assert set(payload) == {"hero", "growth", "watcher", "top", "health"}
+
+
+def test_smart_collections_pipeline_schedules_and_discovery_routes():
+    if TestClient is None:
+        return
+    from core import store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, db_path, _dl = _build(tmp)
+        conn = store.connect(db_path)
+        for item_id, caption, author in (
+            (1, "#Cats first", "@Alice"),
+            (2, "#Dogs", "@Bob"),
+            (3, "#cats newest", "@Alice"),
+        ):
+            store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
+            store.set_metadata(conn, item_id, caption, author)
+        conn.close()
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/gallery-presets",
+                json={"name": "Cats", "filters": {"search": "cats", "order": "archive"}},
+            ).json()
+            preset = created["id"]
+            assert client.get(f"/api/gallery-presets/{preset}/summary").json()["count"] == 2
+            page = client.get(f"/api/gallery-presets/{preset}/items").json()
+            assert [item["id"] for item in page["items"]] == [1, 3]
+            assert client.get(f"/api/gallery-presets/{preset}/inventory").text.startswith("id,")
+            preview = client.post(
+                f"/api/gallery-presets/{preset}/mark",
+                json={"action": "ignore", "dry_run": True},
+            ).json()
+            assert preview == {"matched": 2, "changed": 0, "dry_run": True}
+
+            catalog = client.get("/api/run-catalog").json()
+            assert any(entry["kind"] == "discovery-backfill" for entry in catalog)
+            assert client.get("/api/pipeline-settings").json()["phases"] == ["sync", "enrich", "identify"]
+            changed = client.put(
+                "/api/pipeline-settings",
+                json={"phases": ["sync", "identify", "enrich"]},
+            )
+            assert changed.status_code == 200
+            assert changed.json()["phases"] == ["sync", "identify", "enrich"]
+            assert client.put(
+                "/api/pipeline-settings", json={"phases": ["enrich", "sync"]},
+            ).status_code == 400
+
+            schedule = client.post("/api/run-schedules", json={
+                "name": "Nightly", "run_kind": "sync", "cadence": "daily",
+                "local_time": "02:00", "weekday": None,
+                "timezone": "America/New_York", "enabled": True,
+            })
+            assert schedule.status_code == 200, schedule.text
+            schedule_id = schedule.json()["id"]
+            assert client.patch(
+                f"/api/run-schedules/{schedule_id}", json={"enabled": False},
+            ).json()["enabled"] is False
+            assert len(client.get("/api/run-schedules").json()) == 1
+            assert client.delete(f"/api/run-schedules/{schedule_id}").json() == {"ok": True}
+
+            creators = client.get("/api/creators", params={"q": "ali"}).json()
+            assert creators["items"][0]["key"] == "alice"
+            hashtags = client.get("/api/hashtags", params={"q": "#cat"}).json()
+            assert hashtags["items"][0]["count"] == 2
+            exact = client.get("/api/feed/ids", params={"creator": "alice"}).json()
+            assert exact == [3, 1]
 
 
 if __name__ == "__main__":

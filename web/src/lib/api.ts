@@ -1,4 +1,4 @@
-import type { Item, ItemPage, RunStatus, ImportResult, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist } from "./types";
+import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -36,6 +36,10 @@ export const api = {
 
   suggest: (q: string) => json<SearchSuggestions>(`/api/suggest?q=${encodeURIComponent(q)}`),
 
+  stats: () => json<Stats>("/api/stats"),
+  creators: (q = "", order = "frequency", cursor = 0) => json<DiscoveryPage>(`/api/creators?q=${encodeURIComponent(q)}&order=${encodeURIComponent(order)}&cursor=${cursor}`),
+  hashtags: (q = "", order = "frequency", cursor = 0) => json<DiscoveryPage>(`/api/hashtags?q=${encodeURIComponent(q)}&order=${encodeURIComponent(order)}&cursor=${cursor}`),
+
   feedIds: (params: URLSearchParams | string) => json<number[]>(`/api/feed/ids?${params}`),
 
   galleryPresets: () => json<GalleryPreset[]>("/api/gallery-presets"),
@@ -45,6 +49,14 @@ export const api = {
     body: JSON.stringify({ name, filters }),
   }),
   deleteGalleryPreset: (id: number) => json<{ ok: boolean }>(`/api/gallery-presets/${id}`, { method: "DELETE" }),
+  smartCollectionSummary: (id: number) => json<SmartCollectionSummary>(`/api/gallery-presets/${id}/summary`),
+  smartCollectionFeedIds: (id: number) => json<{ item_ids: number[] }>(`/api/gallery-presets/${id}/items?feed=true`),
+  smartCollectionMark: (id: number, action: MarkAction, dryRun = false) => json<MarkResult>(`/api/gallery-presets/${id}/mark`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, dry_run: dryRun }),
+  }),
+  smartCollectionInventoryUrl: (id: number) => `/api/gallery-presets/${id}/inventory`,
   galleryTermLists: () => json<GalleryTermList[]>("/api/gallery-term-lists"),
   createGalleryTermList: (name: string, mode: "include" | "exclude", terms: string[]) => json<GalleryTermList>("/api/gallery-term-lists", {
     method: "POST",
@@ -60,7 +72,7 @@ export const api = {
   }),
   deletePlaybackQueue: (id: number) => json<{ ok: boolean }>(`/api/playback-queues/${id}`, { method: "DELETE" }),
 
-  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "audio_missing" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; min_attempts?: number; max_attempts?: number; recovery?: boolean; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; audio?: "with" | "without"; offloaded?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string } = {}) => {
+  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "audio_missing" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; min_attempts?: number; max_attempts?: number; recovery?: boolean; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; audio?: "with" | "without"; offloaded?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string; creator?: string; hashtag?: string } = {}) => {
     const p = new URLSearchParams();
     if (q.search) p.set("search", q.search);
     if (q.kind) p.set("kind", q.kind);
@@ -91,6 +103,8 @@ export const api = {
     if (q.index_state) p.set("index_state", q.index_state);
     if (q.include) p.set("include", q.include);
     if (q.exclude) p.set("exclude", q.exclude);
+    if (q.creator) p.set("creator", q.creator);
+    if (q.hashtag) p.set("hashtag", q.hashtag);
     return json<ItemPage>(`/api/items/page?${p}`);
   },
 
@@ -122,6 +136,23 @@ export const api = {
 
   status: () => json<RunStatus>("/api/status"),
   runHistory: () => json<RunHistoryEntry[]>("/api/run-history"),
+  runCatalog: () => json<RunCatalogEntry[]>("/api/run-catalog"),
+  pipelineSettings: () => json<PipelineSettings>("/api/pipeline-settings"),
+  updatePipelineSettings: (phases: string[]) => json<PipelineSettings>("/api/pipeline-settings", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phases }),
+  }),
+  retryRun: (id: number) => json<{ started: boolean; retry_of: number }>(`/api/run-history/${id}/retry`, { method: "POST" }),
+  runSchedules: () => json<RunSchedule[]>("/api/run-schedules"),
+  createRunSchedule: (schedule: Omit<RunSchedule, "id" | "next_due_at" | "last_local_date" | "last_started_at" | "last_outcome">) => json<RunSchedule>("/api/run-schedules", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(schedule),
+  }),
+  updateRunSchedule: (id: number, schedule: Partial<RunSchedule>) => json<RunSchedule>(`/api/run-schedules/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(schedule),
+  }),
+  deleteRunSchedule: (id: number) => json<{ ok: boolean }>(`/api/run-schedules/${id}`, { method: "DELETE" }),
 
   verify: () => json<VerifyReport>("/api/verify"),
   requeueMissing: () => json<{ requeued: number }>("/api/verify/requeue", { method: "POST" }),
@@ -169,6 +200,47 @@ export const api = {
     body.append("file", file);
     return json<ImportResult>("/api/import", { method: "POST", body });
   },
+
+  storageLocations: () => json<StorageLocation[]>("/api/storage-locations"),
+  createStorageLocation: (name: string, path: string) => json<StorageLocation>("/api/storage-locations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, path }),
+  }),
+  updateStorageLocation: (id: number, changes: { name?: string; path?: string }) => json<StorageLocation>(`/api/storage-locations/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(changes),
+  }),
+  checkStorageLocation: (id: number) => json<StorageLocation>(`/api/storage-locations/${id}/check`, { method: "POST" }),
+  deleteStorageLocation: (id: number) => json<{ ok: boolean }>(`/api/storage-locations/${id}`, { method: "DELETE" }),
+  previewStorageTransfer: (action: "copy" | "move" | "restore", locationId: number, ids: number[]) =>
+    json<StorageTransferPreview>("/api/storage-transfers/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, location_id: locationId, ids }),
+    }),
+  startStorageTransfer: (planId: string, confirmation?: string) =>
+    json<{ started: boolean; id: string }>("/api/storage-transfers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan_id: planId, ...(confirmation ? { confirmation } : {}) }),
+    }),
+  snapshots: () => json<SnapshotResource[]>("/api/snapshots"),
+  createSnapshot: (locationId: number, name: string, mode: "metadata" | "complete") =>
+    json<{ started: boolean }>("/api/snapshots", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ location_id: locationId, name, mode }) }),
+  validateSnapshot: (id: string) => json<{ valid: boolean }>(`/api/snapshots/${encodeURIComponent(id)}/validate`, { method: "POST" }),
+  previewSnapshotRestore: (id: string) => json<SnapshotRestorePlan>("/api/snapshot-restore/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ snapshot_id: id }) }),
+  startSnapshotRestore: (planId: string, confirmation?: string) => json<{ started: boolean }>("/api/snapshot-restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan_id: planId, confirmation }) }),
+
+  spotifyStatus: () => json<SpotifyStatus>("/api/spotify/status"),
+  spotifyConnect: (clientId: string) => json<{ authorize_url: string }>("/api/spotify/connect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId }),
+  }),
+  spotifyDisconnect: () => json<{ connected: boolean }>("/api/spotify/disconnect", { method: "POST" }),
+  pushSongPlaylist: (playlistId: number) => json<SpotifyPushReport>(`/api/song-playlists/${playlistId}/push`, { method: "POST" }),
 
   legacyBootstrapPreview: (oldExport: File, currentExport: File, checkpoint: File, segments?: LegacyMappingSegment[]) => {
     const body = new FormData();

@@ -286,6 +286,7 @@ def test_start_fails_fast_while_exclusive_maintenance_holds_the_lock():
             release.set()
             worker.join(3)
         assert jm.start("sync") is True             # and works once free
+        jm._thread.join(3)                          # finish before temp DB cleanup
 
 
 def test_unknown_runner_returns_false():
@@ -446,8 +447,23 @@ def test_runner_failure_is_persisted_and_broadcast():
         assert jm.start("sync") is True
 
         events = _drain_until_complete(q)
-        assert events[0] == {"event": "error", "error": "resolver crashed"}
-        assert events[-1] == {"event": "complete"}
+        assert events[0] == {
+            "event": "error",
+            "error": "resolver crashed",
+            "run_id": None,
+            "kind": "sync",
+            "phase": None,
+            "completed": None,
+            "total": None,
+        }
+        assert events[-1] == {
+            "event": "complete",
+            "run_id": None,
+            "kind": "sync",
+            "phase": None,
+            "completed": None,
+            "total": None,
+        }
         assert jm.status()["state"] == "failed"
         assert jm.status()["phase"] == "sync"
 

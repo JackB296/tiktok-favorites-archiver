@@ -16,7 +16,7 @@ import {
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { MarkAction } from "../lib/api";
-import type { GalleryPreset, GalleryTermList, Item, PlaybackQueue, SearchSuggestions } from "../lib/types";
+import type { GalleryPreset, GalleryTermList, Item, PlaybackQueue, SearchSuggestions, SmartCollectionSummary } from "../lib/types";
 import { Button, ConfirmDialog, Dialog, EmptyState, HelpLabel, Skeleton, cx } from "../components/ui";
 import { VirtualGalleryGrid } from "../components/VirtualGalleryGrid";
 import { canLoadNextPage, autoFillColumns, readGallerySize, shouldLoadMore } from "../lib/virtualGrid";
@@ -32,6 +32,7 @@ import { activeChips, filtersKey, filtersToMarkSelector, filtersToPageQuery, fil
 import type { GalleryOrder } from "../lib/galleryFilters";
 import { useGalleryFilters } from "../lib/useGalleryFilters";
 import { useSavedList } from "../lib/useSavedList";
+import { smartCollectionConfirmation } from "../lib/smartCollectionPresentation";
 
 const FILTERS = [
   { key: "", label: "All", help: "Show every favorite that matches the search and advanced filters." },
@@ -75,6 +76,8 @@ export function Gallery() {
   const [advanced, setAdvanced] = useState(false);
   const [recoveryInboxBusy, setRecoveryInboxBusy] = useState(false);
   const [recoveryInboxMessage, setRecoveryInboxMessage] = useState<string | null>(null);
+  const [smartSummary, setSmartSummary] = useState<SmartCollectionSummary | null>(null);
+  const [smartBusy, setSmartBusy] = useState(false);
   const {
     items: presets, selectedId: selectedPresetId, setSelectedId: setSelectedPresetId,
     name: presetName, setName: setPresetName, message: presetMessage, setMessage: setPresetMessage,
@@ -146,6 +149,59 @@ export function Gallery() {
     emptyMessage: "No favorites match the current filters.",
     cancelMessage: "Cancelled.",
   });
+
+  useEffect(() => {
+    const presetId = Number(selectedPresetId);
+    if (!presetId) {
+      setSmartSummary(null);
+      return;
+    }
+    let alive = true;
+    api.smartCollectionSummary(presetId)
+      .then((summary) => { if (alive) setSmartSummary(summary); })
+      .catch((error) => { if (alive) setPresetMessage((error as Error).message); });
+    return () => { alive = false; };
+  }, [selectedPresetId, setPresetMessage]);
+
+  async function playSmartCollection() {
+    const presetId = Number(selectedPresetId);
+    if (!presetId) return;
+    setSmartBusy(true);
+    try {
+      const summary = await api.smartCollectionSummary(presetId);
+      if (!summary.first_item_id) {
+        setPresetMessage("This Smart collection is empty.");
+        return;
+      }
+      navigate(`/?preset=${presetId}&item=${summary.first_item_id}`);
+    } catch (error) {
+      setPresetMessage((error as Error).message);
+    } finally {
+      setSmartBusy(false);
+    }
+  }
+
+  async function markSmartCollection(action: "offload" | "ignore") {
+    const presetId = Number(selectedPresetId);
+    if (!presetId) return;
+    setSmartBusy(true);
+    try {
+      const preview = await api.smartCollectionMark(presetId, action, true);
+      if (!preview.matched) {
+        setPresetMessage("This Smart collection is empty.");
+        return;
+      }
+      if (!window.confirm(smartCollectionConfirmation(action, preview.matched))) return;
+      const result = await api.smartCollectionMark(presetId, action);
+      setPresetMessage(`${result.changed} favorite${result.changed === 1 ? "" : "s"} updated.`);
+      setSmartSummary(await api.smartCollectionSummary(presetId));
+      setReloadNonce((value) => value + 1);
+    } catch (error) {
+      setPresetMessage((error as Error).message);
+    } finally {
+      setSmartBusy(false);
+    }
+  }
 
   // Restore scroll position when returning to a cached Gallery view via Back. Retry
   // across a few frames so the virtual grid has time to compute its full height.
@@ -590,6 +646,7 @@ export function Gallery() {
         <Button variant="ghost" size="xs" onClick={savePlaybackQueue} disabled={!selectedIds.size || !playbackQueueName.trim() || recoveryBusy}><BookmarkSimple size={14} /> Save queue</Button>
         <Button variant="ghost" size="xs" onClick={() => markSelected(allSelectedOffloaded ? "unoffload" : "offload")} disabled={!selectedIds.size || recoveryBusy} title="Offloaded favorites are archived on external storage, so Sync and integrity checks stop flagging them as missing.">{allSelectedOffloaded ? "Unmark offloaded" : "Mark offloaded"}</Button>
         <Button variant="ghost" size="xs" onClick={() => markSelected(allSelectedIgnored ? "unignore" : "ignore")} disabled={!selectedIds.size || recoveryBusy} title="Ignored favorites keep their place in the archive but Sync never downloads them.">{allSelectedIgnored ? "Allow downloading" : "Don't download"}</Button>
+        <Button variant="ghost" size="xs" onClick={() => navigate(`/storage?ids=${Array.from(selectedIds).join(",")}`)} disabled={!selectedIds.size || recoveryBusy}>Storage…</Button>
         <Button size="xs" onClick={requeueSelected} disabled={!selectedIds.size || recoveryBusy}>{recoveryBusy ? "Queuing…" : "Queue selected for Sync"}</Button>
         <span className="text-xs text-ink-faint">Only failed favorites and finished favorites missing their file will be queued.</span>
         {recoveryMessage && <span className="w-full text-xs text-ink-dim">{recoveryMessage}</span>}
@@ -619,6 +676,14 @@ export function Gallery() {
             {selectedPresetId && <Button variant="danger" size="sm" onClick={() => void deletePreset()}><Trash size={15} /> Delete</Button>}
             {presetMessage && <span className="text-xs text-ink-faint">{presetMessage}</span>}
           </div>
+          {selectedPresetId && <div className="mt-3 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border border-line bg-elevated px-3 py-2">
+            <span className="mr-auto text-xs text-ink-dim"><strong className="text-ink">{smartSummary?.count ?? "…"}</strong> current favorite{smartSummary?.count === 1 ? "" : "s"} · live Smart collection</span>
+            <Button variant="ghost" size="xs" onClick={() => { const preset = presets.find((item) => item.id === Number(selectedPresetId)); if (preset) filters.applyPreset(preset.filters); }} disabled={smartBusy}>Open</Button>
+            <Button variant="ghost" size="xs" onClick={() => void playSmartCollection()} disabled={smartBusy || smartSummary?.count === 0}><Play size={14} weight="fill" /> Play</Button>
+            <a href={api.smartCollectionInventoryUrl(Number(selectedPresetId))} className="rounded px-2 py-1 text-xs font-medium text-ink-dim hover:text-ink">CSV</a>
+            <Button variant="ghost" size="xs" onClick={() => void markSmartCollection("offload")} disabled={smartBusy}>Mark offloaded</Button>
+            <Button variant="ghost" size="xs" onClick={() => void markSmartCollection("ignore")} disabled={smartBusy}>Ignore</Button>
+          </div>}
         </div>
         <div className="border-t border-line pt-3">
           <p className="text-xs font-semibold text-ink">Creator &amp; tag lists</p>

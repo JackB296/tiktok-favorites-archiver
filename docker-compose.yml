@@ -50,3 +50,6 @@ services:
       - ./downloads:/app/downloads
       # SQLite state (kept off the media folder).
       - ./appdata:/app/data
+      # Optional managed Storage/NAS mount. Mount it on the host first, remove
+      # the leading "#", then register /mnt/archive-storage in the Storage tab.
+      # - /mnt/archive-storage:/mnt/archive-storage

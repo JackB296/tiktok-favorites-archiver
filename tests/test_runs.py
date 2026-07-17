@@ -87,6 +87,47 @@ def test_execute_owns_the_run_history_row():
     assert history[0]["finished_at"] is not None
 
 
+def test_progress_events_carry_canonical_run_context_without_losing_item_kind():
+    conn = _db()
+    events = []
+
+    def worker(_conn, _download_dir, control=None):
+        control.progress({"id": 7, "kind": "video", "status": "done"})
+
+    runs.execute(conn, "sync", worker, "/tmp/archive", progress=events.append)
+
+    assert events == [{
+        "run_id": 1,
+        "kind": "sync",
+        "phase": "sync",
+        "completed": None,
+        "total": None,
+        "id": 7,
+        "item_kind": "video",
+        "status": "done",
+    }]
+
+
+def test_history_groups_phases_under_a_shared_parent_pipeline():
+    conn = _db()
+    for index, phase in enumerate(("sync", "enrich", "identify")):
+        runs.execute(
+            conn,
+            phase,
+            lambda *_args, **_kwargs: None,
+            "/tmp/archive",
+            pipeline_id="pipeline-1",
+            parent_kind="sync",
+            phase_index=index,
+        )
+
+    history = list(reversed(store.list_run_history(conn)))
+    assert [row["pipeline_id"] for row in history] == ["pipeline-1"] * 3
+    assert [row["parent_kind"] for row in history] == ["sync"] * 3
+    assert [row["phase"] for row in history] == ["sync", "enrich", "identify"]
+    assert [row["phase_index"] for row in history] == [0, 1, 2]
+
+
 def test_execute_history_outcome_matches_a_stop_and_a_failure():
     conn = _db()
 

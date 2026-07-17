@@ -24,6 +24,17 @@
   --warn: #fbbf24;
   --bad: #f87171;
 
+  /* Chart tokens (Stats tab). Marks must hold >= 3:1 on the surface, so the
+     mark color and the heatmap ramp are picked per theme and validated with
+     the dataviz palette checker — don't eyeball replacements. Ramp runs
+     low -> high. */
+  --chart-mark: var(--accent);
+  --chart-ramp-1: #8a3617;
+  --chart-ramp-2: #b04a1e;
+  --chart-ramp-3: #d95f2b;
+  --chart-ramp-4: #f28050;
+  --chart-ramp-5: #ffb894;
+
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -42,6 +53,13 @@
   --active: #0284c7;
   --warn: #d97706;
   --bad: #dc2626;
+
+  --chart-mark: var(--accent-strong);
+  --chart-ramp-1: #ff9e70;
+  --chart-ramp-2: #f4703c;
+  --chart-ramp-3: #d0501f;
+  --chart-ramp-4: #a63b12;
+  --chart-ramp-5: #7a2a0b;
 }
 
 @theme inline {

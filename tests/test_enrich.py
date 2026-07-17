@@ -68,7 +68,10 @@ def test_enrichment_job_reports_progress_and_stops_between_items():
     assert result == 1
     assert store.get_item(conn, 1)["caption"] == "first caption"
     assert store.get_item(conn, 2)["caption"] is None
-    assert events[0] == {"event": "enrichment", "completed": 0, "total": 2, "enriched": 0, "unavailable": 0}
+    assert {
+        key: events[0][key]
+        for key in ("event", "completed", "total", "enriched", "unavailable")
+    } == {"event": "enrichment", "completed": 0, "total": 2, "enriched": 0, "unavailable": 0}
     assert events[-1]["event"] == "enrichment"
     assert events[-1]["completed"] == 1
     assert events[-1]["enriched"] == 1

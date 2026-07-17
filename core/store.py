@@ -13,6 +13,8 @@ import re
 import sqlite3
 from datetime import datetime
 
+from core import migrations
+
 # Lifecycle vocabularies — kept as data (not DB-enforced) so they can evolve.
 ITEM_STATUSES = ("pending", "resolving", "downloading", "done", "failed", "skipped", "ignored", "expired")
 ITEM_KINDS = ("unknown", "video", "slideshow", "unresolved")
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS item (
     song_source   TEXT,                  -- 'auto' (Shazam) or 'manual' (user match)
     song_identified_at TEXT,
     song_error    TEXT,
+    creator_id    INTEGER,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
@@ -115,6 +118,15 @@ CREATE TABLE IF NOT EXISTS playback_queue (
     item_ids_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS spotify_auth (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    client_id     TEXT,                  -- the owner's own Spotify app (PKCE, no secret)
+    access_token  TEXT,
+    refresh_token TEXT,
+    expires_at    INTEGER,               -- unix seconds
+    account_name  TEXT,                  -- display name shown in the Music tab
+    updated_at    TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS song_playlist (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -124,10 +136,91 @@ CREATE TABLE IF NOT EXISTS song_playlist (
 CREATE TABLE IF NOT EXISTS run_history (
     id INTEGER PRIMARY KEY,
     kind TEXT NOT NULL,
+    pipeline_id TEXT,
+    parent_kind TEXT,
+    phase TEXT,
+    phase_index INTEGER,
     outcome TEXT,
     started_at TEXT NOT NULL,
     finished_at TEXT,
-    counts_json TEXT
+    counts_json TEXT,
+    retry_of INTEGER,
+    params_json TEXT,
+    error TEXT
+);
+CREATE TABLE IF NOT EXISTS pipeline_setting (
+    kind TEXT PRIMARY KEY,
+    phases_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_schedule (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    run_kind TEXT NOT NULL,
+    cadence TEXT NOT NULL CHECK (cadence IN ('daily', 'weekly')),
+    local_time TEXT NOT NULL,
+    weekday INTEGER,
+    timezone TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    next_due_at TEXT,
+    last_local_date TEXT,
+    last_started_at TEXT,
+    last_outcome TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS creator (
+    id INTEGER PRIMARY KEY,
+    canonical_key TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS hashtag (
+    id INTEGER PRIMARY KEY,
+    canonical_key TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS item_hashtag (
+    item_id INTEGER NOT NULL REFERENCES item(id) ON DELETE CASCADE,
+    hashtag_id INTEGER NOT NULL REFERENCES hashtag(id) ON DELETE CASCADE,
+    PRIMARY KEY(item_id, hashtag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_item_creator ON item(creator_id);
+CREATE INDEX IF NOT EXISTS idx_item_hashtag_tag ON item_hashtag(hashtag_id, item_id);
+CREATE TABLE IF NOT EXISTS storage_location (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL UNIQUE,
+    available INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    last_checked_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS media_placement (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES item(id) ON DELETE CASCADE,
+    location_id INTEGER NOT NULL REFERENCES storage_location(id) ON DELETE RESTRICT,
+    relative_root TEXT NOT NULL,
+    verified INTEGER NOT NULL DEFAULT 0,
+    byte_count INTEGER NOT NULL DEFAULT 0,
+    manifest_digest TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    verified_at TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE(item_id, location_id)
+);
+CREATE INDEX IF NOT EXISTS idx_media_placement_location ON media_placement(location_id);
+CREATE TABLE IF NOT EXISTS media_placement_file (
+    placement_id INTEGER NOT NULL REFERENCES media_placement(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    byte_count INTEGER NOT NULL,
+    sha256 TEXT NOT NULL,
+    PRIMARY KEY(placement_id, path)
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS item_search USING fts5(
     caption,
@@ -171,6 +264,17 @@ _ITEM_MIGRATIONS = {
     "song_source": "TEXT",
     "song_identified_at": "TEXT",
     "song_error": "TEXT",
+    "creator_id": "INTEGER",
+}
+
+_RUN_HISTORY_MIGRATIONS = {
+    "pipeline_id": "TEXT",
+    "parent_kind": "TEXT",
+    "phase": "TEXT",
+    "phase_index": "INTEGER",
+    "retry_of": "INTEGER",
+    "params_json": "TEXT",
+    "error": "TEXT",
 }
 
 
@@ -202,6 +306,10 @@ def init_db(conn):
             if name not in columns:
                 conn.execute(f"ALTER TABLE item ADD COLUMN {name} {type_name}")
     conn.executescript(SCHEMA)
+    history_columns = {row["name"] for row in conn.execute("PRAGMA table_info(run_history)")}
+    for name, type_name in _RUN_HISTORY_MIGRATIONS.items():
+        if name not in history_columns:
+            conn.execute(f"ALTER TABLE run_history ADD COLUMN {name} {type_name}")
     # Existing libraries used physical archive number as chronology. Preserve
     # that behavior while allowing legacy bootstrap to place collision-free
     # rows elsewhere in the filename namespace.
@@ -219,6 +327,11 @@ def init_db(conn):
         conn.execute("ALTER TABLE library_settings ADD COLUMN song_id_enabled INTEGER NOT NULL DEFAULT 0")
     if "default_audio_name" not in settings_columns:
         conn.execute("ALTER TABLE library_settings ADD COLUMN default_audio_name TEXT")
+    # Additive migration: remember which Spotify playlist a push created, so a
+    # re-push updates it instead of duplicating.
+    playlist_columns = {row["name"] for row in conn.execute("PRAGMA table_info(song_playlist)")}
+    if "spotify_playlist_id" not in playlist_columns:
+        conn.execute("ALTER TABLE song_playlist ADD COLUMN spotify_playlist_id TEXT")
     item_count = conn.execute("SELECT COUNT(*) FROM item").fetchone()[0]
     search_count = conn.execute("SELECT COUNT(*) FROM item_search").fetchone()[0]
     if item_count and search_count != item_count:
@@ -234,6 +347,14 @@ def init_db(conn):
             "INSERT INTO library_settings (id, index_enabled, thumbnail_width, updated_at) VALUES (1, 1, 480, ?)",
             (_now(),),
         )
+    conn.execute(
+        "INSERT OR IGNORE INTO pipeline_setting(kind, phases_json, updated_at) "
+        "VALUES ('sync', ?, ?)",
+        (json.dumps(["sync", "enrich", "identify"], separators=(",", ":")), _now()),
+    )
+    migrations.install_registry(conn)
+    from core import discovery
+    discovery.ensure_backfill(conn)
     conn.commit()
     return conn
 
@@ -246,6 +367,19 @@ def get_item(conn, item_id):
 
 def get_item_by_link(conn, link):
     return conn.execute("SELECT * FROM item WHERE link = ?", (link,)).fetchone()
+
+
+def get_item_by_video_id(conn, video_id):
+    """Find a TikTok item by stable video id even if its creator handle changed."""
+    rows = conn.execute(
+        "SELECT * FROM item WHERE link LIKE ?",
+        (f"%/video/{video_id}%",),
+    ).fetchall()
+    for row in rows:
+        match = re.search(r"/video/([0-9]+)(?:[/?#]|$)", row["link"])
+        if match is not None and match.group(1) == str(video_id):
+            return row
+    return None
 
 
 def next_item_id(conn):
@@ -463,7 +597,13 @@ def range_status_summary(conn, first_id, last_id):
 
 
 def set_metadata(conn, item_id, caption, author):
-    _update(conn, item_id, caption=caption, author=author)
+    from core import discovery
+    with conn:
+        conn.execute(
+            "UPDATE item SET caption = ?, author = ?, updated_at = ? WHERE id = ?",
+            (caption, author, _now(), item_id),
+        )
+        discovery.upsert_item_identities(conn, item_id, author, caption)
 
 
 def record_work_outcome(conn, item_id, outcome):
@@ -794,6 +934,23 @@ def suggest(conn, q, limit=6):
         if "#" + word in hashtags:
             del terms[word]
 
+    state = migrations.get_backfill(conn, "discovery-identities-v1")
+    if state is not None and state["status"] == "completed":
+        creators = {
+            row["display_name"]: row["c"] for row in conn.execute(
+                "SELECT c.display_name, COUNT(*) AS c FROM creator c "
+                "JOIN item i ON i.creator_id = c.id WHERE c.canonical_key LIKE ? "
+                "GROUP BY c.id", (needle + "%",),
+            )
+        }
+        hashtags = {
+            row["display_name"]: row["c"] for row in conn.execute(
+                "SELECT h.display_name, COUNT(*) AS c FROM hashtag h "
+                "JOIN item_hashtag ih ON ih.hashtag_id = h.id "
+                "WHERE h.canonical_key LIKE ? GROUP BY h.id", (needle + "%",),
+            )
+        }
+
     def top(counts, count):
         ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
         return [{"value": value, "count": total} for value, total in ranked[:count]]
@@ -892,6 +1049,8 @@ PAGE_QUERY_DEFAULTS = {
     "offloaded": None,
     "seed": None,
     "feed": False,
+    "creator_key": None,
+    "hashtag_key": None,
 }
 
 
@@ -964,6 +1123,18 @@ def _page_filter_clauses(q):
             clauses.append("(has_audio = 1 AND (audio_silent = 0 OR audio_silent IS NULL))")
         else:
             clauses.append("(has_audio = 0 OR audio_silent = 1)")
+    if q["creator_key"]:
+        clauses.append(
+            "creator_id = (SELECT id FROM creator WHERE canonical_key = ?)"
+        )
+        params.append(q["creator_key"])
+    if q["hashtag_key"]:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM item_hashtag ih JOIN hashtag h "
+            "ON h.id = ih.hashtag_id WHERE ih.item_id = item.id "
+            "AND h.canonical_key = ?)"
+        )
+        params.append(q["hashtag_key"])
     index_filters = {
         "indexed": "thumbnail_path IS NOT NULL",
         "missing": "thumbnail_path IS NULL AND index_error IS NULL",
@@ -1019,7 +1190,8 @@ def _page_sql(select, clauses, params, fts_query):
     if fts_query:
         sql = (
             "WITH matched AS (SELECT item.*, bm25(item_search) AS rank FROM item_search "
-            f"JOIN item ON item_search.rowid = item.id WHERE item_search MATCH ?) SELECT {select} FROM matched"
+            f"JOIN item ON item_search.rowid = item.id WHERE item_search MATCH ?) "
+            f"SELECT {select} FROM matched AS item"
         )
         params = [fts_query, *params]
     else:
@@ -1111,6 +1283,126 @@ def playable_item_ids(conn):
 def counts_by_status(conn):
     rows = conn.execute("SELECT status, COUNT(*) AS c FROM item GROUP BY status").fetchall()
     return {r["status"]: r["c"] for r in rows}
+
+
+# --- mounted Storage locations + verified Media placements -----------------
+
+def list_storage_locations(conn):
+    return conn.execute(
+        "SELECT * FROM storage_location ORDER BY name COLLATE NOCASE, id"
+    ).fetchall()
+
+
+def get_storage_location(conn, location_id):
+    return conn.execute(
+        "SELECT * FROM storage_location WHERE id = ?", (location_id,)
+    ).fetchone()
+
+
+def insert_storage_location(conn, name, path, available, error=None):
+    now = _now()
+    cursor = conn.execute(
+        "INSERT INTO storage_location "
+        "(name, path, available, last_error, last_checked_at, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (name, path, 1 if available else 0, error, now, now, now),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def update_storage_location(conn, location_id, **fields):
+    if not fields:
+        return get_storage_location(conn, location_id)
+    fields["updated_at"] = _now()
+    assignments = ", ".join(f"{column} = ?" for column in fields)
+    cursor = conn.execute(
+        f"UPDATE storage_location SET {assignments} WHERE id = ?",
+        (*fields.values(), location_id),
+    )
+    conn.commit()
+    return get_storage_location(conn, location_id) if cursor.rowcount else None
+
+
+def delete_storage_location(conn, location_id):
+    try:
+        cursor = conn.execute(
+            "DELETE FROM storage_location WHERE id = ?", (location_id,)
+        )
+        conn.commit()
+        return bool(cursor.rowcount)
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return False
+
+
+def record_media_placement(
+    conn,
+    item_id,
+    location_id,
+    relative_root,
+    byte_count,
+    manifest_digest,
+    *,
+    verified,
+    is_active=True,
+    files=None,
+):
+    now = _now()
+    conn.execute(
+        "INSERT INTO media_placement "
+        "(item_id, location_id, relative_root, verified, byte_count, manifest_digest, "
+        "is_active, created_at, verified_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(item_id, location_id) DO UPDATE SET "
+        "relative_root = excluded.relative_root, verified = excluded.verified, "
+        "byte_count = excluded.byte_count, manifest_digest = excluded.manifest_digest, "
+        "is_active = excluded.is_active, verified_at = excluded.verified_at, "
+        "updated_at = excluded.updated_at",
+        (
+            item_id, location_id, relative_root, 1 if verified else 0,
+            int(byte_count), manifest_digest, 1 if is_active else 0, now,
+            now if verified else None, now,
+        ),
+    )
+    placement = conn.execute(
+        "SELECT id FROM media_placement WHERE item_id = ? AND location_id = ?",
+        (item_id, location_id),
+    ).fetchone()
+    if files is not None:
+        conn.execute(
+            "DELETE FROM media_placement_file WHERE placement_id = ?",
+            (placement["id"],),
+        )
+        conn.executemany(
+            "INSERT INTO media_placement_file "
+            "(placement_id, path, byte_count, sha256) VALUES (?, ?, ?, ?)",
+            [
+                (placement["id"], entry["path"], entry["size"], entry["sha256"])
+                for entry in files
+            ],
+        )
+    conn.commit()
+    return placement["id"]
+
+
+def media_placements(conn, item_id=None):
+    if item_id is None:
+        return conn.execute(
+            "SELECT * FROM media_placement ORDER BY item_id, location_id"
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM media_placement WHERE item_id = ? ORDER BY location_id",
+        (item_id,),
+    ).fetchall()
+
+
+def placement_files(conn, placement_id):
+    return conn.execute(
+        "SELECT path, byte_count AS size, sha256 FROM media_placement_file "
+        "WHERE placement_id = ? ORDER BY path",
+        (placement_id,),
+    ).fetchall()
 
 
 # --- run control -----------------------------------------------------------
@@ -1269,6 +1561,22 @@ def list_saved_lists(conn, kind):
     ]
 
 
+def get_saved_list(conn, kind, entry_id):
+    """One decoded saved entry, or ``None`` when the id does not exist."""
+    table, fields = SAVED_LIST_KINDS[kind]
+    columns = ", ".join(["id", "name", *(column for _field, column, _codec in fields)])
+    row = conn.execute(
+        f"SELECT {columns} FROM {table} WHERE id = ?", (entry_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        **{field: codec[1](row[column]) for field, column, codec in fields},
+    }
+
+
 def save_saved_list(conn, kind, name, payload):
     """Insert one named entry; raises ``sqlite3.IntegrityError`` on a name clash."""
     table, fields = SAVED_LIST_KINDS[kind]
@@ -1289,28 +1597,246 @@ def delete_saved_list(conn, kind, entry_id):
     return cursor.rowcount > 0
 
 
+# --- Spotify push ------------------------------------------------------------
+
+def get_song_playlist(conn, playlist_id):
+    """One saved playlist with decoded song ids, or None."""
+    row = conn.execute(
+        "SELECT id, name, song_ids_json, spotify_playlist_id FROM song_playlist WHERE id = ?",
+        (playlist_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"id": row["id"], "name": row["name"],
+            "song_ids": json.loads(row["song_ids_json"]),
+            "spotify_playlist_id": row["spotify_playlist_id"]}
+
+
+def set_song_playlist_spotify_id(conn, playlist_id, spotify_playlist_id):
+    conn.execute("UPDATE song_playlist SET spotify_playlist_id = ? WHERE id = ?",
+                 (spotify_playlist_id, playlist_id))
+    conn.commit()
+
+
+def set_song_spotify_url(conn, song_id, url):
+    """Write back a search-matched track link so in-app links improve too."""
+    conn.execute("UPDATE song SET spotify_url = ? WHERE id = ?", (url, song_id))
+    conn.commit()
+
+
+def get_spotify_auth(conn):
+    """The singleton Spotify connection row (None when never connected)."""
+    return conn.execute("SELECT * FROM spotify_auth WHERE id = 1").fetchone()
+
+
+def save_spotify_auth(conn, **fields):
+    """Merge fields into the singleton row, creating it on first use."""
+    if conn.execute("SELECT 1 FROM spotify_auth WHERE id = 1").fetchone() is None:
+        conn.execute("INSERT INTO spotify_auth (id, updated_at) VALUES (1, ?)", (_now(),))
+    fields["updated_at"] = _now()
+    assignments = ", ".join(f"{column} = ?" for column in fields)
+    conn.execute(f"UPDATE spotify_auth SET {assignments} WHERE id = 1", (*fields.values(),))
+    conn.commit()
+
+
+def clear_spotify_auth(conn):
+    """Disconnect: delete tokens but keep the client id for easy reconnects."""
+    conn.execute(
+        "UPDATE spotify_auth SET access_token = NULL, refresh_token = NULL, "
+        "expires_at = NULL, account_name = NULL, updated_at = ? WHERE id = 1",
+        (_now(),),
+    )
+    conn.commit()
+
+
 # --- durable Archive run history -------------------------------------------
 
-def start_run_history(conn, kind):
-    cursor = conn.execute("INSERT INTO run_history (kind, started_at) VALUES (?, ?)", (kind, _now()))
+def get_pipeline_settings(conn, kind="sync"):
+    row = conn.execute(
+        "SELECT kind, phases_json, updated_at FROM pipeline_setting WHERE kind = ?",
+        (kind,),
+    ).fetchone()
+    return None if row is None else {
+        "kind": row["kind"], "phases": json.loads(row["phases_json"]),
+        "updated_at": row["updated_at"],
+    }
+
+
+def set_pipeline_settings(conn, kind, phases):
+    now = _now()
+    conn.execute(
+        "INSERT INTO pipeline_setting(kind, phases_json, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(kind) DO UPDATE SET phases_json = excluded.phases_json, "
+        "updated_at = excluded.updated_at",
+        (kind, json.dumps(phases, separators=(",", ":")), now),
+    )
+    conn.commit()
+    return get_pipeline_settings(conn, kind)
+
+
+def list_run_schedules(conn):
+    return [
+        {**dict(row), "enabled": bool(row["enabled"])}
+        for row in conn.execute("SELECT * FROM run_schedule ORDER BY name COLLATE NOCASE, id")
+    ]
+
+
+def get_run_schedule(conn, schedule_id):
+    row = conn.execute("SELECT * FROM run_schedule WHERE id = ?", (schedule_id,)).fetchone()
+    return None if row is None else {**dict(row), "enabled": bool(row["enabled"])}
+
+
+def save_run_schedule(conn, values, schedule_id=None):
+    now = _now()
+    columns = (
+        "name", "run_kind", "cadence", "local_time", "weekday",
+        "timezone", "enabled", "next_due_at",
+    )
+    params = [values[name] for name in columns]
+    params[6] = 1 if params[6] else 0
+    if schedule_id is None:
+        cursor = conn.execute(
+            f"INSERT INTO run_schedule ({', '.join(columns)}, created_at, updated_at) "
+            f"VALUES ({', '.join('?' for _ in columns)}, ?, ?)",
+            (*params, now, now),
+        )
+        schedule_id = cursor.lastrowid
+    else:
+        assignments = ", ".join(f"{name} = ?" for name in columns)
+        cursor = conn.execute(
+            f"UPDATE run_schedule SET {assignments}, updated_at = ? WHERE id = ?",
+            (*params, now, schedule_id),
+        )
+        if cursor.rowcount == 0:
+            return None
+    conn.commit()
+    return get_run_schedule(conn, schedule_id)
+
+
+def mark_schedule_started(conn, schedule_id, *, local_date, started_at, next_due_at):
+    conn.execute(
+        "UPDATE run_schedule SET last_local_date = ?, last_started_at = ?, "
+        "last_outcome = 'started', next_due_at = ?, updated_at = ? WHERE id = ?",
+        (local_date, started_at, next_due_at, _now(), schedule_id),
+    )
+    conn.commit()
+
+
+def set_schedule_outcome(conn, schedule_id, outcome):
+    conn.execute(
+        "UPDATE run_schedule SET last_outcome = ?, updated_at = ? WHERE id = ?",
+        (outcome, _now(), schedule_id),
+    )
+    conn.commit()
+
+
+def delete_run_schedule(conn, schedule_id):
+    cursor = conn.execute("DELETE FROM run_schedule WHERE id = ?", (schedule_id,))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+_UNSAFE_RUN_PARAM = object()
+
+
+def _safe_run_params(params):
+    """Drop injected functions/objects; keep only replayable JSON values."""
+    def clean(value):
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, list):
+            return [
+                cleaned for item in value
+                if (cleaned := clean(item)) is not _UNSAFE_RUN_PARAM
+            ]
+        if isinstance(value, dict):
+            return {
+                key: cleaned for key, item in value.items()
+                if isinstance(key, str)
+                and (cleaned := clean(item)) is not _UNSAFE_RUN_PARAM
+            }
+        return _UNSAFE_RUN_PARAM
+
+    return {
+        key: cleaned for key, value in (params or {}).items()
+        if isinstance(key, str)
+        and (cleaned := clean(value)) is not _UNSAFE_RUN_PARAM
+    }
+
+
+def start_run_history(conn, kind, *, retry_of=None, params=None):
+    cursor = conn.execute(
+        "INSERT INTO run_history (kind, started_at, retry_of, params_json) VALUES (?, ?, ?, ?)",
+        (
+            kind, _now(), retry_of,
+            json.dumps(_safe_run_params(params), separators=(",", ":"), sort_keys=True),
+        ),
+    )
     conn.commit()
     return cursor.lastrowid
 
 
-def finish_run_history(conn, run_id, outcome, counts):
+def set_run_history_context(conn, run_id, pipeline_id, parent_kind, phase, phase_index):
     conn.execute(
-        "UPDATE run_history SET outcome = ?, finished_at = ?, counts_json = ? WHERE id = ?",
-        (outcome, _now(), json.dumps(counts, separators=(",", ":"), sort_keys=True), run_id),
+        "UPDATE run_history SET pipeline_id = ?, parent_kind = ?, phase = ?, phase_index = ? "
+        "WHERE id = ?",
+        (pipeline_id, parent_kind, phase, phase_index, run_id),
+    )
+    conn.commit()
+
+
+def finish_run_history(conn, run_id, outcome, counts, error=None):
+    conn.execute(
+        "UPDATE run_history SET outcome = ?, finished_at = ?, counts_json = ?, error = ? WHERE id = ?",
+        (outcome, _now(), json.dumps(counts, separators=(",", ":"), sort_keys=True), error, run_id),
     )
     conn.commit()
 
 
 def list_run_history(conn, limit=20):
     rows = conn.execute(
-        "SELECT id, kind, outcome, started_at, finished_at, counts_json FROM run_history ORDER BY id DESC LIMIT ?",
+        "SELECT id, kind, pipeline_id, parent_kind, phase, phase_index, "
+        "outcome, started_at, finished_at, counts_json, retry_of, params_json, error "
+        "FROM run_history ORDER BY id DESC LIMIT ?",
         (max(1, min(int(limit), 100)),),
     ).fetchall()
     return [
-        {"id": row["id"], "kind": row["kind"], "outcome": row["outcome"], "started_at": row["started_at"], "finished_at": row["finished_at"], "counts": json.loads(row["counts_json"] or "{}")}
+        {
+            "id": row["id"],
+            "kind": row["kind"],
+            "pipeline_id": row["pipeline_id"],
+            "parent_kind": row["parent_kind"] or row["kind"],
+            "phase": row["phase"] or row["kind"],
+            "phase_index": row["phase_index"],
+            "outcome": row["outcome"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "counts": json.loads(row["counts_json"] or "{}"),
+            "retry_of": row["retry_of"],
+            "params": json.loads(row["params_json"] or "{}"),
+            "error": row["error"],
+        }
         for row in rows
     ]
+
+
+def get_run_history(conn, run_id):
+    row = conn.execute(
+        "SELECT id, kind, pipeline_id, parent_kind, phase, phase_index, outcome, "
+        "started_at, finished_at, counts_json, retry_of, params_json, error "
+        "FROM run_history WHERE id = ?", (run_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"], "kind": row["kind"],
+        "pipeline_id": row["pipeline_id"],
+        "parent_kind": row["parent_kind"] or row["kind"],
+        "phase": row["phase"] or row["kind"],
+        "phase_index": row["phase_index"], "outcome": row["outcome"],
+        "started_at": row["started_at"], "finished_at": row["finished_at"],
+        "counts": json.loads(row["counts_json"] or "{}"),
+        "retry_of": row["retry_of"],
+        "params": json.loads(row["params_json"] or "{}"),
+        "error": row["error"],
+    }

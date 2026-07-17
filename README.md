@@ -36,7 +36,10 @@ File numbering is stable: `147.mp4` stays archive item 147 in the database. Favo
 - **Resilient download engine.** A bounded worker pool holds a configurable request rate and backs off on HTTP 429. Progress lives in SQLite, downloads stream to a `.part` file and are renamed into place only when complete, and a rerun resumes exactly where it stopped.
 - **Rebuilds photo slideshows.** TikTok photo posts are re-encoded into MP4s with their original audio (FFmpeg via MoviePy), each image centered on a canvas sized to the largest slide, with the raw images kept for the in-app carousel.
 - **Scales to a real library.** The Feed and Gallery stay responsive at 11,000+ favorites through row virtualization, media preloading, and range-based streaming from the backend.
-- **Identifies songs (opt-in).** Shazam names the track in each favorite and shows it in Feed and Gallery. A Music tab lists every identified song, opens each in Spotify, YouTube, or Apple Music, and saves playlists. It stays off until you turn it on; enabling it uploads a short audio clip per video to Shazam, the only time the app sends your media's audio to an outside service.
+- **Identifies songs (opt-in).** Shazam names the track in each favorite and shows it in Feed and Gallery. A Music tab lists every identified song, opens each in Spotify, YouTube, or Apple Music, saves playlists, and can push a saved playlist to your own Spotify account. It stays off until you turn it on; enabling it uploads a short audio clip per video to Shazam, the only time the app sends your media's audio to an outside service.
+- **Shows you your own habits.** A Stats tab turns the archive into charts: how it grew over time, when you favorite (a day×hour heatmap), how long your favorites run, your top creators, songs, and hashtags, and archive health — all from data already on disk, no new services.
+- **Owns backup and storage.** Configure mounted folders or NAS shares, preview and verify copy/move/restore operations, and create portable metadata or complete Archive snapshots with checksum validation and guarded rollback restore.
+- **Automates on your terms.** Saved Gallery presets are live Smart collections, Sync follow-ups are configurable, and daily or weekly runs execute inside the app with timezone/DST-safe catch-up.
 - **Built to be operated.** Live per-item progress over Server-Sent Events, an archive integrity check, a one-click recovery inbox, saved and shareable filters, and a portable CSV inventory.
 - **Tested and typed.** The download engine is a standalone Python package with a stdlib-only unit suite (32 files; the HTTP-tier file additionally self-skips unless FastAPI is installed). The frontend talks to a small typed API and never reaches Cobalt directly.
 
@@ -71,7 +74,7 @@ It opens at your newest favorite, remembers where you left off ("go to last watc
 A searchable thumbnail grid of everything, ranked best-match first.
 
 - **Search and filter.** Search by caption, hashtag, or author (from TikTok's public oEmbed data). Beyond the All / Videos / Slideshows filter, an advanced panel covers date range, duration, file size, resolution, orientation, codec, download status, and attempt count, plus include/exclude author and tag lists, eleven repeatable sort orders, and a fresh random shuffle.
-- **Presets and lists.** Save any filter combination as a named preset or share it as a copyable link. Save reusable author/hashtag allow or deny lists (for example "No FYP" or "Gaming") and apply them without clearing terms already entered.
+- **Smart collections and lists.** Save any filter combination as a named Smart collection or share it as a copyable link. Membership is resolved live whenever you open, play, export, or bulk-mark it. Save reusable author/hashtag allow or deny lists (for example "No FYP" or "Gaming") and apply them without clearing terms already entered. Playback queues remain fixed snapshots of the IDs you selected.
 - **Recovery and repair.** The one-click Recovery inbox refreshes archive integrity, then surfaces failed downloads, scan-confirmed missing files, and untouched pending favorites. Confirmed-silent videos are flagged on their cards and in Feed. Each post can have its local MP4, thumbnail, or both replaced without changing its archive number, caption, creator, or source link; the previous file is kept in `downloads/.archive/replaced/` so a mistaken upload can be undone.
 - **Queues and inspect.** Select up to 100 favorites to start a temporary custom Feed queue, save it as a named queue, or target recovery. Inspect mode opens a favorite's full archive metadata, including retry count and last attempt time, without leaving the grid. Failed favorites show their last error.
 - **Performance.** The grid loads the next page near the end of the current results and keeps only viewport-adjacent thumbnail rows mounted, so an 11,000-favorite library stays responsive.
@@ -80,9 +83,25 @@ A searchable thumbnail grid of everything, ranked best-match first.
 
 Every identified song collects here, most-used first. Each track shows how many favorites use it, opens in Spotify, YouTube, or Apple Music, and can start a Feed of exactly the favorites that share it. Tick songs to save a named playlist. The tab is empty until you enable song identification in Sync and run it.
 
+Connect your own Spotify account (a free developer app's Client ID, one-time) and each saved playlist gains a push button that creates it as a private Spotify playlist, matching each song by its stored link or a search. Pushing again updates the same playlist instead of duplicating, and the app reports exactly which songs it could not confidently match. Nothing reaches Spotify until you connect and press push.
+
+### Stats
+
+A read-only dashboard over data the archive already has. A summary strip (total favorites, video/slideshow mix, total watch-length, disk usage, percent archived) leads into four sections: **Growth** (cumulative favorites and per-month saves), **You as a watcher** (a day-of-week × hour favoriting heatmap, a duration histogram with your median, and the confirmed-silent share), **Top of your archive** (most-favorited creators, most-used songs, and top hashtags, each linking into a filtered Gallery or the Music tab), and **Archive health** (a lifecycle donut and the most common failure reasons). Favorites without a saved date sit out of the time charts and are disclosed, never guessed.
+
+### Discover
+
+Creators and Hashtags become first-class, Unicode-normalized identities. Discover searches and orders both sets by name, use count, or recent activity, then opens an exact Gallery or Feed selection—`@ann` never accidentally includes `@anna`. Existing caption and author fields remain available while an automatic, resumable backfill upgrades older databases.
+
+### Storage and Backups
+
+Storage locations are folders already mounted on the app machine, such as an external drive or NAS bind mount. The app validates that a location is mounted, writable, and outside the active downloads/database paths. Copy and Move always show a read-only preview; both checksum every durable media file before recording a verified placement, and Move deletes local files only after that record is safely persisted. Restore verifies the external copy, recreates local media, and leaves the external copy intact. Legacy rows previously marked Offloaded remain visible but are not claimed as verified until managed storage has evidence for them.
+
+Backups creates a versioned `.tiktok-archive` directory. Metadata snapshots contain a consistent SQLite online backup; complete snapshots add media. Both use sorted relative-path manifests and SHA-256 checksums, publish atomically after validation, and resume partial work. Replacing a non-empty Archive requires typing `REPLACE ARCHIVE` and creates a rollback snapshot first.
+
 ### Sync
 
-The control center. Upload your export, then start, pause, resume, or stop a run and watch per-item status update live over Server-Sent Events. It keeps a durable local history of recent jobs and their final counts, and houses the library settings: Gallery indexing (thumbnails and media facts, with a quality choice), worker count, a portable archive-inventory CSV, media-server metadata export, and an archive integrity check. Song identification lives here as an opt-in run: enable it, and a rate-limited pass sends a short clip per video to Shazam and labels each favorite, skipping ones already done.
+The control center. Upload your export, then start, pause, resume, or stop a run and watch per-item status update live over Server-Sent Events. It keeps a durable phase timeline and retry ancestry. You can enable and reorder supported post-Sync phases without changing the default (`Sync → Search metadata → Song identification`), and create daily or weekly schedules with an explicit IANA timezone. Schedules run only while the app is running, defer while another Archive job is active, and catch up at most one missed occurrence after restart.
 
 <p align="center">
   <img src="screenshots/sync.png" alt="The Sync dashboard: upload, run controls, live per-item progress" width="880">
@@ -92,6 +111,7 @@ The control center. Upload your export, then start, pause, resume, or stop a run
 
 - **Dead links stay meaningful.** When TikTok reports that an original post is gone, the favorite becomes an unavailable archive marker instead of a recurring failure. Its number and position remain visible in Feed and Gallery, and automatic Sync runs do not retry it.
 - **Original slideshow audio.** Photo posts request the full original sound. If TikTok has already deleted it, a bundled default track fills in instead of failing the encode — replaceable with your own MP3 from the Sync tab's media settings.
+- **Push playlists to Spotify.** In the Music tab, connect your own free Spotify app once, then push any saved playlist to a private Spotify playlist. Matches come from each song's stored link or a search; unmatched songs are reported rather than guessed, and re-pushing updates the same playlist.
 - **Backfill.** Already had downloads before this existed? The Sync tab's Backfill re-fetches the raw slideshow images for your existing files so they render in the viewer.
 - **Provenance.** `downloads/manifest.csv` maps each file to its source link, type, and status alongside the database.
 - **Gallery index.** Sync records duration, dimensions, codec, file size, and whether an audio stream exists, then renders a WebP thumbnail per favorite (480px or 320px), so the Gallery pages instantly instead of decoding video. Indexing runs on a small worker pool and can be rebuilt, paused, or turned off.
@@ -100,7 +120,7 @@ The control center. Upload your export, then start, pause, resume, or stop a run
 - **Media-server metadata.** One click writes a `.nfo` title file and `.jpg` poster next to every video, so Plex, Jellyfin, and Kodi show real titles and artwork instead of bare numbers. Your media files are never modified.
 - **Integrity check.** Sync can verify the whole archive: finished favorites missing their video (one click re-queues them), stray files no favorite claims, and leftover temp files from interrupted runs.
 - **Localhost only.** The app has no login, so Docker binds it to `127.0.0.1`; nothing else on your network can reach it. Plex reads `./downloads` from disk and is unaffected.
-- **Backups.** Two things hold your archive: the media in `./downloads` and the database at `./appdata/archive.db` (numbering, statuses, captions, identified songs, playlists, saved filters). Copy both while the app is stopped and you can restore everything.
+- **Backups.** The Backups tab produces validated portable snapshots. A stopped-app copy of `./downloads` plus `./appdata/archive.db` remains a valid manual fallback.
 
 ## Project layout
 
@@ -156,7 +176,35 @@ With Docker, set these on the `app` service in `docker-compose.yml`:
 
 If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATELIMIT_WINDOW` in the same file to match. If you change `APP_PORT`, update the `ports:` mapping too.
 
+For a mounted Storage location, add a bind mount to the `app` service, rebuild,
+then register the container path in **Storage**:
+
+```yaml
+services:
+  app:
+    volumes:
+      - ./downloads:/app/downloads
+      - ./appdata:/app/data
+      - /mnt/archive-nas:/mnt/archive-nas
+```
+
+The app does not mount drives itself. Mount the disk/share on the host first,
+and keep the container path stable across restarts.
+
 </details>
+
+## Upgrading an existing web archive
+
+Pull the code and run `docker compose up --build` against the same `downloads`
+and `appdata` bind mounts. Startup applies additive schema migrations only; it
+does not hash, copy, rename, or delete media. Creator/Hashtag discovery then
+backfills in bounded, persisted batches when the Archive is idle. It can resume
+after interruption. Existing presets become Smart collections with no rewrite,
+existing playback queues remain fixed, and old `offloaded = 1` rows retain that
+status as unverified legacy placements.
+
+Before moving an archive between computers, create and validate a metadata or
+complete snapshot in **Backups** before disconnecting the old installation.
 
 ## Getting your TikTok data
 

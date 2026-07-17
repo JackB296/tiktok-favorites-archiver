@@ -12,12 +12,13 @@ import {
   MusicNotes,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
-import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport, RunHistoryEntry, SyncSettings } from "../lib/types";
+import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatistics, VerifyReport, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings } from "../lib/types";
 import { Button, Stat, StatusBadge, cx } from "../components/ui";
 import { LegacyBootstrapPanel } from "../components/LegacyBootstrapPanel";
 import { OffloadPanel } from "../components/OffloadPanel";
 import { formatRuntime, formatSize } from "../lib/format";
 import { progressLabel } from "../lib/progressPresentation.js";
+import { nextScheduleLabel, scheduleRule } from "../lib/schedulePresentation";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "ignored", "expired"];
 
@@ -44,6 +45,16 @@ export function Dashboard() {
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
   const [syncSettings, setSyncSettings] = useState<SyncSettings | null>(null);
+  const [runCatalog, setRunCatalog] = useState<RunCatalogEntry[]>([]);
+  const [pipeline, setPipeline] = useState<PipelineSettings | null>(null);
+  const [schedules, setSchedules] = useState<RunSchedule[]>([]);
+  const [scheduleName, setScheduleName] = useState("Nightly Sync");
+  const [scheduleKind, setScheduleKind] = useState("sync");
+  const [scheduleCadence, setScheduleCadence] = useState<"daily" | "weekly">("daily");
+  const [scheduleTime, setScheduleTime] = useState("02:00");
+  const [scheduleWeekday, setScheduleWeekday] = useState(0);
+  const [scheduleZone, setScheduleZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+  const [automationMessage, setAutomationMessage] = useState<string | null>(null);
   const [metadataOpen, setMetadataOpen] = useState(false);
   const [songIdOpen, setSongIdOpen] = useState(false);
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
@@ -67,9 +78,64 @@ export function Dashboard() {
       api.libraryStats().then(setStatistics),
       api.runHistory().then(setRunHistory),
       api.syncSettings().then(setSyncSettings),
+      api.runCatalog().then(setRunCatalog),
+      api.pipelineSettings().then(setPipeline),
+      api.runSchedules().then(setSchedules),
     ]);
     const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
     if (failed) setLoadError((failed.reason as Error).message || "Request failed");
+  }
+
+  async function savePipeline(phases: string[]) {
+    try {
+      setPipeline(await api.updatePipelineSettings(phases));
+      setAutomationMessage("Sync pipeline saved.");
+    } catch (error) {
+      setAutomationMessage((error as Error).message);
+    }
+  }
+
+  async function addSchedule() {
+    try {
+      const created = await api.createRunSchedule({
+        name: scheduleName, run_kind: scheduleKind, cadence: scheduleCadence,
+        local_time: scheduleTime,
+        weekday: scheduleCadence === "weekly" ? scheduleWeekday : null,
+        timezone: scheduleZone, enabled: true,
+      });
+      setSchedules((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setAutomationMessage("Schedule created.");
+    } catch (error) {
+      setAutomationMessage((error as Error).message);
+    }
+  }
+
+  async function toggleSchedule(schedule: RunSchedule) {
+    try {
+      const updated = await api.updateRunSchedule(schedule.id, { enabled: !schedule.enabled });
+      setSchedules((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (error) {
+      setAutomationMessage((error as Error).message);
+    }
+  }
+
+  async function removeSchedule(id: number) {
+    try {
+      await api.deleteRunSchedule(id);
+      setSchedules((current) => current.filter((item) => item.id !== id));
+    } catch (error) {
+      setAutomationMessage((error as Error).message);
+    }
+  }
+
+  async function retryRun(run: RunHistoryEntry) {
+    try {
+      await api.retryRun(run.id);
+      setAutomationMessage(`Retry started from run #${run.id}.`);
+      refresh();
+    } catch (error) {
+      setAutomationMessage((error as Error).message);
+    }
   }
 
   useEffect(() => {
@@ -321,7 +387,7 @@ export function Dashboard() {
           </label>
           <div className="mt-4">
             <label className="block text-sm font-medium text-ink" htmlFor="thumbnail-quality">Thumbnail quality</label>
-            <select id="thumbnail-quality" disabled={library?.index_enabled !== 1} value={library?.thumbnail_width ?? 480} onChange={(e) => updateLibrary({ thumbnail_width: Number(e.target.value) as 320 | 480 })} className="mt-1 h-10 rounded-[var(--radius-control)] border border-line bg-elevated px-3 text-sm text-ink disabled:opacity-50">
+            <select id="thumbnail-quality" disabled={library?.index_enabled !== 1} value={library?.thumbnail_width ?? 480} onChange={(e) => updateLibrary({ thumbnail_width: Number(e.target.value) as 320 | 480 })} className="mt-1 h-10 w-full max-w-full rounded-[var(--radius-control)] border border-line bg-elevated px-3 text-sm text-ink disabled:opacity-50 sm:w-auto">
               <option value={480}>High: 480px WebP (about 275-825 MB / 11,000)</option>
               <option value={320}>Standard: 320px WebP (about 165-550 MB / 11,000)</option>
             </select>
@@ -442,9 +508,53 @@ export function Dashboard() {
         </section>
 
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <h2 className="text-sm font-semibold text-ink">Sync pipeline</h2>
+          <p className="mt-1 text-sm text-ink-dim">Sync always downloads first. Choose and order the maintenance phases that follow it.</p>
+          <ol className="mt-3 space-y-2 text-sm">
+            <li className="flex items-center gap-2 rounded-[var(--radius-control)] border border-line bg-elevated px-3 py-2"><span className="tabular text-ink-faint">1</span><strong className="text-ink">Sync</strong><span className="ml-auto text-xs text-ink-faint">required</span></li>
+            {(pipeline?.phases.slice(1) ?? []).map((phase, index, phases) => {
+              const entry = runCatalog.find((item) => item.kind === phase);
+              return <li key={phase} className="flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border border-line bg-elevated px-3 py-2">
+                <span className="tabular text-ink-faint">{index + 2}</span><span className="font-medium text-ink">{entry?.label ?? phase}</span>
+                <span className="ml-auto flex gap-1">
+                  <Button variant="ghost" size="xs" disabled={index === 0} onClick={() => { const next = [...phases]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; void savePipeline(["sync", ...next]); }}>Up</Button>
+                  <Button variant="ghost" size="xs" disabled={index === phases.length - 1} onClick={() => { const next = [...phases]; [next[index + 1], next[index]] = [next[index], next[index + 1]]; void savePipeline(["sync", ...next]); }}>Down</Button>
+                  <Button variant="ghost" size="xs" onClick={() => void savePipeline(["sync", ...phases.filter((item) => item !== phase)])}>Remove</Button>
+                </span>
+              </li>;
+            })}
+          </ol>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {runCatalog.filter((entry) => entry.configurable_follow_up && !pipeline?.phases.includes(entry.kind)).map((entry) => <Button key={entry.kind} variant="ghost" size="xs" onClick={() => void savePipeline([...(pipeline?.phases ?? ["sync"]), entry.kind])}>Add {entry.label}</Button>)}
+          </div>
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <h2 className="text-sm font-semibold text-ink">Run schedules</h2>
+          <p className="mt-1 text-sm text-ink-dim">Runs inside this app. A missed run catches up once when the app is next open and idle.</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label className="text-xs text-ink-dim">Name<input value={scheduleName} onChange={(event) => setScheduleName(event.target.value)} maxLength={80} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" /></label>
+            <label className="text-xs text-ink-dim">Run<select value={scheduleKind} onChange={(event) => setScheduleKind(event.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink">{runCatalog.filter((entry) => ["sync", "backfill", "index", "sidecars", "enrich", "identify"].includes(entry.kind)).map((entry) => <option key={entry.kind} value={entry.kind}>{entry.label}</option>)}</select></label>
+            <label className="text-xs text-ink-dim">Cadence<select value={scheduleCadence} onChange={(event) => setScheduleCadence(event.target.value as "daily" | "weekly")} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
+            {scheduleCadence === "weekly" && <label className="text-xs text-ink-dim">Weekday<select value={scheduleWeekday} onChange={(event) => setScheduleWeekday(Number(event.target.value))} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink">{["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day, index) => <option key={day} value={index}>{day}</option>)}</select></label>}
+            <label className="text-xs text-ink-dim">Local time<input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" /></label>
+            <label className="text-xs text-ink-dim">IANA timezone<input value={scheduleZone} onChange={(event) => setScheduleZone(event.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" /></label>
+          </div>
+          <Button className="mt-3" size="sm" onClick={() => void addSchedule()} disabled={!scheduleName.trim()}>Create schedule</Button>
+          {schedules.length ? <ul className="mt-4 divide-y divide-line text-sm">{schedules.map((schedule) => <li key={schedule.id} className="flex flex-wrap items-center gap-2 py-3">
+            <button type="button" onClick={() => void toggleSchedule(schedule)} aria-pressed={schedule.enabled} className={cx("rounded-full border px-2 py-1 text-xs", schedule.enabled ? "border-ok/40 text-ok" : "border-line text-ink-faint")}>{schedule.enabled ? "Enabled" : "Disabled"}</button>
+            <span className="font-medium text-ink">{schedule.name}</span>
+            <span className="text-ink-dim">{scheduleRule(schedule)}</span>
+            <span className="ml-auto text-xs text-ink-faint">{nextScheduleLabel(schedule)}</span>
+            <Button variant="danger" size="xs" onClick={() => void removeSchedule(schedule.id)}>Delete</Button>
+          </li>)}</ul> : <p className="mt-4 text-sm text-ink-faint">No schedules yet.</p>}
+          {automationMessage && <p className="mt-3 text-xs text-ink-dim" role="status">{automationMessage}</p>}
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
           <h2 className="text-sm font-semibold text-ink">Recent archive runs</h2>
           <p className="mt-1 text-sm text-ink-dim">Stored locally so you can see what finished after the live activity log has cleared.</p>
-          {runHistory.length ? <ul className="mt-3 divide-y divide-line text-sm">{runHistory.slice(0, 8).map((run) => <li key={run.id} className="flex flex-wrap items-center justify-between gap-2 py-2"><span className="capitalize text-ink">{run.kind}</span><span className="text-ink-dim">{run.outcome ?? "running"}: {run.counts.done ?? 0} ready, {run.counts.failed ?? 0} failed</span><time className="text-xs text-ink-faint" dateTime={run.started_at}>{new Date(run.started_at).toLocaleString()}</time></li>)}</ul> : <p className="mt-3 text-sm text-ink-faint">No completed archive runs yet.</p>}
+          {runHistory.length ? <ul className="mt-3 divide-y divide-line text-sm">{runHistory.slice(0, 12).map((run) => <li key={run.id} className="flex flex-wrap items-center gap-2 py-2"><span className="tabular text-xs text-ink-faint">#{run.id}</span><span className="capitalize text-ink">{run.phase}</span><span className="text-ink-dim">{run.outcome ?? "running"}: {run.counts.done ?? 0} ready, {run.counts.failed ?? 0} failed</span>{run.retry_of && <span className="text-xs text-ink-faint">retry of #{run.retry_of}</span>}<time className="ml-auto text-xs text-ink-faint" dateTime={run.started_at}>{new Date(run.started_at).toLocaleString()}</time>{(run.outcome === "failed" || run.outcome === "stopped") && runCatalog.find((entry) => entry.kind === run.kind)?.resumable && <Button variant="ghost" size="xs" disabled={running} onClick={() => void retryRun(run)}>Retry</Button>}{run.error && <span className="w-full text-xs text-bad">{run.error}</span>}</li>)}</ul> : <p className="mt-3 text-sm text-ink-faint">No completed archive runs yet.</p>}
         </section>
           </div>
         </details>
@@ -516,7 +626,7 @@ export function Dashboard() {
                       <>
                         <span className="tabular text-ink-dim">#{e.id}</span>
                         <span className="flex items-center gap-3">
-                          {e.kind && <span className="text-xs text-ink-faint">{e.kind}</span>}
+                          {(e.item_kind ?? e.kind) && <span className="text-xs text-ink-faint">{e.item_kind ?? e.kind}</span>}
                           {e.status && <StatusBadge status={e.status} />}
                         </span>
                       </>
@@ -531,4 +641,3 @@ export function Dashboard() {
     </div>
   );
 }
-

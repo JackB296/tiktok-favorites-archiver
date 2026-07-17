@@ -11,20 +11,13 @@ runner — no requests/moviepy needed.
 import os
 import queue
 import threading
+import uuid
 
-from core import enrich, identify, layout, runs, sidecars, store, sync
+from core import layout, run_catalog, runs, store
 
 
 class JobBusyError(RuntimeError):
     """Raised when exclusive maintenance is attempted during an active job."""
-
-
-# A user-started Sync chains its incremental follow-up phases, so favorites from
-# a new export come out fully described without further clicks: Gallery search
-# metadata (captions/creators), then song identification when the owner has
-# opted in. A follow-up is skipped when it has nothing to do, and the chain
-# halts when a stage is stopped by the user or fails.
-PIPELINES = {"sync": ("sync", "enrich", "identify")}
 
 
 class Broadcaster:
@@ -56,14 +49,7 @@ class JobManager:
     def __init__(self, db_path, download_dir, runners=None):
         self.db_path = db_path
         self.download_dir = download_dir
-        self.runners = runners or {
-            "sync": sync.run_sync,
-            "backfill": sync.run_backfill,
-            "index": sync.run_index,
-            "sidecars": sidecars.run_sidecars,
-            "enrich": enrich.run_enrichment,
-            "identify": identify.run_identification,
-        }
+        self.runners = runners or run_catalog.default_runners()
         self._thread = None
         self._broadcaster = Broadcaster()
         self._lock = threading.Lock()
@@ -97,14 +83,9 @@ class JobManager:
 
     def _stage_has_work(self, conn, stage):
         """Whether a chained follow-up stage would do anything at all."""
-        if stage == "enrich":
-            return bool(enrich.items_needing_enrichment(conn))
-        if stage == "identify":
-            return bool(store.get_library_settings(conn)["song_id_enabled"]) \
-                and bool(store.items_needing_identification(conn))
-        return True
+        return run_catalog.has_work(conn, stage)
 
-    def start(self, kind="sync"):
+    def start(self, kind="sync", retry_of=None, **run_kwargs):
         # Non-blocking: while exclusive maintenance (e.g. a long import) holds
         # the lock, a Start is refused fast ({"started": false}) instead of
         # hanging the request until the maintenance finishes.
@@ -113,9 +94,20 @@ class JobManager:
         try:
             if self.is_running():
                 return False
-            stages = PIPELINES.get(kind, (kind,))
+            try:
+                conn = self._conn()
+                try:
+                    setting = store.get_pipeline_settings(conn, kind) if kind == "sync" else None
+                    stages = run_catalog.pipeline_for(
+                        kind, setting["phases"] if setting else None,
+                    )
+                finally:
+                    conn.close()
+            except ValueError:
+                return False
             if self.runners.get(stages[0]) is None:
                 return False
+            pipeline_id = uuid.uuid4().hex
 
             def run():
                 # runs.execute owns run_state and the run-history row per
@@ -135,6 +127,11 @@ class JobManager:
                             runner,
                             self.download_dir,
                             progress=self._broadcaster.publish,
+                            pipeline_id=pipeline_id,
+                            parent_kind=kind,
+                            phase_index=position,
+                            retry_of=retry_of if position == 0 else None,
+                            **run_kwargs,
                         )
                         # A user Stop ends the whole chain, not just the stage.
                         if store.get_run_state(conn)["state"] == "stopped":
@@ -149,10 +146,16 @@ class JobManager:
                         store.set_active_run_state(conn, "failed")
                     except Exception:
                         pass
-                    self._broadcaster.publish({"event": "error", "error": str(e)})
+                    self._broadcaster.publish({
+                        "event": "error", "error": str(e), "run_id": None,
+                        "kind": kind, "phase": None, "completed": None, "total": None,
+                    })
                 finally:
-                    self._broadcaster.publish({"event": "complete"})
                     conn.close()
+                    self._broadcaster.publish({
+                        "event": "complete", "run_id": None, "kind": kind,
+                        "phase": None, "completed": None, "total": None,
+                    })
 
             # Persist "running" before start() returns so controls issued
             # immediately after Start are not rejected while the thread spins up.
@@ -171,6 +174,23 @@ class JobManager:
             return True
         finally:
             self._lock.release()
+
+    def retry(self, run_id):
+        conn = self._conn()
+        try:
+            original = store.get_run_history(conn, run_id)
+        finally:
+            conn.close()
+        if original is None:
+            raise ValueError("run history entry not found")
+        if original["outcome"] not in ("failed", "stopped"):
+            raise ValueError("only failed or stopped runs can be retried")
+        if not run_catalog.get(original["kind"]).resumable:
+            raise ValueError("this run is not safely retryable")
+        started = self.start(
+            original["kind"], retry_of=original["id"], **original["params"],
+        )
+        return {"started": started, "retry_of": original["id"]}
 
     def run_when_idle(self, operation):
         """Run short exclusive maintenance without racing a job start.

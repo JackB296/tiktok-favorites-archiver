@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import ts from "typescript";
+const source = await readFile(new URL("../src/lib/snapshotPresentation.ts", import.meta.url), "utf8");
+const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
+const lib = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
+assert.equal(lib.REPLACE_CONFIRMATION, "REPLACE ARCHIVE");
+assert.equal(lib.snapshotSize(1_250_000_000), "1.3 GB");
+assert.equal(lib.restoreDisclosure({ snapshot_items: 5, target_items: 2, required_bytes: 4_000_000, conflicts: 1 }), "5 snapshot Favorites replace 2 current Favorites · 4.0 MB media · 1 conflicts");
+console.log("PASS snapshot presentation");

@@ -50,6 +50,8 @@ export interface Item {
   link: string;
   caption: string | null;
   author: string | null;
+  creator: DiscoveryIdentity | null;
+  hashtags: DiscoveryIdentity[];
   kind: Kind;
   status: Status;
   error: string | null;
@@ -75,6 +77,24 @@ export interface Item {
   thumbnail_url: string | null;
 }
 
+export interface DiscoveryIdentity {
+  id: number;
+  key: string;
+  display: string;
+}
+
+export interface DiscoveryEntity extends DiscoveryIdentity {
+  count: number;
+  latest_at: string | null;
+  first_item_id: number | null;
+  trend?: Array<{ month: string; count: number }>;
+}
+
+export interface DiscoveryPage {
+  items: DiscoveryEntity[];
+  next_cursor: number | null;
+}
+
 export interface ItemPage {
   items: Item[];
   next_cursor: number | null;
@@ -90,22 +110,26 @@ export interface RunStatus {
 
 /** Event pushed over SSE from a running sync/backfill. */
 export interface ProgressEvent {
+  run_id?: number | null;
   id?: number;
   status?: Status;
-  kind?: Kind | "transient";
+  kind?: string | null;
+  item_kind?: Kind | "transient";
+  phase?: string | null;
   has_assets?: number;
-  event?: "complete" | "error" | "indexing" | "sidecars" | "enrichment" | "identification" | "verify" | "backfill";
+  event?: "complete" | "error" | "indexing" | "sidecars" | "enrichment" | "identification" | "verify" | "backfill" | "transfer";
   error?: string;
   indexed?: number;
   failed?: number;
-  completed?: number;
-  total?: number;
+  completed?: number | null;
+  total?: number | null;
   enriched?: number;
   unavailable?: number;
   identified?: number;
   no_match?: number;
   errors?: number;
   recovered?: number;
+  files?: number;
   title?: string | null;
 }
 
@@ -113,6 +137,53 @@ export interface ImportResult {
   favorites: number;
   existing_files: number;
   manifest_rows: number;
+}
+
+export interface StorageLocation {
+  id: number;
+  name: string;
+  path: string;
+  available: boolean;
+  last_error: string | null;
+  last_checked_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StorageTransferPreview {
+  plan_id: string;
+  action: "copy" | "move" | "restore";
+  items: number;
+  files: number;
+  bytes: number;
+  conflicts?: number;
+  already_verified?: number;
+  placements?: number;
+  missing_verified?: number[];
+}
+
+export interface SnapshotResource {
+  id: string;
+  name: string;
+  location_id: number;
+  location_name: string;
+  state: "complete" | "partial" | "invalid";
+  mode?: "metadata" | "complete";
+  created_at?: string;
+  items?: number;
+  error?: string;
+}
+
+export interface SnapshotRestorePlan {
+  plan_id: string;
+  token: string;
+  mode: "metadata" | "complete";
+  snapshot_items: number;
+  target_items: number;
+  required_bytes: number;
+  conflicts: number;
+  requires_replace: boolean;
+  confirmation: string | null;
 }
 
 export interface LegacyMappingSegment {
@@ -236,12 +307,21 @@ export interface GalleryPresetFilters {
   minAttempts?: string;
   maxAttempts?: string;
   recovery?: boolean;
+  creator?: string;
+  hashtag?: string;
 }
 
 export interface GalleryPreset {
   id: number;
   name: string;
   filters: GalleryPresetFilters;
+}
+
+export interface SmartCollectionSummary {
+  id: number;
+  name: string;
+  count: number;
+  first_item_id: number | null;
 }
 
 export interface GalleryTermList {
@@ -284,6 +364,41 @@ export interface RunHistoryEntry {
   started_at: string;
   finished_at: string | null;
   counts: Partial<Record<Status, number>>;
+  pipeline_id: string | null;
+  parent_kind: string;
+  phase: string;
+  phase_index: number | null;
+  retry_of: number | null;
+  error: string | null;
+}
+
+export interface RunCatalogEntry {
+  kind: string;
+  label: string;
+  description: string;
+  resumable: boolean;
+  configurable_follow_up: boolean;
+}
+
+export interface PipelineSettings {
+  kind: "sync";
+  phases: string[];
+  updated_at: string;
+}
+
+export interface RunSchedule {
+  id: number;
+  name: string;
+  run_kind: string;
+  cadence: "daily" | "weekly";
+  local_time: string;
+  weekday: number | null;
+  timezone: string;
+  enabled: boolean;
+  next_due_at: string | null;
+  last_local_date: string | null;
+  last_started_at: string | null;
+  last_outcome: string | null;
 }
 
 export interface SearchSuggestion {
@@ -295,4 +410,92 @@ export interface SearchSuggestions {
   creators: SearchSuggestion[];
   hashtags: SearchSuggestion[];
   terms: SearchSuggestion[];
+}
+
+/** Spotify connection + push (Music tab). */
+export interface SpotifyStatus {
+  connected: boolean;
+  account_name: string | null;
+  client_id: string | null;
+  redirect_uri: string;
+}
+
+export interface SpotifyPushReport {
+  playlist: string;
+  url: string;
+  created: boolean;
+  pushed: number;
+  unmatched: Array<{ title: string; artist: string | null }>;
+}
+
+/** `/api/stats` — archive analytics for the Stats tab. */
+export interface StatsHero {
+  total: number;
+  videos: number;
+  slideshows: number;
+  archived: number;
+  archived_pct: number;
+  watch_seconds: number;
+  disk_bytes: number;
+  undated: number;
+  unindexed: number;
+}
+
+export interface StatsMonth {
+  month: string; // "YYYY-MM"
+  count: number;
+}
+
+export interface StatsHeatCell {
+  dow: number; // 0 = Sunday, per SQLite %w
+  hour: number;
+  count: number;
+}
+
+export interface StatsBucket {
+  label: string;
+  count: number;
+}
+
+export interface StatsWatcher {
+  heatmap: StatsHeatCell[];
+  duration_histogram: StatsBucket[];
+  median_duration_s: number | null;
+  silent: { count: number; of_indexed: number };
+}
+
+export interface StatsTopAuthor {
+  author: string;
+  count: number;
+}
+
+export interface StatsTopSong {
+  id: number;
+  title: string;
+  artist: string | null;
+  count: number;
+}
+
+export interface StatsTopHashtag {
+  tag: string;
+  count: number;
+}
+
+export interface StatsHealth {
+  statuses: Partial<Record<Status, number>>;
+  missing: number;
+  offloaded: number;
+  errors: Array<{ error: string; count: number }>;
+}
+
+export interface Stats {
+  hero: StatsHero;
+  growth: { monthly: StatsMonth[] };
+  watcher: StatsWatcher;
+  top: {
+    authors: StatsTopAuthor[];
+    songs: StatsTopSong[];
+    hashtags: StatsTopHashtag[];
+  };
+  health: StatsHealth;
 }

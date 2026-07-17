@@ -30,6 +30,8 @@ export interface GalleryFiltersState {
   indexState: string;
   include: string;
   exclude: string;
+  creator: string;
+  hashtag: string;
 }
 
 export type GalleryFilterKey = keyof GalleryFiltersState;
@@ -104,6 +106,8 @@ export const GALLERY_FILTER_FIELDS: GalleryFilterField[] = [
   text("indexState", "index", "index_state", (v) => `Index: ${v}`),
   text("include", "include", "include", (v) => `Include: ${v}`),
   text("exclude", "exclude", "exclude", (v) => `Exclude: ${v}`),
+  text("creator", "creator", "creator", (v) => `Creator: ${v}`),
+  text("hashtag", "hashtag", "hashtag", (v) => `Hashtag: #${v.replace(/^#/, "")}`),
 ];
 
 const FIELD_BY_KEY = Object.fromEntries(GALLERY_FILTER_FIELDS.map((field) => [field.key, field])) as Record<GalleryFilterKey, GalleryFilterField>;
@@ -115,7 +119,7 @@ const URL_FIELD_ORDER: GalleryFilterKey[] = [
   "search", "kind", "status", "order", "minDuration", "maxDuration", "minSize", "maxSize",
   "minWidth", "maxWidth", "minHeight", "maxHeight", "codec", "minAttempts", "maxAttempts",
   "recovery", "dateFrom", "dateTo", "orientation", "assets", "audio", "offloaded",
-  "indexState", "include", "exclude",
+  "indexState", "include", "exclude", "creator", "hashtag",
 ];
 
 export function emptyFilters(): GalleryFiltersState {
@@ -201,6 +205,8 @@ export function filtersToPageQuery(state: GalleryFiltersState, randomSeed: numbe
     offloaded: (state.offloaded === "with" || state.offloaded === "without" ? state.offloaded : undefined) as "with" | "without" | undefined,
     index_state: (state.indexState === "indexed" || state.indexState === "missing" || state.indexState === "failed" ? state.indexState : undefined) as "indexed" | "missing" | "failed" | undefined,
     include: state.include, exclude: state.exclude,
+    creator: state.creator || undefined,
+    hashtag: state.hashtag || undefined,
   };
 }
 

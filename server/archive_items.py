@@ -5,13 +5,14 @@ The module hides SQLite rows and archive-file layout behind ``page`` and
 """
 import os
 
-from core import layout, store
+from core import discovery, layout, selection, store
 
 _GALLERY_PRESET_FIELDS = {
     "search", "kind", "status", "order", "minDuration", "maxDuration",
     "minSize", "maxSize", "minWidth", "maxWidth", "minHeight", "maxHeight", "codec",
     "dateFrom", "dateTo", "orientation", "assets", "audio", "offloaded", "indexState", "include", "exclude",
     "minAttempts", "maxAttempts", "recovery",
+    "creator", "hashtag",
 }
 
 
@@ -27,6 +28,52 @@ def gallery_preset_filters(value):
     ):
         raise ValueError("filters contain an unsupported value")
     return {key: item for key, item in value.items() if item}
+
+
+_PRESET_TO_PAGE = {
+    "search": ("search", lambda value: value),
+    "kind": ("kind", lambda value: value),
+    "status": ("status", lambda value: value),
+    "order": ("order", lambda value: value),
+    "minDuration": ("min_duration", lambda value: value),
+    "maxDuration": ("max_duration", lambda value: value),
+    "minSize": ("min_size", lambda value: str(round(float(value) * 1024 * 1024))),
+    "maxSize": ("max_size", lambda value: str(round(float(value) * 1024 * 1024))),
+    "minWidth": ("min_width", lambda value: value),
+    "maxWidth": ("max_width", lambda value: value),
+    "minHeight": ("min_height", lambda value: value),
+    "maxHeight": ("max_height", lambda value: value),
+    "minAttempts": ("min_attempts", lambda value: value),
+    "maxAttempts": ("max_attempts", lambda value: value),
+    "recovery": ("recovery", lambda value: "true" if value else ""),
+    "codec": ("codec", lambda value: value),
+    "dateFrom": ("date_from", lambda value: value),
+    "dateTo": ("date_to", lambda value: f"{value}T23:59:59"),
+    "orientation": ("orientation", lambda value: value),
+    "assets": ("assets", lambda value: value),
+    "audio": ("audio", lambda value: value),
+    "offloaded": ("offloaded", lambda value: value),
+    "indexState": ("index_state", lambda value: value),
+    "include": ("include", lambda value: value),
+    "exclude": ("exclude", lambda value: value),
+    "creator": ("creator", lambda value: value),
+    "hashtag": ("hashtag", lambda value: value),
+}
+
+
+def gallery_preset_query(filters, *, seed=None):
+    """Translate the persisted camelCase Gallery snapshot to page kwargs."""
+    params = {}
+    for key, value in gallery_preset_filters(filters).items():
+        if key not in _PRESET_TO_PAGE:
+            continue
+        wire, convert = _PRESET_TO_PAGE[key]
+        converted = convert(value)
+        if converted != "":
+            params[wire] = str(converted)
+    if params.get("order") == "random":
+        params["seed"] = str(seed if seed is not None else 0)
+    return parse_page_query(params)
 
 
 # --- saved named-list request bodies -----------------------------------------
@@ -176,6 +223,8 @@ _PAGE_PARAMS = {
     "index_state": ("index_state", str),
     "recovery": ("recovery", _boolean),
     "offloaded": ("offloaded", {"with": True, "without": False}.__getitem__),
+    "creator": ("creator_key", discovery.normalize_creator),
+    "hashtag": ("hashtag_key", discovery.normalize_hashtag),
     "feed": ("feed", _boolean),
 }
 
@@ -251,7 +300,7 @@ class ArchiveItems:
 
     def page(self, **query):
         query["limit"] = max(1, min(int(query.get("limit", 50)), 100))  # match the store's clamp, or next_cursor lies
-        rows = store.page_items(self._conn, **query)
+        rows = selection.ArchiveSelection.gallery(query, scope="page").rows(self._conn)
         items = self._public_batch(rows)
         return {"items": items, "next_cursor": items[-1]["id"] if len(items) == query["limit"] else None}
 
@@ -269,15 +318,30 @@ class ArchiveItems:
         files = os.listdir(self._download_dir) if os.path.isdir(self._download_dir) else []
         movies = set(layout.finished_movie_ids(files))
         songs = store.get_songs(self._conn, [row["song_id"] for row in rows if row["song_id"]])
-        return [self._public(row, movies=movies, songs=songs) for row in rows]
+        identities = discovery.identities_for_items(
+            self._conn, [row["id"] for row in rows],
+        )
+        return [
+            self._public(row, movies=movies, songs=songs, identities=identities)
+            for row in rows
+        ]
 
-    def _public(self, row, movies=None, songs=None):
+    def _public(self, row, movies=None, songs=None, identities=None):
         item_id = row["id"]
+        identity = (
+            identities.get(item_id, {"creator": None, "hashtags": []})
+            if identities is not None
+            else discovery.identities_for_items(self._conn, [item_id]).get(
+                item_id, {"creator": None, "hashtags": []},
+            )
+        )
         data = {
             "id": item_id,
             "link": row["link"],
             "caption": row["caption"],
             "author": row["author"],
+            "creator": identity["creator"],
+            "hashtags": identity["hashtags"],
             "kind": row["kind"],
             "status": row["status"],
             "error": row["error"],

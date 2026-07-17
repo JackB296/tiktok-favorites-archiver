@@ -8,18 +8,14 @@ lifecycle state on the user's behalf.
 """
 import os
 
-from core import layout, store
+from core import layout, selection, store
 
 MARK_ACTIONS = ("offload", "unoffload", "ignore", "unignore")
 
 
 def resolve_selector(conn, kind, value):
     """Selector -> concrete Archive item ids (``ids`` / ``range`` / ``filter``)."""
-    if kind == "ids":
-        return value
-    if kind == "range":
-        return store.item_ids_in_range(conn, value["first_id"], value["last_id"])
-    return store.item_ids_matching(conn, **value)
+    return selection.ArchiveSelection.bulk(kind, value).ids(conn)
 
 
 def mark(conn, download_dir, action, kind, value, dry_run=False):

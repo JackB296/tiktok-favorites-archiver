@@ -177,7 +177,11 @@ def test_rebuild_index_uses_library_quality_and_reports_progress():
 
     assert result == {"indexed": 1, "failed": 0}
     assert calls == [(dl, 320, True)]
-    assert events == [{"event": "indexing", "indexed": 1, "failed": 0, "completed": 1, "total": 1}]
+    assert len(events) == 1
+    assert {
+        key: events[0][key]
+        for key in ("event", "indexed", "failed", "completed", "total")
+    } == {"event": "indexing", "indexed": 1, "failed": 0, "completed": 1, "total": 1}
     assert store.get_run_state(conn)["state"] == "idle"
 
 
