@@ -62,7 +62,11 @@ def test_import_existing_files_and_assets_and_manifest():
         os.makedirs(os.path.join(dl, "2"))
 
         result = importer.import_all(conn, exp, dl)
-        assert result == {"favorites": 3, "existing_files": 2, "manifest_rows": 2}
+        assert {
+            key: result[key] for key in ("favorites", "existing_files", "manifest_rows")
+        } == {"favorites": 3, "existing_files": 2, "manifest_rows": 2}
+        assert result["import_record"]["favorite_count"] == 3
+        assert result["import_record"]["comparison"]["counts"]["new"] == 3
 
         assert store.get_item(conn, 1)["status"] == "done"
         assert store.get_item(conn, 2)["status"] == "done"
@@ -88,6 +92,23 @@ def test_import_is_idempotent():
         assert len(store.all_items(conn)) == 2
         assert _rows(os.path.join(dl, importer.config.MANIFEST_FILE))  # still valid
         assert len(_rows(os.path.join(dl, importer.config.MANIFEST_FILE))) == 1
+
+
+def test_missing_export_does_not_create_an_empty_history_checkpoint():
+    conn = store.init_db(store.connect(":memory:"))
+    with tempfile.TemporaryDirectory() as d:
+        exp = os.path.join(d, "e.json")
+        _make_export(exp, [("La", "2021")])
+        first = importer.import_all(conn, exp, d)
+
+        missing = importer.import_all(
+            conn, os.path.join(d, "missing.json"), d,
+        )
+
+    assert first["import_record"] is not None
+    assert missing["favorites"] == 0
+    assert missing["import_record"] is None
+    assert conn.execute("SELECT COUNT(*) FROM import_history").fetchone()[0] == 1
 
 
 def test_orphan_file_beyond_export_is_represented():

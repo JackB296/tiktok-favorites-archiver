@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse, RedirectResponse, FileResponse
 from starlette.background import BackgroundTask
 
-from core import config, discovery, store, storage, snapshots, selection, run_catalog, scheduler, importer, cobalt, curation, export, layout, verify, inventory, legacy_bootstrap, manual_media, media_index, songid, spotify, stats
+from core import config, discovery, store, storage, snapshots, selection, run_catalog, scheduler, importer, import_history as archive_history, cobalt, curation, export, layout, verify, inventory, legacy_bootstrap, manual_media, media_index, songid, spotify, stats, lens, memory, stories, story_render
 from server import archive_items
 from server.archive_items import ArchiveItems
 from server.jobs import JobBusyError
@@ -447,10 +447,158 @@ def item_window(request: Request, n: int, limit: int = 50):
         conn.close()
 
 
+@router.post("/items/{n}/played")
+def item_played(request: Request, n: int):
+    conn = _open(request)
+    try:
+        try:
+            return memory.record_play(conn, n)
+        except memory.MemoryError as error:
+            raise HTTPException(status_code=404, detail=str(error))
+    finally:
+        conn.close()
+
+
+@router.get("/memories")
+def memories(request: Request, date: str | None = None, limit: int = 12):
+    conn = _open(request)
+    try:
+        try:
+            result = memory.build_sections(conn, on_date=date, limit=limit)
+        except memory.MemoryError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        projector = _archive_items(request, conn)
+        item_ids = list(dict.fromkeys(
+            item_id
+            for section in result["sections"]
+            for item_id in section["item_ids"]
+        ))
+        items = projector.selected(item_ids)
+        by_id = {item["id"]: item for item in items}
+        return {
+            **result,
+            "sections": [
+                {
+                    **section,
+                    "items": [
+                        by_id[item_id]
+                        for item_id in section["item_ids"]
+                        if item_id in by_id
+                    ],
+                }
+                for section in result["sections"]
+            ],
+        }
+    finally:
+        conn.close()
+
+
+def _story_response(story):
+    if story is None:
+        return None
+    return {
+        **story,
+        "rendered_url": (
+            f"/media/{story['rendered_path']}" if story["rendered_path"] else None
+        ),
+    }
+
+
+@router.get("/stories")
+def list_stories(request: Request, limit: int = 200):
+    conn = _open(request)
+    try:
+        return [
+            _story_response(story)
+            for story in stories.list_stories(conn, limit=limit)
+        ]
+    finally:
+        conn.close()
+
+
+@router.post("/stories")
+async def create_story(request: Request):
+    body = await _json_body(request)
+    conn = _open(request)
+    try:
+        try:
+            return _story_response(stories.create_story(conn, body))
+        except stories.StoryError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+    finally:
+        conn.close()
+
+
+@router.get("/stories/{story_id}")
+def get_story(request: Request, story_id: int):
+    conn = _open(request)
+    try:
+        story = stories.get_story(conn, story_id)
+        if story is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        return _story_response(story)
+    finally:
+        conn.close()
+
+
+@router.patch("/stories/{story_id}")
+async def update_story(request: Request, story_id: int):
+    body = await _json_body(request)
+    conn = _open(request)
+    try:
+        try:
+            story = stories.update_story(conn, story_id, body)
+        except stories.StoryError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        if story is None:
+            raise HTTPException(status_code=404, detail="story not found")
+        return _story_response(story)
+    finally:
+        conn.close()
+
+
+@router.delete("/stories/{story_id}")
+def delete_story(request: Request, story_id: int):
+    conn = _open(request)
+    try:
+        current = stories.get_story(conn, story_id)
+        if not stories.delete_story(conn, story_id):
+            raise HTTPException(status_code=404, detail="story not found")
+        if current and current["rendered_path"]:
+            _remove_temp_files([layout.story_movie(_download_dir(request), story_id)])
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.post("/stories/{story_id}/render")
+async def render_story(request: Request, story_id: int):
+    def operation():
+        conn = _open(request)
+        try:
+            if stories.get_story(conn, story_id) is None:
+                raise HTTPException(status_code=404, detail="story not found")
+            return _story_response(
+                story_render.render_story(
+                    conn, _download_dir(request), story_id,
+                )
+            )
+        finally:
+            conn.close()
+
+    try:
+        return await _exclusive(request, operation)
+    except JobBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    except story_render.StoryRenderError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
 MAX_IMPORT_BYTES = 512 * 1024 * 1024  # far above any real TikTok export
 MAX_REPLACEMENT_VIDEO_BYTES = 1024 * 1024 * 1024
 MAX_REPLACEMENT_THUMBNAIL_BYTES = 20 * 1024 * 1024
 MAX_DEFAULT_AUDIO_BYTES = 20 * 1024 * 1024
+MAX_ANALYSIS_BYTES = 64 * 1024 * 1024
 
 
 async def _stage_upload(upload, prefix, suffix, max_bytes=MAX_IMPORT_BYTES, directory=None):
@@ -481,6 +629,88 @@ def _remove_temp_files(paths):
             os.unlink(path)
         except OSError:
             pass
+
+
+@router.get("/lens/status")
+def lens_status(request: Request):
+    conn = _open(request)
+    try:
+        return lens.status(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/items/{n}/captions")
+def item_captions(request: Request, n: int):
+    conn = _open(request)
+    try:
+        try:
+            captions = lens.caption_segments(conn, n)
+        except lens.LensError as error:
+            raise HTTPException(status_code=404, detail=str(error))
+        return {"item_id": n, "captions": captions}
+    finally:
+        conn.close()
+
+
+@router.get("/lens/search")
+def lens_search(
+    request: Request,
+    q: str = "",
+    source: str | None = None,
+    limit: int = 50,
+):
+    conn = _open(request)
+    try:
+        try:
+            matches = lens.search_segments(
+                conn, q, source=source, limit=max(1, min(limit, 100)),
+            )
+        except lens.LensError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        items = _archive_items(request, conn).selected(
+            list(dict.fromkeys(match["item_id"] for match in matches))
+        )
+        by_id = {item["id"]: item for item in items}
+        results = []
+        for match in matches:
+            item = by_id.get(match["item_id"])
+            if item is None:
+                continue
+            start = f"{match['start_s']:g}"
+            results.append({
+                **match,
+                "item": item,
+                "feed_url": f"/?{urlencode({'item': match['item_id'], 'start_s': start})}",
+            })
+        return {"query": q, "results": results, **lens.status(conn)}
+    finally:
+        conn.close()
+
+
+@router.post("/lens/import")
+async def lens_import(request: Request, file: UploadFile = File(...)):
+    staged = None
+    try:
+        staged = await _stage_upload(
+            file, "archive-analysis-", ".json", max_bytes=MAX_ANALYSIS_BYTES,
+        )
+        document = lens.load_document(staged)
+
+        def operation():
+            conn = _open(request)
+            try:
+                return lens.import_document(conn, document)
+            finally:
+                conn.close()
+
+        return await _exclusive(request, operation)
+    except lens.LensError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except JobBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    finally:
+        _remove_temp_files([staged] if staged else [])
 
 
 @router.post("/items/{n}/media")
@@ -606,13 +836,19 @@ def _legacy_mapping_segments(value):
 @router.post("/import")
 async def import_export(request: Request, file: UploadFile = File(...)):
     tmp_path = None
+    source_name = file.filename
     try:
         tmp_path = await _stage_upload(file, "tiktok-export-", ".json")
 
         def operation():
             conn = _open(request)
             try:
-                return importer.import_all(conn, tmp_path, _download_dir(request))
+                return importer.import_all(
+                    conn,
+                    tmp_path,
+                    _download_dir(request),
+                    source_name=source_name,
+                )
             finally:
                 conn.close()
 
@@ -628,6 +864,27 @@ async def import_export(request: Request, file: UploadFile = File(...)):
     finally:
         if tmp_path:
             _remove_temp_files([tmp_path])
+
+
+@router.get("/imports")
+def list_imports(request: Request, limit: int = 50):
+    conn = _open(request)
+    try:
+        return archive_history.list_imports(conn, limit=limit)
+    finally:
+        conn.close()
+
+
+@router.get("/imports/{import_id}")
+def get_import(request: Request, import_id: int):
+    conn = _open(request)
+    try:
+        result = archive_history.get_import(conn, import_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="import not found")
+        return result
+    finally:
+        conn.close()
 
 
 @router.get("/storage-locations")

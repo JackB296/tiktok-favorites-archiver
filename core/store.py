@@ -222,6 +222,67 @@ CREATE TABLE IF NOT EXISTS media_placement_file (
     sha256 TEXT NOT NULL,
     PRIMARY KEY(placement_id, path)
 );
+CREATE TABLE IF NOT EXISTS analysis_segment (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES item(id) ON DELETE CASCADE,
+    source TEXT NOT NULL CHECK (source IN ('transcript', 'ocr')),
+    text TEXT NOT NULL,
+    start_s REAL NOT NULL DEFAULT 0 CHECK (start_s >= 0),
+    end_s REAL CHECK (end_s IS NULL OR end_s >= start_s),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_analysis_segment_item ON analysis_segment(item_id, start_s, id);
+CREATE VIRTUAL TABLE IF NOT EXISTS analysis_search USING fts5(
+    text,
+    content='analysis_segment',
+    content_rowid='id'
+);
+CREATE TRIGGER IF NOT EXISTS analysis_search_insert AFTER INSERT ON analysis_segment BEGIN
+    INSERT INTO analysis_search(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS analysis_search_delete AFTER DELETE ON analysis_segment BEGIN
+    INSERT INTO analysis_search(analysis_search, rowid, text)
+    VALUES ('delete', old.id, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS analysis_search_update AFTER UPDATE OF text ON analysis_segment BEGIN
+    INSERT INTO analysis_search(analysis_search, rowid, text)
+    VALUES ('delete', old.id, old.text);
+    INSERT INTO analysis_search(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TABLE IF NOT EXISTS item_play (
+    item_id INTEGER PRIMARY KEY REFERENCES item(id) ON DELETE CASCADE,
+    play_count INTEGER NOT NULL DEFAULT 0 CHECK (play_count >= 0),
+    first_played_at TEXT NOT NULL,
+    last_played_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_item_play_last ON item_play(last_played_at, item_id);
+CREATE TABLE IF NOT EXISTS import_history (
+    id INTEGER PRIMARY KEY,
+    source_name TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    favorite_count INTEGER NOT NULL CHECK (favorite_count >= 0),
+    imported_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_import_history_time ON import_history(imported_at DESC, id DESC);
+CREATE TABLE IF NOT EXISTS import_membership (
+    import_id INTEGER NOT NULL REFERENCES import_history(id) ON DELETE CASCADE,
+    item_id INTEGER NOT NULL REFERENCES item(id) ON DELETE RESTRICT,
+    link TEXT NOT NULL,
+    favorited_at TEXT,
+    PRIMARY KEY(import_id, link)
+);
+CREATE INDEX IF NOT EXISTS idx_import_membership_item ON import_membership(item_id, import_id);
+CREATE TABLE IF NOT EXISTS story (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    chapters_json TEXT NOT NULL,
+    rendered_path TEXT,
+    rendered_at TEXT,
+    render_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS item_search USING fts5(
     caption,
     author,

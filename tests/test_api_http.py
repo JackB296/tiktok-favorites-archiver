@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import threading
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -225,6 +226,157 @@ def test_media_route_never_serves_internal_archive_areas():
             assert client.get("/media/.archive/replaced/1.mp4").status_code == 403
             ok = client.get("/media/.archive/thumbnails/1.webp")
             assert ok.status_code == 200 and ok.content == b"thumb"
+
+
+def test_local_lens_import_status_and_search_routes():
+    if TestClient is None:
+        return
+    from core import store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, db_path, _downloads = _build(tmp)
+        conn = store.connect(db_path)
+        store.insert_item(
+            conn, 1, "https://www.tiktok.com/@cook/video/1", status="done",
+        )
+        store.insert_item(
+            conn, 2, "https://www.tiktok.com/@cook/video/2", status="done",
+        )
+        conn.close()
+        document = {
+            "items": [{"item_id": 1, "segments": [{
+                "source": "transcript",
+                "text": "Press the parmesan side down for crispy potatoes.",
+                "start_s": 18,
+                "end_s": 24,
+            }]}],
+        }
+
+        with TestClient(app) as client:
+            imported = client.post(
+                "/api/lens/import",
+                files={"file": ("analysis.json", json.dumps(document), "application/json")},
+            )
+            assert imported.status_code == 200, imported.text
+            assert imported.json() == {"items": 1, "segments": 1}
+            assert client.get("/api/lens/status").json() == {"items": 1, "segments": 1}
+
+            searched = client.get("/api/lens/search", params={"q": "crispy parmesan"})
+            assert searched.status_code == 200, searched.text
+            result = searched.json()["results"][0]
+            assert result["item"]["id"] == 1
+            assert result["source"] == "transcript"
+            assert result["start_s"] == 18
+            assert result["feed_url"] == "/?item=1&start_s=18"
+
+            captions = client.get("/api/items/1/captions")
+            assert captions.status_code == 200, captions.text
+            assert captions.json() == {
+                "item_id": 1,
+                "captions": [{
+                    "id": 1,
+                    "item_id": 1,
+                    "source": "transcript",
+                    "text": "Press the parmesan side down for crispy potatoes.",
+                    "start_s": 18.0,
+                    "end_s": 24.0,
+                }],
+            }
+            assert client.get("/api/items/2/captions").json() == {
+                "item_id": 2,
+                "captions": [],
+            }
+            assert client.get("/api/items/999/captions").status_code == 404
+
+            bad = client.post(
+                "/api/lens/import",
+                files={"file": ("analysis.json", '{"items":"bad"}', "application/json")},
+            )
+            assert bad.status_code == 400
+            assert client.get("/api/lens/status").json() == {"items": 1, "segments": 1}
+
+
+def test_archive_intelligence_history_memory_and_story_routes():
+    if TestClient is None:
+        return
+    from unittest.mock import patch
+    from core import layout, stories, store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, db_path, downloads = _build(tmp)
+        export_body = {
+            "Activity": {"Favorite Videos": {"FavoriteVideoList": [
+                {"Link": "https://tiktok.com/1", "Date": "2024-07-19 10:00:00"},
+                {"Link": "https://tiktok.com/2", "Date": "2023-07-01 10:00:00"},
+            ]}},
+        }
+        with TestClient(app) as client:
+            imported = client.post(
+                "/api/import",
+                files={"file": ("user_data_tiktok.json", json.dumps(export_body), "application/json")},
+            )
+            assert imported.status_code == 200, imported.text
+            record = imported.json()["import_record"]
+            assert record["comparison"]["counts"]["new"] == 2
+            assert client.get("/api/imports").json()[0]["id"] == record["id"]
+            assert client.get(f"/api/imports/{record['id']}").json()["favorite_count"] == 2
+            assert client.get("/api/imports/9999").status_code == 404
+
+            conn = store.connect(db_path)
+            for item_id in (1, 2):
+                store.set_status(conn, item_id, "done")
+                conn.execute(
+                    "UPDATE item SET duration_s = 8, has_audio = 1 WHERE id = ?",
+                    (item_id,),
+                )
+                with open(layout.movie(downloads, item_id), "wb") as target:
+                    target.write(b"movie")
+            conn.commit()
+            conn.close()
+
+            memories = client.get("/api/memories", params={"date": "2026-07-19"})
+            assert memories.status_code == 200
+            assert memories.json()["sections"][0]["item_ids"] == [1]
+            assert client.post("/api/items/1/played").json()["play_count"] == 1
+            assert client.post("/api/items/999/played").status_code == 404
+
+            created = client.post("/api/stories", json={
+                "name": "Summer",
+                "description": "A local reel",
+                "chapters": [
+                    {"item_id": 1, "title": "First", "start_s": 0, "end_s": 4},
+                    {"item_id": 2, "title": "Second", "start_s": 1, "end_s": 5},
+                ],
+            })
+            assert created.status_code == 200, created.text
+            story = created.json()
+            assert client.get("/api/stories").json()[0]["id"] == story["id"]
+            renamed = client.patch(
+                f"/api/stories/{story['id']}", json={
+                    "name": "Summer favorites",
+                    "description": story["description"],
+                    "chapters": story["chapters"],
+                },
+            )
+            assert renamed.status_code == 200
+
+            os.makedirs(layout.stories_dir(downloads), exist_ok=True)
+            with open(layout.story_movie(downloads, story["id"]), "wb") as target:
+                target.write(b"rendered")
+
+            def fake_render(conn, _download_dir, story_id):
+                return stories.record_render_success(
+                    conn, story_id, layout.story_relpath(story_id),
+                )
+
+            with patch("server.api.story_render.render_story", side_effect=fake_render):
+                rendered = client.post(f"/api/stories/{story['id']}/render")
+            assert rendered.status_code == 200, rendered.text
+            assert rendered.json()["rendered_url"].endswith(f"/{story['id']}.mp4")
+            assert client.get(rendered.json()["rendered_url"]).content == b"rendered"
+
+            assert client.delete(f"/api/stories/{story['id']}").json() == {"ok": True}
+            assert client.get(f"/api/stories/{story['id']}").status_code == 404
 
 
 def test_feed_ids_rejects_paging_keys_like_mark_does():

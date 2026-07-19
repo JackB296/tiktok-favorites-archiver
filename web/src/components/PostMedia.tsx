@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, RefObject } from "react";
 import { Archive, CaretLeft, CaretRight, LinkBreak, Pause, Play } from "@phosphor-icons/react";
-import type { Item } from "../lib/types";
+import type { CaptionSegment, Item } from "../lib/types";
+import { api } from "../lib/api";
 import { feedMediaKind } from "../lib/feedItems";
 import { cx } from "./ui";
 import { usePlayback } from "./playback";
 import { normalizationGain } from "../lib/playbackVolume.js";
 import { formatMediaTime } from "../lib/format";
 import { containedMediaBox } from "../lib/mediaLayout.js";
+import { activeTranscriptCaption, mediaStartRequest } from "../lib/lensPresentation.js";
 
 /** Track an element's rendered size so overlays can align to letterboxed media. */
 function useElementSize() {
@@ -30,10 +32,10 @@ function useElementSize() {
  * Videos autoplay while `active`; slideshows use manual prev/next with continuous
  * audio. Nothing plays unless `active`.
  */
-export function PostMedia({ item, active, preload = false }: { item: Item; active: boolean; preload?: boolean }) {
+export function PostMedia({ item, active, preload = false, startAtS = null }: { item: Item; active: boolean; preload?: boolean; startAtS?: number | null }) {
   if (!active && !preload) return <MediaPlaceholder />;
   switch (feedMediaKind(item)) {
-    case "video": return <VideoMedia src={item.video_url!} active={active} preload={preload} />;
+    case "video": return <VideoMedia itemId={item.id} src={item.video_url!} active={active} preload={preload} startAtS={startAtS} />;
     case "slideshow": return <SlideMedia images={item.images} audio={item.audio} active={active} />;
     case "offloaded": return <OffloadedExternally />;
     case "expired": return <UnavailableOriginal />;
@@ -53,8 +55,8 @@ function MediaPlaceholder() {
   return <div aria-hidden="true" className="h-full w-full bg-black" />;
 }
 
-function VideoMedia({ src, active, preload }: { src: string; active: boolean; preload: boolean }) {
-  const { muted, setMuted, volume, autoLevel, setAutoGain, paused, togglePaused } = usePlayback();
+function VideoMedia({ itemId, src, active, preload, startAtS }: { itemId: number; src: string; active: boolean; preload: boolean; startAtS: number | null }) {
+  const { muted, setMuted, volume, autoLevel, setAutoGain, paused, togglePaused, captionsEnabled } = usePlayback();
   const ref = useRef<HTMLVideoElement>(null);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [ready, setReady] = useState(false);
@@ -64,7 +66,13 @@ function VideoMedia({ src, active, preload }: { src: string; active: boolean; pr
   const [duration, setDuration] = useState(0);
   const [boxRef, boxSize] = useElementSize();
   const [mediaSize, setMediaSize] = useState({ w: 0, h: 0 });
+  const [captionState, setCaptionState] = useState<{ itemId: number; captions: CaptionSegment[] } | null>(null);
+  const appliedStartRef = useRef<string | null>(null);
   const media = containedMediaBox(boxSize.width, boxSize.height, mediaSize.w, mediaSize.h);
+  const captions = captionState?.itemId === itemId ? captionState.captions : [];
+  const activeCaption = captionsEnabled
+    ? activeTranscriptCaption(captions, currentTime)
+    : null;
 
   useEffect(() => {
     setReady(false);
@@ -72,7 +80,42 @@ function VideoMedia({ src, active, preload }: { src: string; active: boolean; pr
     setLoadError(false);
     setCurrentTime(0);
     setDuration(0);
+    appliedStartRef.current = null;
   }, [src]);
+
+  useEffect(() => {
+    if (!active || !captionsEnabled || captionState?.itemId === itemId) return;
+    let alive = true;
+    api.itemCaptions(itemId)
+      .then((response) => {
+        if (alive) setCaptionState({ itemId, captions: response.captions });
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [active, captionState?.itemId, captionsEnabled, itemId]);
+
+  const applyStartTime = (media: HTMLVideoElement) => {
+    const request = mediaStartRequest(src, startAtS, media.duration);
+    if (request == null) {
+      appliedStartRef.current = null;
+      return;
+    }
+    if (appliedStartRef.current === request.signature) return;
+    media.currentTime = request.time;
+    setCurrentTime(media.currentTime);
+    appliedStartRef.current = request.signature;
+  };
+
+  useEffect(() => {
+    const media = ref.current;
+    if (startAtS == null) {
+      appliedStartRef.current = null;
+      return;
+    }
+    if (media && media.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      applyStartTime(media);
+    }
+  }, [src, startAtS]);
 
   useEffect(() => {
     const v = ref.current;
@@ -128,7 +171,7 @@ function VideoMedia({ src, active, preload }: { src: string; active: boolean; pr
         onCanPlay={() => { setReady(true); setWaiting(false); setLoadError(false); }}
         onPlaying={() => { setReady(true); setWaiting(false); }}
         onWaiting={() => active && setWaiting(true)}
-        onLoadedMetadata={(event) => { setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0); setMediaSize({ w: event.currentTarget.videoWidth, h: event.currentTarget.videoHeight }); }}
+        onLoadedMetadata={(event) => { setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0); setMediaSize({ w: event.currentTarget.videoWidth, h: event.currentTarget.videoHeight }); applyStartTime(event.currentTarget); }}
         onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
         onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
         onError={() => { setLoadError(true); setWaiting(false); }}
@@ -142,6 +185,13 @@ function VideoMedia({ src, active, preload }: { src: string; active: boolean; pr
         <input type="range" min="0" max={Math.max(duration, 0.01)} step="0.1" value={Math.min(currentTime, Math.max(duration, 0.01))} onChange={(event) => seek(Number(event.target.value))} aria-label="Video progress" className="pointer-events-auto h-1 min-w-0 flex-1 cursor-pointer accent-white" />
         <span className="tabular w-10 text-[11px] text-white/75">{formatMediaTime(duration)}</span>
       </div>}
+      {active && activeCaption && (
+        <div className="pointer-events-none absolute inset-x-4 bottom-[18%] z-20 text-center">
+          <p data-video-caption="true" className="line-clamp-4 inline-block max-w-full break-words rounded-md bg-black/80 px-3 py-1.5 text-base font-medium leading-relaxed text-white shadow-lg [text-shadow:0_1px_2px_rgba(0,0,0,0.9)] sm:text-lg">
+            {activeCaption.text}
+          </p>
+        </div>
+      )}
     </div>
     {active && !loadError && (!ready || waiting) && <MediaLoading />}
     {active && loadError && <div role="alert" className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-[var(--radius-control)] border border-white/15 bg-black/70 px-4 py-3 text-sm text-white/80">Video could not be loaded.</div>}

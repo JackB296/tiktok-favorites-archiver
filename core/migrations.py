@@ -2,7 +2,7 @@
 from datetime import datetime
 
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 REGISTRY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_metadata (

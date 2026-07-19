@@ -10,15 +10,20 @@ import os
 import csv
 import logging
 
-from core import config, export, inventory, layout, store
+from core import config, export, import_history, inventory, layout, store
+
+
+def import_favorites(conn, favorites):
+    """Upsert an already-parsed oldest-first Favorite list."""
+    for link, favorited_at in favorites:
+        store.upsert_link(conn, link, favorited_at=favorited_at)
+    return len(favorites)
 
 
 def import_export(conn, export_file):
     """Upsert one item per favorite, in order. Idempotent (dedups by link)."""
     favorites = export.load_all_favorites(export_file)
-    for link, favorited_at in favorites:
-        store.upsert_link(conn, link, favorited_at=favorited_at)
-    return len(favorites)
+    return import_favorites(conn, favorites)
 
 
 def import_existing_files(conn, download_dir):
@@ -70,11 +75,25 @@ def regenerate_manifest(conn, download_dir):
     return written
 
 
-def import_all(conn, export_file, download_dir):
-    n_fav = import_export(conn, export_file)
+def import_all(conn, export_file, download_dir, source_name=None):
+    source_exists = os.path.isfile(export_file)
+    favorites = export.load_all_favorites(export_file)
+    n_fav = import_favorites(conn, favorites)
     n_files = import_existing_files(conn, download_dir)
     n_manifest = regenerate_manifest(conn, download_dir)
+    import_record = (
+        import_history.record_import(
+            conn, favorites, source_name=source_name,
+        )
+        if source_exists
+        else None
+    )
     logging.info(
         f"Import: {n_fav} favorites, {n_files} existing files marked, {n_manifest} manifest rows"
     )
-    return {"favorites": n_fav, "existing_files": n_files, "manifest_rows": n_manifest}
+    return {
+        "favorites": n_fav,
+        "existing_files": n_files,
+        "manifest_rows": n_manifest,
+        "import_record": import_record,
+    }
