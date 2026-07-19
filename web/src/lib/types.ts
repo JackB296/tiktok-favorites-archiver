@@ -100,6 +100,118 @@ export interface ItemPage {
   next_cursor: number | null;
 }
 
+export interface LensStatus {
+  items: number;
+  segments: number;
+}
+
+export interface LensResult {
+  id: number;
+  item_id: number;
+  source: "transcript" | "ocr";
+  text: string;
+  snippet: string;
+  start_s: number;
+  end_s: number | null;
+  rank: number;
+  item: Item;
+  feed_url: string;
+}
+
+export interface LensSearchResponse extends LensStatus {
+  query: string;
+  results: LensResult[];
+}
+
+export interface CaptionSegment {
+  id: number;
+  item_id: number;
+  source: "transcript";
+  text: string;
+  start_s: number;
+  end_s: number | null;
+}
+
+export interface ItemCaptionsResponse {
+  item_id: number;
+  captions: CaptionSegment[];
+}
+
+export interface ImportComparisonCounts {
+  new: number;
+  removed: number;
+  unchanged: number;
+  protected: number;
+}
+
+export interface ImportChange {
+  item_id: number;
+  link: string;
+  favorited_at: string | null;
+  protected?: boolean;
+}
+
+export interface ImportRecord {
+  id: number;
+  source_name: string;
+  digest: string;
+  favorite_count: number;
+  imported_at: string;
+  previous_id: number | null;
+  comparison: {
+    counts: ImportComparisonCounts;
+    new?: ImportChange[];
+    removed?: ImportChange[];
+    truncated?: boolean;
+  };
+}
+
+export interface PlayRecord {
+  item_id: number;
+  play_count: number;
+  first_played_at: string;
+  last_played_at: string;
+}
+
+export interface MemorySection {
+  key: "on_this_day" | "forgotten" | "era";
+  title: string;
+  description: string;
+  item_ids: number[];
+  items: Item[];
+}
+
+export interface MemoryResponse {
+  date: string;
+  sections: MemorySection[];
+}
+
+export interface StoryChapter {
+  item_id: number;
+  title: string;
+  start_s: number;
+  end_s: number | null;
+}
+
+export interface Story {
+  id: number;
+  name: string;
+  description: string;
+  chapters: StoryChapter[];
+  rendered_path: string | null;
+  rendered_url: string | null;
+  rendered_at: string | null;
+  render_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StoryInput {
+  name: string;
+  description: string;
+  chapters: StoryChapter[];
+}
+
 export interface RunStatus {
   state: RunState;
   phase: string | null;
@@ -137,6 +249,7 @@ export interface ImportResult {
   favorites: number;
   existing_files: number;
   manifest_rows: number;
+  import_record: ImportRecord;
 }
 
 export interface StorageLocation {

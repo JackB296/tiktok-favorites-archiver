@@ -9,7 +9,7 @@ import tempfile
 import uuid
 from datetime import datetime
 
-from core import migrations, storage, store
+from core import layout, migrations, storage, store
 
 
 FORMAT = "tiktok-favorites-archive"
@@ -110,6 +110,17 @@ def create_snapshot(conn, db_path, download_dir, destination_dir, name, mode="me
                 _copy_verified(source, target)
             if control is not None:
                 control.progress({"event": "snapshot", "completed": index + 1, "total": len(items)})
+        rendered_stories = conn.execute(
+            "SELECT id, rendered_path FROM story "
+            "WHERE rendered_path IS NOT NULL ORDER BY id"
+        ).fetchall()
+        for story in rendered_stories:
+            relative = layout.story_relpath(story["id"])
+            source = layout.story_movie(download_dir, story["id"])
+            if story["rendered_path"] != relative or not os.path.isfile(source):
+                continue
+            target = _entry(staging, f"media/{relative}")
+            _copy_verified(source, target)
 
     entries = []
     for root, directories, files in os.walk(staging):

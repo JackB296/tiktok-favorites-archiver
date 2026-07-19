@@ -1,4 +1,4 @@
-import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats } from "./types";
+import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, ImportRecord, MemoryResponse, PlayRecord, Story, StoryInput, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats, LensStatus, LensSearchResponse, ItemCaptionsResponse } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -37,6 +37,17 @@ export const api = {
   suggest: (q: string) => json<SearchSuggestions>(`/api/suggest?q=${encodeURIComponent(q)}`),
 
   stats: () => json<Stats>("/api/stats"),
+  lensStatus: () => json<LensStatus>("/api/lens/status"),
+  lensSearch: (q: string, source = "") => {
+    const params = new URLSearchParams({ q });
+    if (source) params.set("source", source);
+    return json<LensSearchResponse>(`/api/lens/search?${params}`);
+  },
+  importLens: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return json<LensStatus>("/api/lens/import", { method: "POST", body });
+  },
   creators: (q = "", order = "frequency", cursor = 0) => json<DiscoveryPage>(`/api/creators?q=${encodeURIComponent(q)}&order=${encodeURIComponent(order)}&cursor=${cursor}`),
   hashtags: (q = "", order = "frequency", cursor = 0) => json<DiscoveryPage>(`/api/hashtags?q=${encodeURIComponent(q)}&order=${encodeURIComponent(order)}&cursor=${cursor}`),
 
@@ -111,6 +122,7 @@ export const api = {
   itemIds: () => json<number[]>("/api/items/ids"),
   itemSelection: (ids: number[]) => json<Item[]>("/api/items/selection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }),
   itemWindow: (n: number) => json<{ items: Item[] }>(`/api/items/${n}/window`),
+  itemCaptions: (n: number) => json<ItemCaptionsResponse>(`/api/items/${n}/captions`),
   replaceItemMedia: (n: number, files: { video?: File; thumbnail?: File }) => {
     const body = new FormData();
     if (files.video) body.append("video", files.video);
@@ -200,6 +212,23 @@ export const api = {
     body.append("file", file);
     return json<ImportResult>("/api/import", { method: "POST", body });
   },
+  imports: () => json<ImportRecord[]>("/api/imports"),
+  importDetail: (id: number) => json<ImportRecord>(`/api/imports/${id}`),
+  memories: (date?: string) => json<MemoryResponse>(`/api/memories${date ? `?date=${encodeURIComponent(date)}` : ""}`),
+  recordPlayed: (id: number) => json<PlayRecord>(`/api/items/${id}/played`, { method: "POST" }),
+  stories: () => json<Story[]>("/api/stories"),
+  createStory: (story: StoryInput) => json<Story>("/api/stories", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(story),
+  }),
+  updateStory: (id: number, story: StoryInput) => json<Story>(`/api/stories/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(story),
+  }),
+  deleteStory: (id: number) => json<{ ok: boolean }>(`/api/stories/${id}`, { method: "DELETE" }),
+  renderStory: (id: number) => json<Story>(`/api/stories/${id}/render`, { method: "POST" }),
 
   storageLocations: () => json<StorageLocation[]>("/api/storage-locations"),
   createStorageLocation: (name: string, path: string) => json<StorageLocation>("/api/storage-locations", {

@@ -18,6 +18,8 @@ import { audioStatus, isSafeHttpUrl } from "../lib/format";
 import { primarySongUrl, songLabel } from "../lib/songLinks.js";
 import { MediaSettingsDialog } from "../components/MediaSettingsDialog";
 import { SongIdentifyDialog } from "../components/SongIdentifyDialog";
+import { readLensStartTime } from "../lib/lensPresentation.js";
+import { api } from "../lib/api";
 
 export function Viewer() {
   const [searchParams] = useSearchParams();
@@ -25,13 +27,16 @@ export function Viewer() {
   const resumeId = useRef<number | null>(Number(localStorage.getItem("last-watched-favorite")) || null);
   const containerRef = useRef<HTMLDivElement>(null);
   const overrideNonce = useRef(0);
+  const lastRecordedPlay = useRef<number | null>(null);
   const requestedItemId = Number(searchParams.get("item")) || null;
+  const requestedStartS = readLensStartTime(searchParams.get("start_s"));
   const requestedQueueIds = Array.from(new Set((searchParams.get("queue") ?? "").split(",").map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))).slice(0, 100);
   const requestedQueueKey = requestedQueueIds.join(",");
   const filterParams = new URLSearchParams(searchParams);
   filterParams.delete("item");
   filterParams.delete("queue");
   filterParams.delete("from");
+  filterParams.delete("start_s");
   const filterKey = filterParams.toString();
   const filterActive = filterKey.length > 0;
   const backFrom = searchParams.has("from") ? (searchParams.get("from") ?? "") : null;
@@ -40,7 +45,7 @@ export function Viewer() {
   // One URL identity → one source. Imperative overrides (shuffle, resume,
   // ordered) are scoped to the URL they were started from, so any URL change
   // drops them and the URL-derived source takes over again.
-  const urlKey = `${requestedItemId ?? ""}|${requestedQueueKey}|${filterKey}|${reloadNonce}`;
+  const urlKey = `${requestedItemId ?? ""}|${requestedStartS ?? ""}|${requestedQueueKey}|${filterKey}|${reloadNonce}`;
   const urlSource = useMemo<FeedSource<Item>>(() => {
     if (requestedQueueIds.length) return queueFeedSource(requestedQueueIds, `queue:${urlKey}`);
     if (requestedItemId != null) return filteredFeedSource(filterKey, requestedItemId, `filtered:${urlKey}`);
@@ -60,7 +65,11 @@ export function Viewer() {
   const randomizing = feed.switchingTo === "random";
 
   useEffect(() => {
-    if (feed.activeId != null) localStorage.setItem("last-watched-favorite", String(feed.activeId));
+    if (feed.activeId == null) return;
+    localStorage.setItem("last-watched-favorite", String(feed.activeId));
+    if (lastRecordedPlay.current === feed.activeId) return;
+    lastRecordedPlay.current = feed.activeId;
+    void api.recordPlayed(feed.activeId).catch(() => {});
   }, [feed.activeId]);
 
   function switchTo(make: (nonce: string) => FeedSource<Item>) {
@@ -112,13 +121,13 @@ export function Viewer() {
 
   return (
     <PlaybackSession initiallyMuted={false}>
-      <ViewerFeed feed={feed} containerRef={containerRef} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} onOrdered={returnToOrderedFeed} filterActive={filterActive} backHref={backHref} queueTotal={requestedQueueIds.length} />
+      <ViewerFeed feed={feed} containerRef={containerRef} onGoToLastWatched={resumeId.current ? goToLastWatched : undefined} onRandom={startRandom} onOrdered={returnToOrderedFeed} filterActive={filterActive} backHref={backHref} queueTotal={requestedQueueIds.length} requestedItemId={requestedItemId} requestedStartS={requestedStartS} />
     </PlaybackSession>
   );
 }
 
-function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered, filterActive, backHref, queueTotal }: { feed: FeedWindow; containerRef: React.RefObject<HTMLDivElement>; onGoToLastWatched?: () => void; onRandom: () => void; onOrdered: () => void; filterActive: boolean; backHref: string | null; queueTotal: number }) {
-  const { muted, toggleMuted, volume, setVolume, autoLevel, toggleAutoLevel, autoGain, setAutoGain, paused, togglePaused, setPaused } = usePlayback();
+function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered, filterActive, backHref, queueTotal, requestedItemId, requestedStartS }: { feed: FeedWindow; containerRef: React.RefObject<HTMLDivElement>; onGoToLastWatched?: () => void; onRandom: () => void; onOrdered: () => void; filterActive: boolean; backHref: string | null; queueTotal: number; requestedItemId: number | null; requestedStartS: number | null }) {
+  const { muted, toggleMuted, volume, setVolume, autoLevel, toggleAutoLevel, autoGain, setAutoGain, paused, togglePaused, setPaused, captionsEnabled, toggleCaptions } = usePlayback();
   const { activeId, transitionTargetId, setActiveId, updateItem } = feed;
   const items = feed.items ?? [];
   const randomizing = feed.switchingTo === "random";
@@ -208,9 +217,9 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
           data-id={item.id}
           className="relative flex h-full snap-start items-center justify-center"
         >
-          <PostMedia item={item} active={item.id === effectivePlaybackId} preload={shouldPreloadItem(index, activeIndex, item.id, transitionTargetId)} />
+          <PostMedia item={item} active={item.id === effectivePlaybackId} preload={shouldPreloadItem(index, activeIndex, item.id, transitionTargetId)} startAtS={item.id === requestedItemId ? requestedStartS : null} />
 
-          <div className="absolute right-4 top-4 flex items-center gap-2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm">
+          <div className="absolute right-3 top-28 flex items-center gap-2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm sm:right-4 sm:top-4">
             {(item.has_audio === false || item.audio_silent === true) && <span title="No sound — no audio stream, or a stream that is silent" className="inline-flex items-center gap-1 rounded-full bg-bad/90 px-2 py-1 text-[11px] font-semibold"><SpeakerSlash size={13} weight="fill" />{audioStatus(item.has_audio, item.audio_silent)}</span>}
             <button
               onClick={toggleMuted}
@@ -219,7 +228,7 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
             >
               <Speaker size={20} weight="fill" />
             </button>
-            <label className="flex items-center gap-2 text-[11px] text-white/75">
+            <label className="hidden items-center gap-2 text-[11px] text-white/75 sm:flex">
               <span className="sr-only">Playback volume</span>
               <input
                 aria-label="Playback volume"
@@ -237,10 +246,20 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
               aria-label={autoLevel ? "Disable automatic loudness leveling" : "Enable automatic loudness leveling"}
               aria-pressed={autoLevel}
               title="Automatically balances quiet and loud videos"
-              className={`min-w-[72px] rounded-full px-2 py-1 text-[11px] font-semibold tabular-nums transition ${autoLevel ? "bg-white text-black" : "text-white/75 hover:bg-white/15"}`}
+              className={`hidden min-w-[72px] rounded-full px-2 py-1 text-[11px] font-semibold tabular-nums transition sm:block ${autoLevel ? "bg-white text-black" : "text-white/75 hover:bg-white/15"}`}
             >
               {autoLevel ? formatAutoGain(autoGain) : "Auto off"}
             </button>
+            {item.video_url && <button
+              type="button"
+              onClick={toggleCaptions}
+              aria-label={captionsEnabled ? "Hide imported transcript captions" : "Show imported transcript captions"}
+              aria-pressed={captionsEnabled}
+              title={captionsEnabled ? "Hide imported transcript captions" : "Show imported transcript captions"}
+              className={`min-w-9 rounded-full px-2 py-1 text-[11px] font-bold tracking-wide transition ${captionsEnabled ? "bg-white text-black" : "text-white/75 hover:bg-white/15"}`}
+            >
+              CC
+            </button>}
             {item.video_url && <button type="button" onClick={() => setIdentifyItem(item)} aria-label={`Identify the song for favorite #${item.id}`} title="Identify or fix the song" className="rounded-full p-1.5 transition hover:bg-white/15 active:translate-y-px"><MusicNotes size={20} /></button>}
             {item.video_url && <button type="button" onClick={() => setSettingsItem(item)} aria-label={`Open media settings for favorite #${item.id}`} title="Replace video or thumbnail" className="rounded-full p-1.5 transition hover:bg-white/15 active:translate-y-px"><GearSix size={20} /></button>}
           </div>

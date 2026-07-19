@@ -75,6 +75,19 @@ def uploads_dir(download_dir):
     return os.path.join(download_dir, ARCHIVE_DIR, "uploads")
 
 
+def stories_dir(download_dir):
+    """Rendered personal-use Story Builder movies."""
+    return os.path.join(download_dir, ARCHIVE_DIR, "stories")
+
+
+def story_relpath(story_id):
+    return f"{ARCHIVE_DIR}/stories/{int(story_id)}.mp4"
+
+
+def story_movie(download_dir, story_id):
+    return os.path.join(download_dir, story_relpath(story_id))
+
+
 def custom_default_audio(download_dir):
     """The user-supplied slideshow fallback track (persists in the media volume)."""
     return os.path.join(download_dir, ARCHIVE_DIR, "default-audio.mp3")

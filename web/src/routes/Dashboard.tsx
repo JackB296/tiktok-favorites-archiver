@@ -32,6 +32,7 @@ export function Dashboard() {
   const [howto, setHowto] = useState<string | null>(null);
   const [howtoOpen, setHowtoOpen] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [lastImportId, setLastImportId] = useState<number | null>(null);
   const [library, setLibrary] = useState<LibrarySettings | null>(null);
   const [statistics, setStatistics] = useState<LibraryStatistics | null>(null);
   const [indexProgress, setIndexProgress] = useState<ProgressEvent | null>(null);
@@ -176,9 +177,12 @@ export function Dashboard() {
     const file = e.target.files?.[0];
     if (!file) return;
     setImportMsg("Importing…");
+    setLastImportId(null);
     try {
       const r = await api.importExport(file);
-      setImportMsg(`Imported ${r.favorites} favorites · ${r.existing_files} existing files matched.`);
+      const counts = r.import_record.comparison.counts;
+      setImportMsg(`Imported ${r.favorites} favorites · ${counts.new} new · ${counts.removed} missing · ${counts.protected} safely archived.`);
+      setLastImportId(r.import_record.id);
       refresh();
     } catch (err) {
       setImportMsg(`Import failed: ${(err as Error).message}`);
@@ -315,7 +319,12 @@ export function Dashboard() {
               {howto}
             </pre>
           )}
-          {importMsg && <p className="mt-3 text-sm text-ink-dim">{importMsg}</p>}
+          {importMsg && (
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <p className="text-sm text-ink-dim" role="status">{importMsg}</p>
+              {lastImportId != null && <Button variant="ghost" size="xs" onClick={() => navigate("/history")}>View comparison</Button>}
+            </div>
+          )}
         </section>
 
         <LegacyBootstrapPanel

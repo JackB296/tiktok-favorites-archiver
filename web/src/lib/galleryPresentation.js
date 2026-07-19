@@ -23,12 +23,12 @@ export function readGalleryDetails(raw) {
   }
 }
 
-export const GALLERY_HOVER_PREVIEW_DELAY_MS = 650;
+export const GALLERY_HOVER_PREVIEW_DELAY_MS = 250;
 export const GALLERY_HOVER_PREVIEW_DURATION_S = 6;
 
-/** Hover previews are deliberately opt-in; only the exact stored true value enables them. */
+/** Hover previews default on; only an explicit saved false value disables them. */
 export function readGalleryHoverPreviews(raw) {
-  return raw === "true";
+  return raw !== "false";
 }
 
 /** The first request (including React Strict Mode's repeated mount effect) is immediate.

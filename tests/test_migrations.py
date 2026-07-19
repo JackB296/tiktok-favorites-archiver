@@ -90,6 +90,54 @@ def test_initialization_twice_preserves_schema_and_backfill_state():
     assert dict(migrations.get_backfill(conn, "kept")) == state_before
 
 
+def test_archive_intelligence_tables_are_additive_and_idempotent():
+    expected = {
+        "analysis_segment", "analysis_search", "item_play",
+        "import_history", "import_membership", "story",
+    }
+
+    current = store.init_db(store.connect(":memory:"))
+    current_tables = {
+        row["name"] for row in current.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+        )
+    }
+    assert expected <= current_tables
+
+    legacy = store.connect(":memory:")
+    legacy.executescript(LEGACY_SCHEMA)
+    store.init_db(legacy)
+    store.init_db(legacy)
+    legacy_tables = {
+        row["name"] for row in legacy.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+        )
+    }
+    assert expected <= legacy_tables
+    assert store.get_item(legacy, 7)["link"].endswith("/video/7")
+
+
+def test_analysis_search_index_tracks_segment_changes():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://www.tiktok.com/@cook/video/1")
+    conn.execute(
+        "INSERT INTO analysis_segment "
+        "(item_id, source, text, start_s, end_s, created_at) "
+        "VALUES (1, 'transcript', 'crispy potatoes', 4, 7, 'now')"
+    )
+    segment_id = conn.execute(
+        "SELECT id FROM analysis_segment WHERE item_id = 1"
+    ).fetchone()["id"]
+    assert conn.execute(
+        "SELECT rowid FROM analysis_search WHERE analysis_search MATCH 'crispy'"
+    ).fetchone()["rowid"] == segment_id
+
+    conn.execute("DELETE FROM analysis_segment WHERE id = ?", (segment_id,))
+    assert conn.execute(
+        "SELECT rowid FROM analysis_search WHERE analysis_search MATCH 'crispy'"
+    ).fetchone() is None
+
+
 if __name__ == "__main__":
     import traceback
 

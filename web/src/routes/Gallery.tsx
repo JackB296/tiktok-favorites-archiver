@@ -11,6 +11,7 @@ import {
   X,
   LinkSimple,
   Info,
+  FilmReel,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { MarkAction } from "../lib/api";
@@ -422,6 +423,16 @@ export function Gallery() {
     if (queue) navigate(`/?queue=${queue.item_ids.join(",")}`);
   }
 
+  function buildStoryFromQueue() {
+    const queue = playbackQueues.find((item) => item.id === Number(selectedPlaybackQueueId));
+    if (!queue) return;
+    const params = new URLSearchParams({
+      queue: queue.item_ids.join(","),
+      name: queue.name,
+    });
+    navigate(`/stories?${params}`);
+  }
+
   function enterSelectionMode() {
     setInspectionMode(false);
     setInspectedItem(null);
@@ -649,7 +660,7 @@ export function Gallery() {
             type="button"
             onClick={() => changeHoverPreviews(!hoverPreviews)}
             aria-pressed={hoverPreviews}
-            title="Opt in to muted six-second video samples after resting the pointer on a card. Only one preview loads at a time."
+            title="Play a muted six-second sample after a brief hover. Turn this off to keep Gallery thumbnails static."
             className={cx("inline-flex items-center gap-[0.35em] rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition", hoverPreviews ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}
           >
             <Play size="1em" weight={hoverPreviews ? "fill" : "regular"} />
@@ -751,6 +762,7 @@ export function Gallery() {
               <select value={selectedPlaybackQueueId} onChange={(e) => setSelectedPlaybackQueueId(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Choose a queue…</option>{playbackQueues.map((queue) => <option key={queue.id} value={queue.id}>{queue.name} · {queue.item_ids.length} favorites</option>)}</select>
             </label>
             <Button variant="ghost" size="sm" onClick={playSavedQueue} disabled={!selectedPlaybackQueueId}><Play size={15} weight="fill" /> Play queue</Button>
+            <Button variant="ghost" size="sm" onClick={buildStoryFromQueue} disabled={!selectedPlaybackQueueId}><FilmReel size={15} /> Build story</Button>
             {selectedPlaybackQueueId && <Button variant="danger" size="sm" onClick={() => void deletePlaybackQueue()}><Trash size={15} /> Delete</Button>}
             {playbackQueueMessage && <span className="text-xs text-ink-faint">{playbackQueueMessage}</span>}
           </div>

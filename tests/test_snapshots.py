@@ -6,7 +6,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import snapshots, store
+from core import layout, snapshots, stories, store
 
 
 def _archive(root):
@@ -39,6 +39,55 @@ def test_metadata_and_complete_snapshot_layouts_round_trip():
         assert [entry["state"] for entry in snapshots.list_snapshots(destination)] == [
             "complete", "complete",
         ]
+
+
+def test_complete_snapshot_round_trips_rendered_story_media():
+    with tempfile.TemporaryDirectory() as source_root, \
+            tempfile.TemporaryDirectory() as snapshot_dir, \
+            tempfile.TemporaryDirectory() as target_root:
+        source, source_db, source_downloads = _archive(source_root)
+        source.execute("UPDATE item SET duration_s = 5 WHERE id = 1")
+        source.commit()
+        story = stories.create_story(source, {
+            "name": "Saved reel",
+            "chapters": [{
+                "item_id": 1,
+                "title": "Chapter",
+                "start_s": 0,
+                "end_s": 5,
+            }],
+        })
+        os.makedirs(layout.stories_dir(source_downloads))
+        with open(layout.story_movie(source_downloads, story["id"]), "wb") as target:
+            target.write(b"rendered story")
+        stories.record_render_success(
+            source, story["id"], layout.story_relpath(story["id"]),
+        )
+
+        snapshot = snapshots.create_snapshot(
+            source, source_db, source_downloads, snapshot_dir,
+            "with-story", "complete",
+        )["path"]
+        archived_story = os.path.join(
+            snapshot, "media", *layout.story_relpath(story["id"]).split("/"),
+        )
+        assert open(archived_story, "rb").read() == b"rendered story"
+
+        target_downloads = os.path.join(target_root, "downloads")
+        os.makedirs(target_downloads)
+        target_db = os.path.join(target_root, "archive.db")
+        target = store.init_db(store.connect(target_db))
+        plan = snapshots.restore_plan(snapshot, target, target_downloads)
+        snapshots.apply_restore(
+            snapshot, target, target_db, target_downloads,
+            snapshot_dir, plan["token"],
+        )
+
+        assert open(
+            layout.story_movie(target_downloads, story["id"]), "rb",
+        ).read() == b"rendered story"
+        assert stories.get_story(target, story["id"])["rendered_path"] == \
+            layout.story_relpath(story["id"])
 
 
 def test_snapshot_manifest_is_sorted_relative_and_contains_no_source_paths():
