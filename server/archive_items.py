@@ -301,7 +301,10 @@ class ArchiveItems:
     def page(self, **query):
         query["limit"] = max(1, min(int(query.get("limit", 50)), 100))  # match the store's clamp, or next_cursor lies
         rows = selection.ArchiveSelection.gallery(query, scope="page").rows(self._conn)
-        items = self._public_batch(rows)
+        # Gallery cards use the stored thumbnail and MP4 URL. Enumerating every
+        # raw slideshow image here adds directory I/O and JSON the grid never
+        # consumes; Feed/window/selection projections retain the full assets.
+        items = self._public_batch(rows, include_assets=False)
         return {"items": items, "next_cursor": items[-1]["id"] if len(items) == query["limit"] else None}
 
     def window(self, item_id, limit=50):
@@ -312,7 +315,7 @@ class ArchiveItems:
         rows = [by_id[item_id] for item_id in item_ids if item_id in by_id]
         return self._public_batch(rows)
 
-    def _public_batch(self, rows):
+    def _public_batch(self, rows, include_assets=True):
         """Project many rows with one directory listing and one song query
         instead of a per-row ``os.path.exists`` and ``get_song`` (N+1)."""
         files = os.listdir(self._download_dir) if os.path.isdir(self._download_dir) else []
@@ -322,11 +325,17 @@ class ArchiveItems:
             self._conn, [row["id"] for row in rows],
         )
         return [
-            self._public(row, movies=movies, songs=songs, identities=identities)
+            self._public(
+                row, movies=movies, songs=songs, identities=identities,
+                include_assets=include_assets,
+            )
             for row in rows
         ]
 
-    def _public(self, row, movies=None, songs=None, identities=None):
+    def _public(
+        self, row, movies=None, songs=None, identities=None,
+        include_assets=True,
+    ):
         item_id = row["id"]
         identity = (
             identities.get(item_id, {"creator": None, "hashtags": []})
@@ -373,7 +382,7 @@ class ArchiveItems:
         if movie_present:
             version = f"?v={row['media_fingerprint']}" if row["media_fingerprint"] else ""
             data["video_url"] = f"/media/{item_id}.mp4{version}"
-        if row["has_assets"]:
+        if row["has_assets"] and include_assets:
             data.update(self._slideshow_assets(item_id))
         thumbnail_path = row["custom_thumbnail_path"] or row["thumbnail_path"]
         if thumbnail_path:

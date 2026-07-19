@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
-import { gridMetrics, visibleRows, autoFillColumns, sizeTarget } from "../lib/virtualGrid";
+import { gridMetrics, visibleRows } from "../lib/virtualGrid";
 import type { GallerySize } from "../lib/virtualGrid";
 
 const OVERSCAN_PX = 900;
@@ -62,11 +62,10 @@ export function VirtualGalleryGrid<T>({
 
   const metrics = layout && layout.width > 0 ? gridMetrics(size, layout.width) : null;
   if (!metrics || !layout) {
-    return (
-      <div ref={gridRef} style={{ display: "grid", gap: "12px", gridTemplateColumns: autoFillColumns(size) }}>
-        {items.map((item) => renderItem(item, sizeTarget(size)))}
-      </div>
-    );
+    // useLayoutEffect measures this shell before the browser paints. Rendering
+    // every loaded card as a fallback would briefly defeat virtualization and
+    // queue thumbnail work for the full page.
+    return <div ref={gridRef} className="relative w-full" aria-busy="true" />;
   }
 
   const rows = visibleRows({

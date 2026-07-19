@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -7,23 +7,26 @@ import {
   ImageSquare,
   SlidersHorizontal,
   BookmarkSimple,
-  Check,
   Trash,
   X,
   LinkSimple,
   Info,
-  SpeakerSlash,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { MarkAction } from "../lib/api";
 import type { GalleryPreset, GalleryTermList, Item, PlaybackQueue, SearchSuggestions, SmartCollectionSummary } from "../lib/types";
 import { Button, ConfirmDialog, Dialog, EmptyState, HelpLabel, Skeleton, cx } from "../components/ui";
 import { VirtualGalleryGrid } from "../components/VirtualGalleryGrid";
+import { GalleryThumbnail } from "../components/GalleryThumbnail";
 import { canLoadNextPage, autoFillColumns, readGallerySize, shouldLoadMore } from "../lib/virtualGrid";
 import type { GallerySize } from "../lib/virtualGrid";
 import { useDelayedLoading } from "../lib/useDelayedLoading";
 import { useDryRunConfirm } from "../lib/useDryRunConfirm";
-import { readGalleryDetails } from "../lib/galleryPresentation.js";
+import {
+  galleryPageRequestDelay,
+  readGalleryDetails,
+  readGalleryHoverPreviews,
+} from "../lib/galleryPresentation.js";
 import type { GalleryDetails } from "../lib/galleryPresentation.js";
 import { audioStatus, formatDuration, formatSize, isSafeHttpUrl } from "../lib/format";
 import { primarySongUrl, songLabel } from "../lib/songLinks.js";
@@ -41,6 +44,7 @@ const FILTERS = [
 ];
 
 const SIZE_LABELS: Record<GallerySize, string> = { s: "Small", m: "Medium", l: "Large", xl: "Extra large" };
+const HOVER_PREVIEWS_STORAGE_KEY = "gallery-hover-previews";
 
 /** Snapshot of a Gallery view (loaded items + scroll) so the Feed's Back button
     can restore the exact same page and scroll position. Keyed by the filter query;
@@ -111,6 +115,8 @@ export function Gallery() {
     messages: { loadError: "Could not load saved playback queues.", saved: "Saved.", deleted: "Deleted." },
   });
   const [size, setSize] = useState<GallerySize>(() => readGallerySize(localStorage.getItem("gallery-size")));
+  const [hoverPreviews, setHoverPreviews] = useState(() => readGalleryHoverPreviews(localStorage.getItem(HOVER_PREVIEWS_STORAGE_KEY)));
+  const [previewItemId, setPreviewItemId] = useState<number | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [cardDetails, setCardDetails] = useState<GalleryDetails>(() => readGalleryDetails(localStorage.getItem("gallery-card-details")));
   const [selectionMode, setSelectionMode] = useState(false);
@@ -124,6 +130,7 @@ export function Gallery() {
   const currentFiltersKey = filtersKey(filterState);
 
   const queryVersion = useRef(0);
+  const previousPageRequestKey = useRef<string | null>(null);
 
   /** "Mark all matching offloaded / ignored": dry-run for a count, confirm, apply. */
   const filterAction = useDryRunConfirm<"offload" | "ignore">({
@@ -224,7 +231,10 @@ export function Gallery() {
     queryVersion.current += 1;
     setLoadError(null);
     setLoadMoreFailed(false);
-    const t = window.setTimeout(() => {
+    const requestKey = `${currentFiltersKey}\0${randomSeed}\0${reloadNonce}`;
+    const delay = galleryPageRequestDelay(previousPageRequestKey.current, requestKey);
+    previousPageRequestKey.current = requestKey;
+    const requestPage = () => {
       api
         .itemPage(pageQuery)
         .then((page) => {
@@ -237,10 +247,13 @@ export function Gallery() {
           setItems([]);
           setLoadError((error as Error).message || "Request failed");
         });
-    }, 200); // debounce typing
+    };
+    let timer: number | null = null;
+    if (delay === 0) requestPage();
+    else timer = window.setTimeout(requestPage, delay);
     return () => {
       alive = false;
-      window.clearTimeout(t);
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, [currentFiltersKey, randomSeed, reloadNonce]);
 
@@ -342,6 +355,24 @@ export function Gallery() {
     setSize(next);
     localStorage.setItem("gallery-size", next);
   }
+
+  function changeHoverPreviews(enabled: boolean) {
+    setHoverPreviews(enabled);
+    localStorage.setItem(HOVER_PREVIEWS_STORAGE_KEY, String(enabled));
+    if (!enabled) setPreviewItemId(null);
+  }
+
+  const startHoverPreview = useCallback((itemId: number) => {
+    setPreviewItemId(itemId);
+  }, []);
+
+  const stopHoverPreview = useCallback((itemId: number) => {
+    setPreviewItemId((current) => current === itemId ? null : current);
+  }, []);
+
+  useEffect(() => {
+    if (!hoverPreviews || selectionMode || inspectionMode) setPreviewItemId(null);
+  }, [hoverPreviews, inspectionMode, selectionMode]);
 
   function changeCardDetail(key: keyof GalleryDetails, shown: boolean) {
     setCardDetails((current) => {
@@ -614,6 +645,16 @@ export function Gallery() {
               </button>
             ))}
           </div>
+          <button
+            type="button"
+            onClick={() => changeHoverPreviews(!hoverPreviews)}
+            aria-pressed={hoverPreviews}
+            title="Opt in to muted six-second video samples after resting the pointer on a card. Only one preview loads at a time."
+            className={cx("inline-flex items-center gap-[0.35em] rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition", hoverPreviews ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}
+          >
+            <Play size="1em" weight={hoverPreviews ? "fill" : "regular"} />
+            Hover previews
+          </button>
           <button onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen} className={cx("rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition", detailsOpen ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>Card details</button>
           <button onClick={() => selectionMode ? leaveSelectionMode() : enterSelectionMode()} aria-pressed={selectionMode} className={cx("rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition", selectionMode ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>{selectionMode ? "Done selecting" : "Select"}</button>
           <button onClick={toggleRecoveryInbox} disabled={recoveryInboxBusy} aria-pressed={recovery} className={cx("rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition disabled:opacity-40", recovery ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>{recoveryInboxBusy ? "Checking…" : recovery ? "Recovery inbox" : "Recovery"}</button>
@@ -827,7 +868,7 @@ export function Gallery() {
             items={items}
             size={size}
             scrollRef={scrollRef}
-            renderItem={(it, cardWidth) => <Thumb key={it.id} item={it} cardWidth={cardWidth} details={cardDetails} selecting={selectionMode} inspecting={inspectionMode} selected={selectedIds.has(it.id)} onClick={() => selectionMode ? toggleSelection(it.id) : inspectionMode || !isFeedItem(it) ? setInspectedItem(it) : openInFeed(it.id)} />}
+            renderItem={(it, cardWidth) => <GalleryThumbnail key={it.id} item={it} cardWidth={cardWidth} details={cardDetails} selecting={selectionMode} inspecting={inspectionMode} selected={selectedIds.has(it.id)} previewEnabled={hoverPreviews && !selectionMode && !inspectionMode} previewActive={previewItemId === it.id} onPreviewStart={startHoverPreview} onPreviewEnd={stopHoverPreview} onClick={() => selectionMode ? toggleSelection(it.id) : inspectionMode || !isFeedItem(it) ? setInspectedItem(it) : openInFeed(it.id)} />}
           />
           {nextCursor != null && (
             <div className="mt-6 flex items-center justify-center gap-2 py-3 text-xs text-ink-faint" aria-live="polite" aria-busy={loadingMore}>
@@ -862,63 +903,6 @@ export function Gallery() {
 
 function Grid({ children, size }: { children: ReactNode; size: GallerySize }) {
   return <div className="grid" style={{ gap: "12px", gridTemplateColumns: autoFillColumns(size) }}>{children}</div>;
-}
-
-function Thumb({ item, details, cardWidth, onClick, selecting = false, inspecting = false, selected = false }: { item: Item; details: GalleryDetails; cardWidth: number; onClick: () => void; selecting?: boolean; inspecting?: boolean; selected?: boolean }) {
-  const duration = formatDuration(item.duration_s);
-  const resolution = item.media_width && item.media_height ? `${item.media_width}×${item.media_height}` : null;
-  const size = formatSize(item.media_size);
-  // Card sets its own font size from its measured width, so every em-based badge,
-  // caption, and icon below scales with the chosen thumbnail size (floored so text
-  // stays legible on the smallest step, capped so it never dominates the largest).
-  const fontSize = `${Math.min(26, Math.max(9, Math.round(cardWidth * 0.062)))}px`;
-  return (
-    <button
-      onClick={onClick}
-      style={{ fontSize }}
-      aria-label={`${selecting ? selected ? "Unselect" : "Select" : inspecting ? "Inspect" : "Play"} favorite #${item.id}${item.caption ? `: ${item.caption}` : ""}`}
-      aria-pressed={selecting ? selected : undefined}
-      className={cx("group relative aspect-[9/16] overflow-hidden rounded-[var(--radius-media)] bg-black text-left", selected && "ring-2 ring-accent ring-offset-2 ring-offset-canvas")}
-    >
-      {item.thumbnail_url ? (
-        <img
-          src={item.thumbnail_url}
-          alt=""
-          loading="lazy"
-          className="h-full w-full object-cover opacity-90 transition group-hover:opacity-100"
-        />
-      ) : item.images[0] ? (
-        <img
-          src={item.images[0]}
-          alt=""
-          loading="lazy"
-          className="h-full w-full object-cover opacity-90 transition group-hover:opacity-100"
-        />
-      ) : (
-        <div className="tabular flex h-full w-full items-center justify-center text-[1.1em] text-ink-faint">#{item.id}</div>
-      )}
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
-      {details.archiveNumber && <span className="tabular absolute left-[0.55em] top-[0.55em] rounded bg-black/50 px-[0.4em] py-[0.15em] text-[0.78em] text-white/80">
-        #{item.id}
-      </span>}
-      {(item.has_audio === false || item.audio_silent === true) && <span title="No sound — no audio stream, or a stream that is silent. You can replace the file from its Feed settings." className="absolute left-[0.55em] top-[2.5em] inline-flex items-center gap-[0.3em] rounded bg-bad/90 px-[0.4em] py-[0.15em] text-[0.78em] font-semibold text-white"><SpeakerSlash size="1em" weight="fill" />{audioStatus(item.has_audio, item.audio_silent)}</span>}
-      {selecting && <span aria-hidden="true" className={cx("absolute right-[0.55em] top-[0.55em] flex h-[1.5em] w-[1.5em] items-center justify-center rounded-full border", selected ? "border-accent bg-accent text-on-accent" : "border-white/70 bg-black/50 text-white/80")}>{selected ? <Check size="1em" weight="bold" /> : null}</span>}
-      {inspecting && <span aria-hidden="true" className="absolute right-[0.55em] top-[0.55em] flex h-[1.5em] w-[1.5em] items-center justify-center rounded-full border border-white/70 bg-black/50 text-white/80"><Info size="1em" /></span>}
-      <div className={cx("absolute top-[0.55em] flex max-w-[65%] flex-col items-end gap-[0.3em] text-[0.78em] text-white/85", selecting || inspecting ? "right-[2.5em]" : "right-[0.55em]")}>
-        {((details.duration && duration) || (details.resolution && resolution)) && <span className="rounded bg-black/50 px-[0.4em] py-[0.15em]">{[details.duration ? duration : null, details.resolution ? resolution : null].filter(Boolean).join(" · ")}</span>}
-        {!selecting && !inspecting && <span className="rounded-full bg-black/40 p-[0.35em] opacity-0 transition group-hover:opacity-100"><Play size="1em" weight="fill" /></span>}
-      </div>
-      <div className="absolute inset-x-0 bottom-0 p-[0.7em]">
-        {item.status === "failed" && <p title={item.error ?? undefined} className="truncate text-[0.78em] font-medium text-bad">{item.error ?? "Download failed"}</p>}
-        {item.status === "expired" && <p title="TikTok no longer serves the original link. Its archive number is preserved and Sync will not retry it automatically." className="truncate text-[0.78em] font-medium text-white/60">Original unavailable</p>}
-        {item.status === "ignored" && <p title="Marked as don't-download. Its archive number is preserved and Sync will not attempt it." className="truncate text-[0.78em] font-medium text-white/60">Not downloading</p>}
-        {item.offloaded && <span title="Archived on external storage, so it is not flagged as missing here." className="mb-[0.3em] inline-block rounded bg-black/50 px-[0.4em] py-[0.15em] text-[0.78em] font-medium text-white/80">offloaded</span>}
-        {details.author && item.author && <p className="truncate text-[0.85em] font-medium text-white">{item.author}</p>}
-        {details.caption && item.caption && <p className="truncate text-[0.78em] text-white/70">{item.caption}</p>}
-        {details.technical && (item.media_codec || size) && <p className="mt-[0.15em] truncate text-[0.78em] text-white/70 opacity-0 transition group-hover:opacity-100">{[item.media_codec, size].filter(Boolean).join(" · ")}</p>}
-      </div>
-    </button>
-  );
 }
 
 function DetailsDialog({ item, onClose, onPlay, onRetry, onIgnore }: { item: Item; onClose: () => void; onPlay: () => void; onRetry: () => void; onIgnore: () => void }) {

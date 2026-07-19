@@ -71,6 +71,25 @@ def test_slideshow_item_lists_carousel_assets():
         assert d["has_assets"] is True
 
 
+def test_gallery_page_omits_slideshow_assets_but_full_item_retains_them():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 2, "https://tiktok.com/b", kind="slideshow", status="done")
+    store.set_has_assets(conn, 2, True)
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "2.mp4"), "w").close()
+        os.makedirs(os.path.join(dl, "2"))
+        for name in ("01.jpg", "02.jpg", "audio.mp3"):
+            open(os.path.join(dl, "2", name), "w").close()
+
+        items = ArchiveItems(conn, dl)
+        page_item = items.page(limit=1)["items"][0]
+        full_item = items.get(2)
+
+    assert page_item["images"] == [] and page_item["audio"] is None
+    assert full_item["images"] == ["/media/2/01.jpg", "/media/2/02.jpg"]
+    assert full_item["audio"] == "/media/2/audio.mp3"
+
+
 def test_missing_media_yields_nulls():
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 3, "https://tiktok.com/c", kind="unknown", status="pending")
