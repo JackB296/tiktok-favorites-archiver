@@ -94,6 +94,8 @@ def test_archive_intelligence_tables_are_additive_and_idempotent():
     expected = {
         "analysis_segment", "analysis_search", "item_play",
         "import_history", "import_membership", "story",
+        "item_annotation", "private_tag", "item_private_tag",
+        "media_digest", "archive_channel",
     }
 
     current = store.init_db(store.connect(":memory:"))

@@ -17,12 +17,13 @@ const full = {
   assets: "with", audio: "without", offloaded: "with", indexState: "indexed",
   include: "@creator, #games", exclude: "#fyp",
   creator: "exactcreator", hashtag: "exacttag",
+  starred: true, privateTag: "recipes",
 };
 const empty = lib.emptyFilters();
 
 // The table covers every filter exactly once.
-assert.equal(lib.GALLERY_FILTER_FIELDS.length, 27);
-assert.equal(new Set(lib.GALLERY_FILTER_FIELDS.map((f) => f.key)).size, 27);
+assert.equal(lib.GALLERY_FILTER_FIELDS.length, 29);
+assert.equal(new Set(lib.GALLERY_FILTER_FIELDS.map((f) => f.key)).size, 29);
 
 // URL round-trips: fully populated and empty states survive unchanged.
 assert.deepEqual(lib.filtersFromUrl(lib.filtersToSearchParams(full)), full);
@@ -34,7 +35,7 @@ assert.equal(lib.filtersToSearchParams(empty).toString(), "");
 // sort omitted when "latest"; recovery serialized as "1"; empties omitted).
 assert.equal(
   lib.filtersToSearchParams(full).toString(),
-  "q=cat+videos&kind=video&status=failed&sort=duration_desc&min_duration=5&max_duration=90&min_size=1&max_size=250&min_width=480&max_width=1920&min_height=600&max_height=2400&codec=h264%2C+hevc&min_attempts=1&max_attempts=9&recovery=1&from=2024-01-01&to=2024-12-31&orientation=portrait&assets=with&audio=without&offloaded=with&index=indexed&include=%40creator%2C+%23games&exclude=%23fyp&creator=exactcreator&hashtag=exacttag",
+  "q=cat+videos&kind=video&status=failed&sort=duration_desc&min_duration=5&max_duration=90&min_size=1&max_size=250&min_width=480&max_width=1920&min_height=600&max_height=2400&codec=h264%2C+hevc&min_attempts=1&max_attempts=9&recovery=1&from=2024-01-01&to=2024-12-31&orientation=portrait&assets=with&audio=without&offloaded=with&index=indexed&include=%40creator%2C+%23games&exclude=%23fyp&creator=exactcreator&hashtag=exacttag&starred=1&private_tag=recipes",
 );
 assert.equal(lib.filtersToSearchParams({ ...empty, order: "latest" }).toString(), "");
 assert.equal(lib.filtersToSearchParams({ ...empty, order: "random" }).toString(), "sort=random");
@@ -56,6 +57,7 @@ assert.deepEqual(lib.filtersToPageQuery(full, 12345), {
   orientation: "portrait", assets: "with", audio: "without", offloaded: "with",
   index_state: "indexed", include: "@creator, #games", exclude: "#fyp",
   creator: "exactcreator", hashtag: "exacttag",
+  starred: true, private_tag: "recipes",
 });
 assert.deepEqual(lib.filtersToPageQuery(empty, 1), {
   search: "", kind: "", status: "", limit: 50, order: "latest", seed: undefined,
@@ -65,6 +67,7 @@ assert.deepEqual(lib.filtersToPageQuery(empty, 1), {
   date_from: undefined, date_to: undefined, orientation: undefined,
   assets: undefined, audio: undefined, offloaded: undefined, index_state: undefined,
   include: "", exclude: "", creator: undefined, hashtag: undefined,
+  starred: undefined, private_tag: undefined,
 });
 // The seed rides along only for Random order; 0-valued numbers still count.
 assert.equal(lib.filtersToPageQuery({ ...empty, order: "random" }, 777).seed, 777);
@@ -92,6 +95,7 @@ assert.deepEqual(lib.filtersToMarkSelector(full), {
   orientation: "portrait", assets: "with", audio: "without", offloaded: "with",
   index_state: "indexed", include: "@creator, #games", exclude: "#fyp",
   creator: "exactcreator", hashtag: "exacttag",
+  starred: "true", private_tag: "recipes",
 });
 for (const key of ["order", "seed", "limit", "cursor"]) {
   assert.ok(!(key in lib.filtersToMarkSelector(full)), `${key} must not reach the mark filter`);
@@ -106,7 +110,7 @@ assert.deepEqual(Object.keys(lib.filtersToPreset(empty)).sort(), [
   "search", "kind", "status", "order", "minDuration", "maxDuration", "minSize", "maxSize",
   "minWidth", "maxWidth", "minHeight", "maxHeight", "minAttempts", "maxAttempts", "recovery",
   "codec", "dateFrom", "dateTo", "orientation", "assets", "audio", "offloaded", "indexState",
-  "include", "exclude", "creator", "hashtag",
+  "include", "exclude", "creator", "hashtag", "starred", "privateTag",
 ].sort());
 assert.deepEqual(lib.filtersToPreset(full), full);
 assert.deepEqual(lib.applyPreset(lib.filtersToPreset(full)), full);
@@ -124,7 +128,7 @@ assert.deepEqual(lib.activeChips(full).map((chip) => chip.label), [
   "≥ 1 attempts", "≤ 9 attempts", "Recovery inbox", "Codec: h264, hevc",
   "After: 2024-01-01", "Before: 2024-12-31", "portrait", "Has raw assets",
   "No audio", "Offloaded", "Index: indexed", "Include: @creator, #games", "Exclude: #fyp",
-  "Creator: exactcreator", "Hashtag: #exacttag",
+  "Creator: exactcreator", "Hashtag: #exacttag", "Starred", "Private tag: recipes",
 ]);
 assert.deepEqual(lib.activeChips(empty), []);
 assert.deepEqual(lib.activeChips({ ...empty, include: "a,b" }), [{ key: "include", label: "Include: a,b" }]);

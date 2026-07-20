@@ -32,11 +32,11 @@ function useElementSize() {
  * Videos autoplay while `active`; slideshows use manual prev/next with continuous
  * audio. Nothing plays unless `active`.
  */
-export function PostMedia({ item, active, preload = false, startAtS = null }: { item: Item; active: boolean; preload?: boolean; startAtS?: number | null }) {
+export function PostMedia({ item, active, preload = false, startAtS = null, loop = true, onEnded }: { item: Item; active: boolean; preload?: boolean; startAtS?: number | null; loop?: boolean; onEnded?: () => void }) {
   if (!active && !preload) return <MediaPlaceholder />;
   switch (feedMediaKind(item)) {
-    case "video": return <VideoMedia itemId={item.id} src={item.video_url!} active={active} preload={preload} startAtS={startAtS} />;
-    case "slideshow": return <SlideMedia images={item.images} audio={item.audio} active={active} />;
+    case "video": return <VideoMedia itemId={item.id} src={item.video_url!} active={active} preload={preload} startAtS={startAtS} loop={loop} onEnded={onEnded} />;
+    case "slideshow": return <SlideMedia images={item.images} audio={item.audio} active={active} loop={loop} onEnded={onEnded} />;
     case "offloaded": return <OffloadedExternally />;
     case "expired": return <UnavailableOriginal />;
     default: return <div className="flex h-full w-full items-center justify-center text-sm text-ink-faint">no media yet</div>;
@@ -55,7 +55,7 @@ function MediaPlaceholder() {
   return <div aria-hidden="true" className="h-full w-full bg-black" />;
 }
 
-function VideoMedia({ itemId, src, active, preload, startAtS }: { itemId: number; src: string; active: boolean; preload: boolean; startAtS: number | null }) {
+function VideoMedia({ itemId, src, active, preload, startAtS, loop, onEnded }: { itemId: number; src: string; active: boolean; preload: boolean; startAtS: number | null; loop: boolean; onEnded?: () => void }) {
   const { muted, setMuted, volume, autoLevel, setAutoGain, paused, togglePaused, captionsEnabled } = usePlayback();
   const ref = useRef<HTMLVideoElement>(null);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
@@ -164,7 +164,7 @@ function VideoMedia({ itemId, src, active, preload, startAtS }: { itemId: number
         ref={ref}
         src={src}
         preload={active || preload ? "auto" : "none"}
-        loop
+        loop={loop}
         playsInline
         muted
         onClick={active ? togglePaused : undefined}
@@ -174,6 +174,7 @@ function VideoMedia({ itemId, src, active, preload, startAtS }: { itemId: number
         onLoadedMetadata={(event) => { setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0); setMediaSize({ w: event.currentTarget.videoWidth, h: event.currentTarget.videoHeight }); applyStartTime(event.currentTarget); }}
         onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
         onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+        onEnded={active ? onEnded : undefined}
         onError={() => { setLoadError(true); setWaiting(false); }}
         aria-label={active ? paused ? "Resume video" : "Pause video" : undefined}
         title={active ? paused ? "Click to resume" : "Click to pause" : undefined}
@@ -207,7 +208,7 @@ function MediaLoading() {
   </div>;
 }
 
-function SlideMedia({ images, audio, active }: { images: string[]; audio: string | null; active: boolean }) {
+function SlideMedia({ images, audio, active, loop, onEnded }: { images: string[]; audio: string | null; active: boolean; loop: boolean; onEnded?: () => void }) {
   const { muted, volume, autoLevel, setAutoGain, paused, togglePaused } = usePlayback();
   const [idx, setIdx] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -245,7 +246,7 @@ function SlideMedia({ images, audio, active }: { images: string[]; audio: string
     <div ref={boxRef} className="relative flex h-full w-full items-center justify-center">
       <img src={images[idx]} alt={`Slide ${idx + 1} of ${images.length}`} onLoad={(event) => setImgSize({ w: event.currentTarget.naturalWidth, h: event.currentTarget.naturalHeight })} className="h-full w-full object-contain" />
       {active && <button type="button" onClick={togglePaused} aria-label={paused ? "Resume slideshow audio" : "Pause slideshow audio"} className="absolute inset-0 z-[1] cursor-pointer"><span className="sr-only">{paused ? "Resume slideshow audio" : "Pause slideshow audio"}</span></button>}
-      {audio && <audio ref={audioRef} src={audio} loop />}
+      {audio && <audio ref={audioRef} src={audio} loop={loop} onEnded={active ? onEnded : undefined} />}
       {images.length > 1 && (
         <>
           <SlideNav side="left" onClick={() => go(-1)} margin={media.marginX} />

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, NavLink, Link } from "react-router-dom";
-import { FilmReel, SquaresFour, MusicNotes, ChartBar, DownloadSimple, HardDrives, Archive, Sun, Moon, BookmarkSimple, Compass, MagnifyingGlass, ClockCounterClockwise, Sparkle, Scissors } from "@phosphor-icons/react";
+import { FilmReel, SquaresFour, MusicNotes, ChartBar, DownloadSimple, HardDrives, Archive, Sun, Moon, BookmarkSimple, Compass, MagnifyingGlass, ClockCounterClockwise, Sparkle, Scissors, Star, WaveSine, Copy, Television } from "@phosphor-icons/react";
 import { cx } from "./components/ui";
 
 const Viewer = lazy(() => import("./routes/Viewer").then((module) => ({ default: module.Viewer })));
@@ -15,6 +15,10 @@ const Lens = lazy(() => import("./routes/Lens").then((module) => ({ default: mod
 const History = lazy(() => import("./routes/History").then((module) => ({ default: module.History })));
 const Memories = lazy(() => import("./routes/Memories").then((module) => ({ default: module.Memories })));
 const Stories = lazy(() => import("./routes/Stories").then((module) => ({ default: module.Stories })));
+const Curate = lazy(() => import("./routes/Curate").then((module) => ({ default: module.Curate })));
+const Vibes = lazy(() => import("./routes/Vibes").then((module) => ({ default: module.Vibes })));
+const Duplicates = lazy(() => import("./routes/Duplicates").then((module) => ({ default: module.Duplicates })));
+const Channels = lazy(() => import("./routes/Channels").then((module) => ({ default: module.Channels })));
 
 const TABS = [
   { to: "/", label: "Feed", icon: FilmReel, end: true },
@@ -26,6 +30,10 @@ const TABS = [
   { to: "/history", label: "History", icon: ClockCounterClockwise, end: false },
   { to: "/memories", label: "Memories", icon: Sparkle, end: false },
   { to: "/stories", label: "Stories", icon: Scissors, end: false },
+  { to: "/curate", label: "Curate", icon: Star, end: false },
+  { to: "/vibes", label: "Vibes", icon: WaveSine, end: false },
+  { to: "/duplicates", label: "Duplicates", icon: Copy, end: false },
+  { to: "/channels", label: "Channels", icon: Television, end: false },
   { to: "/storage", label: "Storage", icon: HardDrives, end: false },
   { to: "/backups", label: "Backups", icon: Archive, end: false },
   { to: "/sync", label: "Sync", icon: DownloadSimple, end: false },
@@ -61,6 +69,8 @@ export function App() {
                 key={to}
                 to={to}
                 end={end}
+                aria-label={label}
+                title={label}
                 className={({ isActive }) =>
                   cx(
                     "inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1.5 text-sm transition sm:px-3",
@@ -69,7 +79,7 @@ export function App() {
                 }
               >
                 <Icon size={16} />
-                <span className="sr-only sm:not-sr-only">{label}</span>
+                <span className={cx("sr-only min-[1800px]:not-sr-only", (label === "Feed" || label === "Gallery") && "sm:not-sr-only")}>{label}</span>
               </NavLink>
             ))}
             <button
@@ -94,6 +104,10 @@ export function App() {
               <Route path="/history" element={<History />} />
               <Route path="/memories" element={<Memories />} />
               <Route path="/stories" element={<Stories />} />
+              <Route path="/curate" element={<Curate />} />
+              <Route path="/vibes" element={<Vibes />} />
+              <Route path="/duplicates" element={<Duplicates />} />
+              <Route path="/channels" element={<Channels />} />
               <Route path="/storage" element={<Storage />} />
               <Route path="/backups" element={<Backups />} />
               <Route path="/sync" element={<Dashboard />} />

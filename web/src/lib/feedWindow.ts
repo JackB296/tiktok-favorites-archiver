@@ -3,7 +3,7 @@ import { feedTrimPlan } from "./viewerFeed.js";
 /** Minimum shape the window machine needs from a feed entry. */
 export type FeedItemLike = { id: number };
 
-export type FeedSourceKind = "latest" | "queue" | "filtered" | "random";
+export type FeedSourceKind = "latest" | "queue" | "filtered" | "random" | "channel";
 
 /**
  * Pure state machine for the Viewer's feed window.
@@ -31,8 +31,10 @@ export type FeedWindowState<T extends FeedItemLike> = {
   ids: number[];
   /** Id-index of the window's first requested id. Lowered only by completeLoadAbove. */
   idStart: number;
-  /** Id-index one past the window's last requested id. Raised only by beginLoadBelow. */
+  /** Id-index one past the window's last requested id. */
   idEnd: number;
+  /** Deferred id consumption for a retryable below batch, committed on success. */
+  pendingBelowConsume: number;
   /** Next-page cursor for stream sources; null when exhausted or unused. */
   cursor: number | null;
   /** The loaded window (requested ids minus unplayable entries). */
@@ -58,12 +60,19 @@ export type FeedInit<T extends FeedItemLike> = FeedWindowInit<T> & {
   total?: number | null;
   /** "target" scrolls to activeId before paint; "top" scrolls to 0 after paint. */
   scrollTo?: "top" | "target";
+  /** Optional source display name (for example an Archive Channel name). */
+  label?: string | null;
 };
 
 export type FeedBatch<T extends FeedItemLike> = { items: T[]; cursor?: number | null };
 
 /** A prepared below fetch: how many ids it consumes and how to run it. */
-export type BelowPlan<T extends FeedItemLike> = { consumeIds: number; fetch: () => Promise<FeedBatch<T>> };
+export type BelowPlan<T extends FeedItemLike> = {
+  consumeIds: number;
+  /** Keep a known-id slice available when a transient fetch fails. */
+  retryOnFailure?: boolean;
+  fetch: () => Promise<FeedBatch<T>>;
+};
 
 /** A prepared above fetch: the idStart it will establish and how to run it. */
 export type AbovePlan<T extends FeedItemLike> = { idStart: number; fetch: () => Promise<T[]> };
@@ -85,7 +94,7 @@ export interface FeedSource<T extends FeedItemLike> {
 }
 
 export function createFeedWindow<T extends FeedItemLike>(): FeedWindowState<T> {
-  return { generation: 0, ids: [], idStart: 0, idEnd: 0, cursor: null, items: [], loadingBelow: false, loadingAbove: false };
+  return { generation: 0, ids: [], idStart: 0, idEnd: 0, pendingBelowConsume: 0, cursor: null, items: [], loadingBelow: false, loadingAbove: false };
 }
 
 /**
@@ -94,7 +103,7 @@ export function createFeedWindow<T extends FeedItemLike>(): FeedWindowState<T> {
  * whose initial load fails softly can leave the previous feed usable.
  */
 export function switchSource<T extends FeedItemLike>(state: FeedWindowState<T>): FeedWindowState<T> {
-  return { ...state, generation: state.generation + 1, loadingBelow: false, loadingAbove: false };
+  return { ...state, generation: state.generation + 1, pendingBelowConsume: 0, loadingBelow: false, loadingAbove: false };
 }
 
 /** Install a source's initial window. No-op when `generation` is stale. */
@@ -106,6 +115,7 @@ export function setInitial<T extends FeedItemLike>(state: FeedWindowState<T>, ge
     ids,
     idStart: init.idStart ?? 0,
     idEnd: init.idEnd ?? ids.length,
+    pendingBelowConsume: 0,
     cursor: init.cursor ?? null,
     items: init.items,
     loadingBelow: false,
@@ -115,7 +125,7 @@ export function setInitial<T extends FeedItemLike>(state: FeedWindowState<T>, ge
 
 /** Drop the window entirely (a source's initial load failed hard). */
 export function clearWindow<T extends FeedItemLike>(state: FeedWindowState<T>): FeedWindowState<T> {
-  return { ...state, ids: [], idStart: 0, idEnd: 0, cursor: null, items: [], loadingBelow: false, loadingAbove: false };
+  return { ...state, ids: [], idStart: 0, idEnd: 0, pendingBelowConsume: 0, cursor: null, items: [], loadingBelow: false, loadingAbove: false };
 }
 
 /** The next unrequested id slice below the window. */
@@ -133,24 +143,35 @@ export function aboveIdSlice<T extends FeedItemLike>(state: FeedWindowState<T>, 
 
 /**
  * Claim the below slot. Refuses (returns null) while a below load is pending.
- * `consumeIds` advances idEnd immediately — like the original loaders, a slice
- * whose fetch later fails is skipped rather than retried, so the feed always
- * progresses.
+ * Retryable known-id slices advance idEnd only after their fetch succeeds;
+ * cursor streams and other sources preserve the original eager consumption.
  */
-export function beginLoadBelow<T extends FeedItemLike>(state: FeedWindowState<T>, consumeIds: number): FeedWindowState<T> | null {
+export function beginLoadBelow<T extends FeedItemLike>(state: FeedWindowState<T>, consumeIds: number, retryOnFailure = false): FeedWindowState<T> | null {
   if (state.loadingBelow) return null;
-  return { ...state, loadingBelow: true, idEnd: state.idEnd + consumeIds };
+  return {
+    ...state,
+    loadingBelow: true,
+    idEnd: state.idEnd + (retryOnFailure ? 0 : consumeIds),
+    pendingBelowConsume: retryOnFailure ? consumeIds : 0,
+  };
 }
 
 /** Append a below batch. Returns the SAME state when `generation` is stale. */
 export function completeLoadBelow<T extends FeedItemLike>(state: FeedWindowState<T>, generation: number, items: T[], cursor?: number | null): FeedWindowState<T> {
   if (generation !== state.generation) return state;
-  return { ...state, items: [...state.items, ...items], cursor: cursor === undefined ? state.cursor : cursor, loadingBelow: false };
+  return {
+    ...state,
+    idEnd: state.idEnd + state.pendingBelowConsume,
+    pendingBelowConsume: 0,
+    items: [...state.items, ...items],
+    cursor: cursor === undefined ? state.cursor : cursor,
+    loadingBelow: false,
+  };
 }
 
 export function failLoadBelow<T extends FeedItemLike>(state: FeedWindowState<T>, generation: number): FeedWindowState<T> {
   if (generation !== state.generation) return state;
-  return { ...state, loadingBelow: false };
+  return { ...state, pendingBelowConsume: 0, loadingBelow: false };
 }
 
 /** Claim the above slot. Refuses while pending. idStart moves only on completion. */

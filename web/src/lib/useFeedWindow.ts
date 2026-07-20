@@ -34,6 +34,8 @@ export type FeedWindow = {
   switchingTo: FeedSourceKind | null;
   /** Source-reported list total (shuffle length, filter match count, queue ready count). */
   total: number | null;
+  /** Optional source display name. */
+  label: string | null;
   /** Position of the active item in the source's full id order, when known. */
   activePosition: number | null;
   updateItem: (item: Item) => void;
@@ -61,6 +63,8 @@ export function useFeedWindow(source: FeedSource<Item>, containerRef: RefObject<
   const [kind, setKind] = useState<FeedSourceKind>(source.kind);
   const [switchingTo, setSwitchingTo] = useState<FeedSourceKind | null>(null);
   const [total, setTotal] = useState<number | null>(null);
+  const [label, setLabel] = useState<string | null>(null);
+  const [belowRetryTick, setBelowRetryTick] = useState(0);
   const pendingScrollToId = useRef<number | null>(null);
   const pendingPrepend = useRef(0);
   const pendingTrim = useRef<{ removeCount: number; restoredScrollTop: number } | null>(null);
@@ -68,6 +72,7 @@ export function useFeedWindow(source: FeedSource<Item>, containerRef: RefObject<
   const wheelGestureReady = useRef(true);
   const wheelIdleTimer = useRef<number | null>(null);
   const wheelSettleTimer = useRef<number | null>(null);
+  const belowRetryTimer = useRef<number | null>(null);
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
   const sourceRef = useRef(source);
@@ -105,6 +110,7 @@ export function useFeedWindow(source: FeedSource<Item>, containerRef: RefObject<
         setActiveId(init.activeId);
         setKind(src.kind);
         setTotal(init.total ?? null);
+        setLabel(init.label ?? null);
         if (init.scrollTo === "target" && init.activeId != null) {
           pendingScrollToId.current = init.activeId; // scroll the feed to the clicked item before paint
         } else if (init.scrollTo === "top") {
@@ -201,6 +207,7 @@ export function useFeedWindow(source: FeedSource<Item>, containerRef: RefObject<
   useEffect(() => () => {
     if (wheelIdleTimer.current != null) window.clearTimeout(wheelIdleTimer.current);
     if (wheelSettleTimer.current != null) window.clearTimeout(wheelSettleTimer.current);
+    if (belowRetryTimer.current != null) window.clearTimeout(belowRetryTimer.current);
   }, []);
 
   // Load the next batch when the active item nears the bottom of the window.
@@ -209,7 +216,7 @@ export function useFeedWindow(source: FeedSource<Item>, containerRef: RefObject<
     if (items.findIndex((item) => item.id === activeId) < items.length - 3) return;
     const plan = liveSource.current?.loadBelow?.(machine.current);
     if (!plan) return;
-    const begun = beginLoadBelow(machine.current, plan.consumeIds);
+    const begun = beginLoadBelow(machine.current, plan.consumeIds, plan.retryOnFailure);
     if (!begun) return; // a below batch is already in flight
     machine.current = begun;
     const generation = begun.generation;
@@ -224,8 +231,16 @@ export function useFeedWindow(source: FeedSource<Item>, containerRef: RefObject<
       .catch(() => {
         // transient — the sentinel stays and the next scroll retries
         machine.current = failLoadBelow(machine.current, generation);
+        if (!plan.retryOnFailure) return;
+        // A channel can finish while its next selection page is loading, so no
+        // later scroll may arrive to trigger the normal retry path.
+        belowRetryTimer.current = window.setTimeout(() => {
+          if (generation === machine.current.generation) {
+            setBelowRetryTick((tick) => tick + 1);
+          }
+        }, 1_000);
       });
-  }, [items, activeId]);
+  }, [items, activeId, belowRetryTick]);
 
   // Pull in earlier results when scrolling up near the top of a bounded window.
   useEffect(() => {
@@ -298,5 +313,5 @@ export function useFeedWindow(source: FeedSource<Item>, containerRef: RefObject<
 
   const activePosition = activeId != null ? positions.current?.get(activeId) ?? null : null;
 
-  return { items, error, activeId, setActiveId, transitionTargetId, kind, switchingTo, total, activePosition, updateItem };
+  return { items, error, activeId, setActiveId, transitionTargetId, kind, switchingTo, total, label, activePosition, updateItem };
 }

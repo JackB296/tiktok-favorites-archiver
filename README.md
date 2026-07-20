@@ -43,6 +43,10 @@ File numbering is stable: `147.mp4` stays archive item 147 in the database. Favo
 - **Finds what you remember.** Local Lens generates timestamped speech and on-screen text inside the app with bundled, CPU-only local tools, then jumps straight to the matching moment. Existing JSON imports remain available as a manual override.
 - **Makes the archive feel alive.** Memory Lane resurfaces anniversaries and overlooked favorites, while Archive Time Machine shows exactly what appeared or disappeared between TikTok exports without deleting local media.
 - **Builds personal stories.** Turn a saved Gallery queue into an editable sequence, trim and reorder its chapters, then render a private vertical MP4 locally with FFmpeg. Source favorites remain untouched.
+- **Adds your own meaning.** Curator Deck gives every favorite private stars, tags, notes, and a guided review state; Gallery can filter those annotations without changing TikTok metadata.
+- **Explores by vibe.** Vibe Atlas ranks captions, creators, songs, transcripts, and screen text with a deterministic local TF-IDF embedding. It needs no model download and sends no text or media away.
+- **Verifies duplicates safely.** Duplicate Radar caches streaming SHA-256 digests, reports exact duplicate groups and potential reclaimable space, and never deletes or offloads media.
+- **Turns collections into channels.** Archive Channels resolve a saved Smart Collection live, optionally shuffle or prefer unwatched favorites, and continuously advance through the normal Feed.
 - **Built to be operated.** Live per-item progress over Server-Sent Events, an archive integrity check, a one-click recovery inbox, saved and shareable filters, and a portable CSV inventory.
 - **Tested and typed.** The download engine is a standalone Python package with a stdlib-first unit suite (the HTTP-tier file additionally self-skips unless FastAPI is installed). The frontend talks to a small typed API and never reaches Cobalt directly.
 
@@ -167,6 +171,30 @@ Every successful export upload also becomes an immutable Time Machine checkpoint
 
 Story Builder turns any saved Gallery playback queue into a chaptered personal reel. Rename chapters, set optional start/end seconds, reorder or remove favorites, preview each cut in Feed, and save the plan without touching source media. Render runs locally through FFmpeg, normalizes every chapter to a vertical H.264/AAC stream, and atomically publishes the result under `downloads/.archive/stories/`. A failed render keeps the previous complete output, records the error, and can be retried.
 
+### Curator Deck, Vibe Atlas, Duplicate Radar, and Channels
+
+Curator Deck runs short review sessions over unreviewed or least-recently
+watched favorites. A review can star the favorite, attach up to 20 private
+tags, and save a private note. The Gallery advanced panel can then show only
+starred favorites or one exact private tag.
+
+Vibe Atlas builds a sparse text embedding at query time from archive captions,
+creators, hashtags, identified songs, Local Lens transcripts, and OCR. Search
+results explain their strongest shared terms, and any result can seed a
+"find similar" pass. The implementation is deterministic, standard-library
+only, and local.
+
+Duplicate Radar hashes finished local MP4s in bounded chunks. A cheap size and
+modification-time fingerprint lets later scans reuse unchanged SHA-256
+digests. Reports are read-only: they show exact byte-identical groups and
+potential reclaimable space, while all cleanup decisions remain manual.
+
+Archive Channels are named, live views over Gallery Smart Collections.
+Launching one uses the normal Feed, disables per-item looping, and advances
+when video or slideshow audio ends. A channel can keep collection order,
+shuffle, and place never-watched favorites first. Deleting a channel never
+deletes its Smart Collection or media.
+
 ### Storage and Backups
 
 Storage locations are folders already mounted on the app machine, such as an external drive or NAS bind mount. The app validates that a location is mounted, writable, and outside the active downloads/database paths. Copy and Move always show a read-only preview; both checksum every durable media file before recording a verified placement, and Move deletes local files only after that record is safely persisted. Restore verifies the external copy, recreates local media, and leaves the external copy intact. Legacy rows previously marked Offloaded remain visible but are not claimed as verified until managed storage has evidence for them.
@@ -211,8 +239,8 @@ core/     download engine: export parsing, Cobalt client, slideshow encoder,
           Shazam song identification, local speech/OCR analysis
 server/   FastAPI backend: REST + Server-Sent Events, background job manager,
           range-capable media streaming
-web/      React + Vite + Tailwind SPA: Feed, Gallery, Lens, Memories,
-          History, Stories, Storage, Backups, Sync
+web/      React + Vite + Tailwind SPA: Feed, Gallery, Curate, Vibes,
+          Duplicates, Channels, Lens, Memories, Stories, Storage, Backups, Sync
 Dockerfile + docker-compose.yml   the app plus an official Cobalt image
 ```
 

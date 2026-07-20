@@ -5,14 +5,14 @@ The module hides SQLite rows and archive-file layout behind ``page`` and
 """
 import os
 
-from core import discovery, layout, selection, store
+from core import annotations, discovery, layout, selection, store
 
 _GALLERY_PRESET_FIELDS = {
     "search", "kind", "status", "order", "minDuration", "maxDuration",
     "minSize", "maxSize", "minWidth", "maxWidth", "minHeight", "maxHeight", "codec",
     "dateFrom", "dateTo", "orientation", "assets", "audio", "offloaded", "indexState", "include", "exclude",
     "minAttempts", "maxAttempts", "recovery",
-    "creator", "hashtag",
+    "creator", "hashtag", "starred", "privateTag",
 }
 
 
@@ -22,8 +22,8 @@ def gallery_preset_filters(value):
         raise ValueError("filters must be an object")
     if any(
         key not in _GALLERY_PRESET_FIELDS
-        or (key == "recovery" and not isinstance(item, bool))
-        or (key != "recovery" and not isinstance(item, str))
+        or (key in ("recovery", "starred") and not isinstance(item, bool))
+        or (key not in ("recovery", "starred") and not isinstance(item, str))
         for key, item in value.items()
     ):
         raise ValueError("filters contain an unsupported value")
@@ -58,6 +58,8 @@ _PRESET_TO_PAGE = {
     "exclude": ("exclude", lambda value: value),
     "creator": ("creator", lambda value: value),
     "hashtag": ("hashtag", lambda value: value),
+    "starred": ("starred", lambda value: "true" if value else ""),
+    "privateTag": ("private_tag", lambda value: value),
 }
 
 
@@ -225,6 +227,8 @@ _PAGE_PARAMS = {
     "offloaded": ("offloaded", {"with": True, "without": False}.__getitem__),
     "creator": ("creator_key", discovery.normalize_creator),
     "hashtag": ("hashtag_key", discovery.normalize_hashtag),
+    "starred": ("starred", _boolean),
+    "private_tag": ("private_tag_key", annotations.normalize_tag),
     "feed": ("feed", _boolean),
 }
 
@@ -315,6 +319,10 @@ class ArchiveItems:
         rows = [by_id[item_id] for item_id in item_ids if item_id in by_id]
         return self._public_batch(rows)
 
+    def project(self, rows, include_assets=True):
+        """Project already-selected store rows for feature-specific views."""
+        return self._public_batch(rows, include_assets=include_assets)
+
     def _public_batch(self, rows, include_assets=True):
         """Project many rows with one directory listing and one song query
         instead of a per-row ``os.path.exists`` and ``get_song`` (N+1)."""
@@ -324,16 +332,19 @@ class ArchiveItems:
         identities = discovery.identities_for_items(
             self._conn, [row["id"] for row in rows],
         )
+        item_annotations = annotations.for_items(
+            self._conn, [row["id"] for row in rows],
+        )
         return [
             self._public(
                 row, movies=movies, songs=songs, identities=identities,
-                include_assets=include_assets,
+                item_annotations=item_annotations, include_assets=include_assets,
             )
             for row in rows
         ]
 
     def _public(
-        self, row, movies=None, songs=None, identities=None,
+        self, row, movies=None, songs=None, identities=None, item_annotations=None,
         include_assets=True,
     ):
         item_id = row["id"]
@@ -374,6 +385,11 @@ class ArchiveItems:
             "images": [],
             "audio": None,
             "thumbnail_url": None,
+            "annotation": (
+                item_annotations.get(item_id, annotations.empty(item_id))
+                if item_annotations is not None
+                else annotations.get(self._conn, item_id)
+            ),
         }
         movie_present = (
             item_id in movies if movies is not None

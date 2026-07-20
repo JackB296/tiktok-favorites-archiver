@@ -272,6 +272,51 @@ CREATE TABLE IF NOT EXISTS item_play (
     last_played_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_item_play_last ON item_play(last_played_at, item_id);
+CREATE TABLE IF NOT EXISTS item_annotation (
+    item_id INTEGER PRIMARY KEY REFERENCES item(id) ON DELETE CASCADE,
+    starred INTEGER NOT NULL DEFAULT 0 CHECK (starred IN (0, 1)),
+    note TEXT NOT NULL DEFAULT '',
+    reviewed_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_item_annotation_starred
+ON item_annotation(starred, item_id) WHERE starred = 1;
+CREATE INDEX IF NOT EXISTS idx_item_annotation_reviewed
+ON item_annotation(reviewed_at, item_id);
+CREATE TABLE IF NOT EXISTS private_tag (
+    id INTEGER PRIMARY KEY,
+    canonical_key TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS item_private_tag (
+    item_id INTEGER NOT NULL REFERENCES item(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES private_tag(id) ON DELETE CASCADE,
+    PRIMARY KEY(item_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS idx_item_private_tag_tag
+ON item_private_tag(tag_id, item_id);
+CREATE TABLE IF NOT EXISTS media_digest (
+    item_id INTEGER PRIMARY KEY REFERENCES item(id) ON DELETE CASCADE,
+    media_fingerprint TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    byte_count INTEGER NOT NULL CHECK (byte_count >= 0),
+    hashed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_digest_sha256
+ON media_digest(sha256, item_id);
+CREATE TABLE IF NOT EXISTS archive_channel (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    preset_id INTEGER NOT NULL REFERENCES gallery_preset(id) ON DELETE CASCADE,
+    shuffle INTEGER NOT NULL DEFAULT 0 CHECK (shuffle IN (0, 1)),
+    prefer_unwatched INTEGER NOT NULL DEFAULT 1 CHECK (prefer_unwatched IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_archive_channel_preset
+ON archive_channel(preset_id, id);
 CREATE TABLE IF NOT EXISTS import_history (
     id INTEGER PRIMARY KEY,
     source_name TEXT NOT NULL,
@@ -1166,6 +1211,8 @@ PAGE_QUERY_DEFAULTS = {
     "feed": False,
     "creator_key": None,
     "hashtag_key": None,
+    "starred": None,
+    "private_tag_key": None,
 }
 
 
@@ -1250,6 +1297,24 @@ def _page_filter_clauses(q):
             "AND h.canonical_key = ?)"
         )
         params.append(q["hashtag_key"])
+    if q["starred"] is not None:
+        if q["starred"]:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM item_annotation ia "
+                "WHERE ia.item_id = item.id AND ia.starred = 1)"
+            )
+        else:
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM item_annotation ia "
+                "WHERE ia.item_id = item.id AND ia.starred = 1)"
+            )
+    if q["private_tag_key"]:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM item_private_tag ipt "
+            "JOIN private_tag pt ON pt.id = ipt.tag_id "
+            "WHERE ipt.item_id = item.id AND pt.canonical_key = ?)"
+        )
+        params.append(q["private_tag_key"])
     index_filters = {
         "indexed": "thumbnail_path IS NOT NULL",
         "missing": "thumbnail_path IS NULL AND index_error IS NULL",

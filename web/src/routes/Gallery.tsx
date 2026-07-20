@@ -67,7 +67,7 @@ export function Gallery() {
   );
   const filters = useGalleryFilters(searchParams);
   const { state: filterState, randomSeed, set: setFilter, clearField: clearFilter } = filters;
-  const { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, audio, offloaded, indexState, include, exclude } = filterState;
+  const { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, audio, offloaded, indexState, include, exclude, starred, privateTag } = filterState;
   const [suggestions, setSuggestions] = useState<SearchSuggestions | null>(null);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [suggestActive, setSuggestActive] = useState(-1);
@@ -781,6 +781,13 @@ export function Gallery() {
             </label>
             <label className="text-xs text-ink-dim"><HelpLabel help="Shows favorites Sync has tried no more than this many times. Use 0 to find pending favorites never attempted.">Maximum download attempts</HelpLabel>
               <input value={maxAttempts} onChange={(e) => setFilter("maxAttempts", e.target.value)} type="number" min="0" step="1" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="flex h-9 items-center gap-2 self-end rounded-[var(--radius-control)] border border-line bg-elevated px-3 text-sm text-ink">
+              <input type="checkbox" checked={starred} onChange={(e) => setFilter("starred", e.target.checked)} />
+              Starred in Curator Deck
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Matches one private archive-only tag created in Curator Deck.">Private tag</HelpLabel>
+              <input value={privateTag} onChange={(e) => setFilter("privateTag", e.target.value)} placeholder="e.g. recipes" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink placeholder:text-ink-faint" />
             </label>
           </div>
         </div>

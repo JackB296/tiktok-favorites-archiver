@@ -36,7 +36,7 @@ function fakeClient(script) {
     if (!(name in script)) throw new Error(`unexpected ${name} call`);
     return script[name](...args);
   };
-  return { calls, feedIds: wrap("feedIds"), itemIds: wrap("itemIds"), itemPage: wrap("itemPage"), itemSelection: wrap("itemSelection"), itemWindow: wrap("itemWindow") };
+  return { calls, feedIds: wrap("feedIds"), itemIds: wrap("itemIds"), itemPage: wrap("itemPage"), itemSelection: wrap("itemSelection"), itemWindow: wrap("itemWindow"), channelItems: wrap("channelItems") };
 }
 
 /** Install a source's init into a fresh window machine, like useFeedWindow does. */
@@ -146,6 +146,46 @@ const installed = (init) => fw.setInitial(fw.switchSource(fw.createFeedWindow())
   assert.equal(init.idEnd, 3);
   assert.equal(source.loadBelow, undefined);
   assert.equal(source.loadAbove, undefined);
+}
+
+// Channel source resolves a live id list, names the source, and pages it in
+// bounded selection batches.
+{
+  const ids = Array.from({ length: 120 }, (_, i) => i + 1);
+  let selectionCalls = 0;
+  const client = fakeClient({
+    channelItems: async (id) => ({ id, name: "Dinner TV", item_ids: ids }),
+    itemSelection: async (requested) => {
+      selectionCalls += 1;
+      if (selectionCalls === 2) throw new Error("temporary failure");
+      return requested.map(video);
+    },
+  });
+  const source = sources.channelFeedSource(7, "channel:test", client);
+  assert.equal(source.kind, "channel");
+  const init = await source.loadInitial();
+  assert.deepEqual(client.calls[0], ["channelItems", 7]);
+  assert.deepEqual(client.calls[1], ["itemSelection", ids.slice(0, 50)]);
+  assert.equal(init.label, "Dinner TV");
+  assert.equal(init.total, 120);
+  assert.equal(init.idEnd, 50);
+  let state = installed(init);
+  const below = source.loadBelow(state);
+  assert.equal(below.consumeIds, 50);
+  assert.equal(below.retryOnFailure, true);
+  await assert.rejects(below.fetch(), /temporary failure/);
+  state = fw.failLoadBelow(
+    fw.beginLoadBelow(state, below.consumeIds, below.retryOnFailure), state.generation,
+  );
+  assert.equal(state.idEnd, 50);
+  const retry = source.loadBelow(state);
+  const batch = await retry.fetch();
+  state = fw.completeLoadBelow(
+    fw.beginLoadBelow(state, retry.consumeIds, retry.retryOnFailure),
+    state.generation, batch.items,
+  );
+  assert.deepEqual(batch.items.map((item) => item.id), ids.slice(50, 100));
+  assert.equal(state.idEnd, 100);
 }
 
 // Latest cursor flow: first page in latest order, then cursor pages until the

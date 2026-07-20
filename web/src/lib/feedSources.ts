@@ -9,14 +9,15 @@ const BATCH_SIZE = 50;
 const FILTERED_BEFORE = 45;
 
 /** The api calls the sources make — injectable so the Node harness can fake them. */
-export type FeedClient = Pick<typeof api, "feedIds" | "itemIds" | "itemPage" | "itemSelection" | "itemWindow">;
+export type FeedClient = Pick<typeof api, "feedIds" | "itemIds" | "itemPage" | "itemSelection" | "itemWindow" | "channelItems">;
 
 /** Below batch for sources with a fully known id order: request the next id slice. */
-function selectionBelow(client: FeedClient, state: FeedWindowState<Item>): BelowPlan<Item> | null {
+function selectionBelow(client: FeedClient, state: FeedWindowState<Item>, retryOnFailure = false): BelowPlan<Item> | null {
   const ids = belowIdSlice(state, BATCH_SIZE);
   if (!ids.length) return null;
   return {
     consumeIds: ids.length,
+    retryOnFailure,
     fetch: () => client.itemSelection(ids).then((selected) => ({ items: selected.filter(isFeedItem) })),
   };
 }
@@ -86,6 +87,32 @@ export function queueFeedSource(ids: number[], key: string, client: FeedClient =
       return { items, ids, idStart: 0, idEnd: ids.length, activeId: items[0]?.id ?? null, total: items.length };
     },
     // a curated queue ends at its final selected item — no loadBelow/loadAbove
+  };
+}
+
+/** A live Smart Collection channel, loaded in bounded selection batches. */
+export function channelFeedSource(channelId: number, key: string, client: FeedClient = api): FeedSource<Item> {
+  return {
+    key,
+    kind: "channel",
+    loadInitial: async () => {
+      const channel = await client.channelItems(channelId);
+      const ids = channel.item_ids;
+      const first = ids.slice(0, BATCH_SIZE);
+      const selected = await client.itemSelection(first);
+      const items = selected.filter(isFeedItem);
+      return {
+        items,
+        ids,
+        idStart: 0,
+        idEnd: first.length,
+        activeId: items[0]?.id ?? null,
+        total: ids.length,
+        label: channel.name,
+        scrollTo: "top",
+      };
+    },
+    loadBelow: (state) => selectionBelow(client, state, true),
   };
 }
 

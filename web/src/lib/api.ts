@@ -1,4 +1,4 @@
-import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, ImportRecord, MemoryResponse, PlayRecord, Story, StoryInput, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats, LensStatus, LensTotals, LensSearchResponse, ItemCaptionsResponse } from "./types";
+import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, ImportRecord, MemoryResponse, PlayRecord, Story, StoryInput, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats, LensStatus, LensTotals, LensSearchResponse, ItemCaptionsResponse, ItemAnnotation, CurateSession, VibeResponse, DuplicateReport, ArchiveChannel, ArchiveChannelItems } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
@@ -88,7 +88,32 @@ export const api = {
   }),
   deletePlaybackQueue: (id: number) => json<{ ok: boolean }>(`/api/playback-queues/${id}`, { method: "DELETE" }),
 
-  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "audio_missing" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; min_attempts?: number; max_attempts?: number; recovery?: boolean; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; audio?: "with" | "without"; offloaded?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string; creator?: string; hashtag?: string } = {}) => {
+  itemAnnotation: (id: number) => json<ItemAnnotation>(`/api/items/${id}/annotation`),
+  updateItemAnnotation: (id: number, annotation: { starred: boolean; note: string; tags: string[]; reviewed: boolean }) =>
+    json<ItemAnnotation>(`/api/items/${id}/annotation`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(annotation),
+    }),
+  curateSession: (source: "unreviewed" | "forgotten", limit = 20) =>
+    json<CurateSession>(`/api/curate/session?source=${source}&limit=${limit}`),
+  vibeSearch: (query: string, limit = 24) =>
+    json<VibeResponse>(`/api/vibes/search?q=${encodeURIComponent(query)}&limit=${limit}`),
+  vibeRelated: (id: number, limit = 24) =>
+    json<VibeResponse>(`/api/vibes/related/${id}?limit=${limit}`),
+  duplicateReport: () => json<DuplicateReport>("/api/duplicates"),
+  scanDuplicates: () => json<DuplicateReport>("/api/duplicates/scan", { method: "POST" }),
+  channels: () => json<ArchiveChannel[]>("/api/channels"),
+  createChannel: (body: { name: string; preset_id: number; shuffle: boolean; prefer_unwatched: boolean }) =>
+    json<ArchiveChannel>("/api/channels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deleteChannel: (id: number) => json<{ ok: boolean }>(`/api/channels/${id}`, { method: "DELETE" }),
+  channelItems: (id: number) => json<ArchiveChannelItems>(`/api/channels/${id}/items`),
+
+  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "audio_missing" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; min_attempts?: number; max_attempts?: number; recovery?: boolean; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; audio?: "with" | "without"; offloaded?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string; creator?: string; hashtag?: string; starred?: boolean; private_tag?: string } = {}) => {
     const p = new URLSearchParams();
     if (q.search) p.set("search", q.search);
     if (q.kind) p.set("kind", q.kind);
@@ -121,6 +146,8 @@ export const api = {
     if (q.exclude) p.set("exclude", q.exclude);
     if (q.creator) p.set("creator", q.creator);
     if (q.hashtag) p.set("hashtag", q.hashtag);
+    if (q.starred) p.set("starred", "true");
+    if (q.private_tag) p.set("private_tag", q.private_tag);
     return json<ItemPage>(`/api/items/page?${p}`);
   },
 

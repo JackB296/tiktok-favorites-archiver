@@ -3,7 +3,7 @@ import type { GalleryPresetFilters } from "./types";
 export type GalleryOrder = "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "audio_missing" | "random";
 
 /** Every Gallery filter as one value object. Strings mirror the raw input text;
-    `recovery` is the only boolean. `order` always holds a sort (never ""). */
+    `recovery` and `starred` are booleans. `order` always holds a sort. */
 export interface GalleryFiltersState {
   search: string;
   kind: string;
@@ -32,6 +32,8 @@ export interface GalleryFiltersState {
   exclude: string;
   creator: string;
   hashtag: string;
+  starred: boolean;
+  privateTag: string;
 }
 
 export type GalleryFilterKey = keyof GalleryFiltersState;
@@ -108,6 +110,14 @@ export const GALLERY_FILTER_FIELDS: GalleryFilterField[] = [
   text("exclude", "exclude", "exclude", (v) => `Exclude: ${v}`),
   text("creator", "creator", "creator", (v) => `Creator: ${v}`),
   text("hashtag", "hashtag", "hashtag", (v) => `Hashtag: #${v.replace(/^#/, "")}`),
+  {
+    key: "starred", urlParam: "starred", queryParam: "starred", default: false,
+    toUrl: (value) => (value ? "1" : undefined),
+    fromUrl: (raw) => raw === "1" || raw === "true",
+    fromPreset: (value) => Boolean(value),
+    chipLabel: (value) => (value ? "Starred" : null),
+  },
+  text("privateTag", "private_tag", "private_tag", (v) => `Private tag: ${v}`),
 ];
 
 const FIELD_BY_KEY = Object.fromEntries(GALLERY_FILTER_FIELDS.map((field) => [field.key, field])) as Record<GalleryFilterKey, GalleryFilterField>;
@@ -119,7 +129,7 @@ const URL_FIELD_ORDER: GalleryFilterKey[] = [
   "search", "kind", "status", "order", "minDuration", "maxDuration", "minSize", "maxSize",
   "minWidth", "maxWidth", "minHeight", "maxHeight", "codec", "minAttempts", "maxAttempts",
   "recovery", "dateFrom", "dateTo", "orientation", "assets", "audio", "offloaded",
-  "indexState", "include", "exclude", "creator", "hashtag",
+  "indexState", "include", "exclude", "creator", "hashtag", "starred", "privateTag",
 ];
 
 export function emptyFilters(): GalleryFiltersState {
@@ -207,6 +217,8 @@ export function filtersToPageQuery(state: GalleryFiltersState, randomSeed: numbe
     include: state.include, exclude: state.exclude,
     creator: state.creator || undefined,
     hashtag: state.hashtag || undefined,
+    starred: state.starred || undefined,
+    private_tag: state.privateTag || undefined,
   };
 }
 

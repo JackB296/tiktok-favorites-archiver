@@ -21,6 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from core import archive_filesystem, config, scheduler, store
 from server import media_range, request_security, spa
 from server.api import router
+from server.feature_api import router as feature_router
 from server.jobs import JobManager
 
 
@@ -94,6 +95,7 @@ def create_app(db_path=None, download_dir=None, jobs=None, allowed_hosts=None):
         app.state.scheduler.stop()
 
     app.include_router(router)
+    app.include_router(feature_router)
 
     @app.get("/media/{path:path}")
     def media(path: str, request: Request):

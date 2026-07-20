@@ -88,6 +88,17 @@ const failed = fw.failLoadBelow(fw.beginLoadBelow(afterAbove, 1), generation);
 assert.equal(failed.loadingBelow, false);
 assert.equal(failed.idEnd, afterAbove.idEnd + 1);
 
+// A retryable selection batch leaves its ids unconsumed after a transient
+// failure, then consumes them exactly once on the successful retry.
+const retryPending = fw.beginLoadBelow(afterAbove, 1, true);
+assert.equal(retryPending.idEnd, afterAbove.idEnd);
+const retryFailed = fw.failLoadBelow(retryPending, generation);
+assert.equal(retryFailed.idEnd, afterAbove.idEnd);
+const retryDone = fw.completeLoadBelow(
+  fw.beginLoadBelow(retryFailed, 1, true), generation, items(25),
+);
+assert.equal(retryDone.idEnd, afterAbove.idEnd + 1);
+
 // Cursor streams: a below completion replaces the cursor (null = exhausted);
 // slice completions leave it alone.
 let stream = fw.setInitial(fw.switchSource(failed), failed.generation + 1, { items: items(1, 2), cursor: 42 });

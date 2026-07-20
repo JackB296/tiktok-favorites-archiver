@@ -75,6 +75,67 @@ export interface Item {
   images: string[];
   audio: string | null;
   thumbnail_url: string | null;
+  annotation: ItemAnnotation;
+}
+
+export interface ItemAnnotation {
+  item_id: number;
+  starred: boolean;
+  note: string;
+  tags: string[];
+  reviewed: boolean;
+  reviewed_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CurateSession {
+  source: "unreviewed" | "forgotten";
+  items: Item[];
+}
+
+export interface VibeResult {
+  item_id: number;
+  score: number;
+  evidence: string[];
+  item: Item;
+}
+
+export interface VibeResponse {
+  query?: string;
+  item_id?: number;
+  results: VibeResult[];
+}
+
+export interface DuplicateGroup {
+  sha256: string;
+  byte_count: number;
+  copies: number;
+  reclaimable_bytes: number;
+  item_ids: number[];
+  items: Item[];
+}
+
+export interface DuplicateReport {
+  groups: DuplicateGroup[];
+  group_count: number;
+  duplicate_items: number;
+  reclaimable_bytes: number;
+  scan?: { hashed: number; reused: number };
+}
+
+export interface ArchiveChannel {
+  id: number;
+  name: string;
+  preset_id: number;
+  preset_name: string;
+  shuffle: boolean;
+  prefer_unwatched: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ArchiveChannelItems extends ArchiveChannel {
+  item_ids: number[];
 }
 
 export interface DiscoveryIdentity {
@@ -451,6 +512,8 @@ export interface GalleryPresetFilters {
   recovery?: boolean;
   creator?: string;
   hashtag?: string;
+  starred?: boolean;
+  privateTag?: string;
 }
 
 export interface GalleryPreset {

@@ -857,6 +857,82 @@ def test_smart_collections_pipeline_schedules_and_discovery_routes():
             assert exact == [3, 1]
 
 
+def test_archive_intelligence_feature_routes_work_together():
+    if TestClient is None:
+        return
+    from core import store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, db_path, downloads = _build(tmp)
+        conn = store.connect(db_path)
+        for item_id, caption in (
+            (1, "late night ramen cooking"),
+            (2, "tiny kitchen pasta recipe"),
+            (3, "mountain trail run"),
+        ):
+            store.insert_item(
+                conn, item_id, f"https://tiktok.com/{item_id}",
+                kind="video", status="done",
+            )
+            store.set_metadata(conn, item_id, caption, "owner")
+        conn.close()
+        for item_id, content in (
+            (1, b"same-media"), (2, b"same-media"), (3, b"different"),
+        ):
+            with open(os.path.join(downloads, f"{item_id}.mp4"), "wb") as target:
+                target.write(content)
+
+        with _client(app) as client:
+            saved = client.put("/api/items/1/annotation", json={
+                "starred": True, "note": "make this",
+                "tags": ["Recipe"], "reviewed": True,
+            })
+            assert saved.status_code == 200, saved.text
+            assert saved.json()["tags"] == ["Recipe"]
+            assert client.get("/api/items/1/annotation").json()["starred"] is True
+            starred = client.get(
+                "/api/items/page", params={"starred": "true"},
+            ).json()
+            assert [item["id"] for item in starred["items"]] == [1]
+            tagged = client.get(
+                "/api/items/page", params={"private_tag": "recipe"},
+            ).json()
+            assert [item["id"] for item in tagged["items"]] == [1]
+            session = client.get(
+                "/api/curate/session", params={"source": "unreviewed", "limit": 2},
+            ).json()
+            assert [item["id"] for item in session["items"]] == [3, 2]
+
+            vibe = client.get(
+                "/api/vibes/search", params={"q": "night ramen cooking"},
+            )
+            assert vibe.status_code == 200, vibe.text
+            assert vibe.json()["results"][0]["item_id"] == 1
+            related = client.get("/api/vibes/related/1").json()
+            assert related["results"][0]["item_id"] == 2
+
+            duplicate_report = client.post("/api/duplicates/scan")
+            assert duplicate_report.status_code == 200, duplicate_report.text
+            assert duplicate_report.json()["groups"][0]["item_ids"] == [1, 2]
+            assert os.path.exists(os.path.join(downloads, "1.mp4"))
+
+            preset = client.post("/api/gallery-presets", json={
+                "name": "Recipes", "filters": {"search": "recipe"},
+            }).json()
+            channel = client.post("/api/channels", json={
+                "name": "Recipe TV", "preset_id": preset["id"],
+                "shuffle": False, "prefer_unwatched": True,
+            })
+            assert channel.status_code == 200, channel.text
+            channel_id = channel.json()["id"]
+            assert client.get(
+                f"/api/channels/{channel_id}/items",
+            ).json()["item_ids"] == [2]
+            assert client.delete(
+                f"/api/channels/{channel_id}",
+            ).json() == {"ok": True}
+
+
 if __name__ == "__main__":
     import traceback
     if TestClient is None:

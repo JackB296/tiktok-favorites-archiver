@@ -244,6 +244,14 @@ def test_parse_page_query_maps_the_offloaded_filter():
     assert parse_page_query({"offloaded": "without"}) == {"offloaded": False}
 
 
+def test_parse_page_query_maps_private_curation_filters():
+    assert parse_page_query({
+        "starred": "true", "private_tag": "  Cozy Food  ",
+    }) == {
+        "starred": True, "private_tag_key": "cozy food",
+    }
+
+
 def test_parse_saved_list_accepts_each_collection():
     """The four saved named-list collections validate through one parser.
     Previously these validators lived in api.py behind the FastAPI import and
