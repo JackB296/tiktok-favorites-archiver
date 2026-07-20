@@ -42,7 +42,6 @@ File numbering is stable: `147.mp4` stays archive item 147 in the database. Favo
 - **Automates on your terms.** Saved Gallery presets are live Smart collections, Sync follow-ups are configurable, and daily or weekly runs execute inside the app with timezone/DST-safe catch-up.
 - **Finds what you remember.** Local Lens generates timestamped speech and on-screen text inside the app with bundled, CPU-only local tools, then jumps straight to the matching moment. Existing JSON imports remain available as a manual override.
 - **Makes the archive feel alive.** Memory Lane resurfaces anniversaries and overlooked favorites, while Archive Time Machine shows exactly what appeared or disappeared between TikTok exports without deleting local media.
-- **Builds personal stories.** Turn a saved Gallery queue into an editable sequence, trim and reorder its chapters, then render a private vertical MP4 locally with FFmpeg. Source favorites remain untouched.
 - **Adds your own meaning.** Curator Deck gives every favorite private stars, tags, notes, and a guided review state; Gallery can filter those annotations without changing TikTok metadata.
 - **Explores by vibe.** Vibe Atlas ranks captions, creators, songs, transcripts, and screen text with a deterministic local TF-IDF embedding. It needs no model download and sends no text or media away.
 - **Verifies duplicates safely.** Duplicate Radar caches streaming SHA-256 digests, reports exact duplicate groups and potential reclaimable space, and never deletes or offloads media.
@@ -167,10 +166,6 @@ Memory Lane creates three private daily shelves from local metadata: favorites s
 
 Every successful export upload also becomes an immutable Time Machine checkpoint. History compares it with the immediately previous upload and reports new, missing, unchanged, and missing-but-safely-archived favorites. "Missing" only describes the newer TikTok export. It never deletes, renumbers, or changes an existing archive item.
 
-### Story Builder
-
-Story Builder turns any saved Gallery playback queue into a chaptered personal reel. Rename chapters, set optional start/end seconds, reorder or remove favorites, preview each cut in Feed, and save the plan without touching source media. Render runs locally through FFmpeg, normalizes every chapter to a vertical H.264/AAC stream, and atomically publishes the result under `downloads/.archive/stories/`. A failed render keeps the previous complete output, records the error, and can be retried.
-
 ### Curator Deck, Vibe Atlas, Duplicate Radar, and Channels
 
 Curator Deck runs short review sessions over unreviewed or least-recently
@@ -240,7 +235,7 @@ core/     download engine: export parsing, Cobalt client, slideshow encoder,
 server/   FastAPI backend: REST + Server-Sent Events, background job manager,
           range-capable media streaming
 web/      React + Vite + Tailwind SPA: Feed, Gallery, Curate, Vibes,
-          Duplicates, Channels, Lens, Memories, Stories, Storage, Backups, Sync
+          Duplicates, Channels, Lens, Memories, Storage, Backups, Sync
 Dockerfile + docker-compose.yml   the app plus an official Cobalt image
 ```
 

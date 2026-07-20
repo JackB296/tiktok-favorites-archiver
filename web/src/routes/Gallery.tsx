@@ -11,7 +11,6 @@ import {
   X,
   LinkSimple,
   Info,
-  FilmReel,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { MarkAction } from "../lib/api";
@@ -423,16 +422,6 @@ export function Gallery() {
     if (queue) navigate(`/?queue=${queue.item_ids.join(",")}`);
   }
 
-  function buildStoryFromQueue() {
-    const queue = playbackQueues.find((item) => item.id === Number(selectedPlaybackQueueId));
-    if (!queue) return;
-    const params = new URLSearchParams({
-      queue: queue.item_ids.join(","),
-      name: queue.name,
-    });
-    navigate(`/stories?${params}`);
-  }
-
   function enterSelectionMode() {
     setInspectionMode(false);
     setInspectedItem(null);
@@ -597,6 +586,7 @@ export function Gallery() {
             role="combobox"
             aria-expanded={showSuggest}
             aria-controls="gallery-search-suggestions"
+            aria-activedescendant={showSuggest && suggestActive >= 0 ? `gallery-suggestion-${suggestActive}` : undefined}
             aria-autocomplete="list"
             placeholder="Search caption, hashtag, author"
             title="Searches indexed captions, hashtags, creator names, and source links. Best text matches appear first unless an advanced sort is selected."
@@ -608,7 +598,7 @@ export function Gallery() {
               {suggestItems.map((opt, i) => {
                 const firstOfKind = i === 0 || suggestItems[i - 1].kind !== opt.kind;
                 return (
-                  <li key={opt.kind + opt.value} role="option" aria-selected={i === suggestActive}>
+                  <li id={`gallery-suggestion-${i}`} key={opt.kind + opt.value} role="option" aria-selected={i === suggestActive}>
                     {firstOfKind && <div className="px-[0.9em] pb-[0.1em] pt-[0.45em] text-[0.72em] font-semibold uppercase tracking-wide text-ink-faint">{opt.kind}</div>}
                     <button
                       type="button"
@@ -656,21 +646,17 @@ export function Gallery() {
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={() => changeHoverPreviews(!hoverPreviews)}
-            aria-pressed={hoverPreviews}
-            title="Play a muted six-second sample after a brief hover. Turn this off to keep Gallery thumbnails static."
-            className={cx("inline-flex items-center gap-[0.35em] rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition", hoverPreviews ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}
-          >
-            <Play size="1em" weight={hoverPreviews ? "fill" : "regular"} />
-            Hover previews
-          </button>
-          <button onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen} className={cx("rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition", detailsOpen ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>Card details</button>
+          <details className="group relative">
+            <summary className="flex cursor-pointer list-none items-center gap-[0.35em] rounded-full border border-line px-[0.85em] py-[0.4em] text-[0.8em] font-medium text-ink-dim hover:text-ink">View options <SlidersHorizontal size="1em" aria-hidden /></summary>
+            <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-[var(--radius-control)] border border-line bg-surface p-3 shadow-xl">
+              <button type="button" onClick={() => changeHoverPreviews(!hoverPreviews)} aria-pressed={hoverPreviews} className={cx("flex w-full items-center justify-between rounded px-2 py-2 text-left text-sm", hoverPreviews ? "text-accent" : "text-ink-dim hover:text-ink")}><span>Hover previews</span><span className="text-xs">{hoverPreviews ? "On" : "Off"}</span></button>
+              <button type="button" onClick={() => setDetailsOpen((value) => !value)} aria-expanded={detailsOpen} className="mt-1 flex w-full items-center justify-between rounded px-2 py-2 text-left text-sm text-ink-dim hover:text-ink"><span>Card details</span><span className="text-xs">Configure</span></button>
+            </div>
+          </details>
           <button onClick={() => selectionMode ? leaveSelectionMode() : enterSelectionMode()} aria-pressed={selectionMode} className={cx("rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition", selectionMode ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>{selectionMode ? "Done selecting" : "Select"}</button>
           <button onClick={toggleRecoveryInbox} disabled={recoveryInboxBusy} aria-pressed={recovery} className={cx("rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition disabled:opacity-40", recovery ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>{recoveryInboxBusy ? "Checking…" : recovery ? "Recovery inbox" : "Recovery"}</button>
           <button onClick={() => { if (inspectionMode) { setInspectionMode(false); setInspectedItem(null); } else { leaveSelectionMode(); setInspectionMode(true); } }} aria-pressed={inspectionMode} className={cx("rounded-full border p-[0.5em] transition", inspectionMode ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")} aria-label={inspectionMode ? "Leave inspect mode" : "Inspect Gallery metadata"}><Info size="1.1em" /></button>
-          <button onClick={() => setAdvanced((value) => !value)} title="Open saved filters, whitelist and blacklist lists, playback queues, and detailed archive filters." aria-label="Toggle advanced filters" className="rounded-full border border-line p-[0.5em] text-ink-dim hover:text-ink"><SlidersHorizontal size="1.1em" /></button>
+          <button onClick={() => setAdvanced((value) => !value)} aria-expanded={advanced} className={cx("rounded-full border px-[0.85em] py-[0.4em] text-[0.8em] font-medium transition", advanced ? "border-accent bg-accent text-on-accent" : "border-line text-ink-dim hover:text-ink")}>More filters</button>
         </div>
       </div>
 
@@ -762,7 +748,6 @@ export function Gallery() {
               <select value={selectedPlaybackQueueId} onChange={(e) => setSelectedPlaybackQueueId(e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Choose a queue…</option>{playbackQueues.map((queue) => <option key={queue.id} value={queue.id}>{queue.name} · {queue.item_ids.length} favorites</option>)}</select>
             </label>
             <Button variant="ghost" size="sm" onClick={playSavedQueue} disabled={!selectedPlaybackQueueId}><Play size={15} weight="fill" /> Play queue</Button>
-            <Button variant="ghost" size="sm" onClick={buildStoryFromQueue} disabled={!selectedPlaybackQueueId}><FilmReel size={15} /> Build story</Button>
             {selectedPlaybackQueueId && <Button variant="danger" size="sm" onClick={() => void deletePlaybackQueue()}><Trash size={15} /> Delete</Button>}
             {playbackQueueMessage && <span className="text-xs text-ink-faint">{playbackQueueMessage}</span>}
           </div>

@@ -272,32 +272,6 @@ export interface MemoryResponse {
   sections: MemorySection[];
 }
 
-export interface StoryChapter {
-  item_id: number;
-  title: string;
-  start_s: number;
-  end_s: number | null;
-}
-
-export interface Story {
-  id: number;
-  name: string;
-  description: string;
-  chapters: StoryChapter[];
-  rendered_path: string | null;
-  rendered_url: string | null;
-  rendered_at: string | null;
-  render_error: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface StoryInput {
-  name: string;
-  description: string;
-  chapters: StoryChapter[];
-}
-
 export interface RunStatus {
   state: RunState;
   phase: string | null;

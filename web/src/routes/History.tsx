@@ -135,7 +135,7 @@ export function History() {
             </ol>
           </aside>
 
-          <main>
+          <section aria-label="Checkpoint details">
             {message && <p role="alert" className="mb-4 rounded-[var(--radius-control)] border border-bad/40 bg-bad/10 p-3 text-sm text-bad">{message}</p>}
             {!detail || !counts ? (
               <Skeleton className="h-80" />
@@ -167,7 +167,7 @@ export function History() {
                 </div>
               </>
             )}
-          </main>
+          </section>
         </div>
       </div>
     </div>

@@ -375,11 +375,10 @@ def test_local_analysis_is_default_pipeline_work_and_startable_in_app():
                 jobs._thread.join(3)
 
 
-def test_archive_intelligence_history_memory_and_story_routes():
+def test_archive_intelligence_history_and_memory_routes():
     if TestClient is None:
         return
-    from unittest.mock import patch
-    from core import layout, stories, store
+    from core import layout, store
 
     with tempfile.TemporaryDirectory() as tmp:
         app, _jobs, db_path, downloads = _build(tmp)
@@ -418,45 +417,6 @@ def test_archive_intelligence_history_memory_and_story_routes():
             assert memories.json()["sections"][0]["item_ids"] == [2]
             assert client.post("/api/items/1/played").json()["play_count"] == 1
             assert client.post("/api/items/999/played").status_code == 404
-
-            created = client.post("/api/stories", json={
-                "name": "Summer",
-                "description": "A local reel",
-                "chapters": [
-                    {"item_id": 1, "title": "First", "start_s": 0, "end_s": 4},
-                    {"item_id": 2, "title": "Second", "start_s": 1, "end_s": 5},
-                ],
-            })
-            assert created.status_code == 200, created.text
-            story = created.json()
-            assert client.get("/api/stories").json()[0]["id"] == story["id"]
-            renamed = client.patch(
-                f"/api/stories/{story['id']}", json={
-                    "name": "Summer favorites",
-                    "description": story["description"],
-                    "chapters": story["chapters"],
-                },
-            )
-            assert renamed.status_code == 200
-
-            os.makedirs(layout.stories_dir(downloads), exist_ok=True)
-            with open(layout.story_movie(downloads, story["id"]), "wb") as target:
-                target.write(b"rendered")
-
-            def fake_render(conn, _download_dir, story_id):
-                return stories.record_render_success(
-                    conn, story_id, layout.story_relpath(story_id),
-                )
-
-            with patch("server.api.story_render.render_story", side_effect=fake_render):
-                rendered = client.post(f"/api/stories/{story['id']}/render")
-            assert rendered.status_code == 200, rendered.text
-            assert rendered.json()["rendered_url"].endswith(f"/{story['id']}.mp4")
-            assert client.get(rendered.json()["rendered_url"]).content == b"rendered"
-
-            assert client.delete(f"/api/stories/{story['id']}").json() == {"ok": True}
-            assert client.get(f"/api/stories/{story['id']}").status_code == 404
-
 
 def test_feed_ids_rejects_paging_keys_like_mark_does():
     if TestClient is None:

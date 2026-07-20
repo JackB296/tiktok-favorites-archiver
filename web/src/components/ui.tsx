@@ -84,11 +84,12 @@ export function Dialog({ role = "dialog", labelledBy, describedBy, onClose, clos
   children: ReactNode;
 }) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   useDialogFocusTrap(overlayRef);
   useEffect(() => {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     initialFocusRef?.current?.focus();
-    // Initial focus happens once on mount, not on later re-renders.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => returnFocusRef.current?.focus();
   }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

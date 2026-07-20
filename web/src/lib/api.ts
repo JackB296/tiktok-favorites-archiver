@@ -1,4 +1,4 @@
-import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, ImportRecord, MemoryResponse, PlayRecord, Story, StoryInput, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats, LensStatus, LensTotals, LensSearchResponse, ItemCaptionsResponse, ItemAnnotation, CurateSession, VibeResponse, DuplicateReport, ArchiveChannel, ArchiveChannelItems } from "./types";
+import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, ImportRecord, MemoryResponse, PlayRecord, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats, LensStatus, LensTotals, LensSearchResponse, ItemCaptionsResponse, ItemAnnotation, CurateSession, VibeResponse, DuplicateReport, ArchiveChannel, ArchiveChannelItems } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
@@ -248,20 +248,6 @@ export const api = {
   importDetail: (id: number) => json<ImportRecord>(`/api/imports/${id}`),
   memories: (date?: string) => json<MemoryResponse>(`/api/memories${date ? `?date=${encodeURIComponent(date)}` : ""}`),
   recordPlayed: (id: number) => json<PlayRecord>(`/api/items/${id}/played`, { method: "POST" }),
-  stories: () => json<Story[]>("/api/stories"),
-  createStory: (story: StoryInput) => json<Story>("/api/stories", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(story),
-  }),
-  updateStory: (id: number, story: StoryInput) => json<Story>(`/api/stories/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(story),
-  }),
-  deleteStory: (id: number) => json<{ ok: boolean }>(`/api/stories/${id}`, { method: "DELETE" }),
-  renderStory: (id: number) => json<Story>(`/api/stories/${id}/render`, { method: "POST" }),
-
   storageLocations: () => json<StorageLocation[]>("/api/storage-locations"),
   createStorageLocation: (name: string, path: string) => json<StorageLocation>("/api/storage-locations", {
     method: "POST",
