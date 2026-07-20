@@ -6,8 +6,7 @@ import sqlite3
 import tempfile
 import shutil
 
-from core import store
-from core import layout
+from core import archive_filesystem, layout, store
 
 
 class StorageError(ValueError):
@@ -138,16 +137,11 @@ def delete_location(conn, location_id):
 
 def _safe_relative(download_dir, path):
     root = os.path.realpath(download_dir)
-    absolute = os.path.realpath(path if os.path.isabs(path) else os.path.join(root, path))
     try:
-        common = os.path.commonpath((root, absolute))
-    except ValueError as exc:
-        raise StorageError("media path is on a different filesystem root") from exc
-    if common != root:
-        raise StorageError("media path escapes the active download directory")
+        absolute = archive_filesystem.contained_path(root, path)
+    except archive_filesystem.ArchivePathError as exc:
+        raise StorageError(str(exc)) from exc
     relative = os.path.relpath(absolute, root).replace(os.sep, "/")
-    if relative == "." or relative.startswith("../") or "/../" in relative:
-        raise StorageError("media path is not a contained relative path")
     return relative, absolute
 
 
@@ -268,12 +262,13 @@ def _copy_verified(source, target, entry, copier):
     return True
 
 
-def copy_items(conn, download_dir, location_id, item_ids, *, control=None, copier=shutil.copyfile):
+def _copy_items(conn, download_dir, location_id, item_ids, *, control=None, copier=shutil.copyfile):
     location = store.get_storage_location(conn, location_id)
     if location is None:
         raise KeyError(location_id)
     validate_path(location["path"], download_dir, conn.execute("PRAGMA database_list").fetchone()["file"])
     report = {"items": 0, "files": 0, "bytes": 0, "skipped_files": 0}
+    completed_item_ids = []
     for item_id in item_ids:
         if control is not None and not control.should_continue():
             break
@@ -295,17 +290,25 @@ def copy_items(conn, download_dir, location_id, item_ids, *, control=None, copie
             files=manifest["files"],
         )
         report["items"] += 1
+        completed_item_ids.append(item_id)
         if control is not None:
             control.progress({"event": "transfer", "completed": report["items"], "total": len(item_ids), **report})
+    return report, completed_item_ids
+
+
+def copy_items(conn, download_dir, location_id, item_ids, *, control=None, copier=shutil.copyfile):
+    report, _completed_item_ids = _copy_items(
+        conn, download_dir, location_id, item_ids, control=control, copier=copier,
+    )
     return report
 
 
 def move_items(conn, download_dir, location_id, item_ids, *, control=None, copier=shutil.copyfile):
-    copied = copy_items(
+    copied, completed_item_ids = _copy_items(
         conn, download_dir, location_id, item_ids, control=control, copier=copier,
     )
     moved = 0
-    for item_id in item_ids[:copied["items"]]:
+    for item_id in completed_item_ids:
         placement = next(
             (row for row in store.media_placements(conn, item_id)
              if row["location_id"] == location_id and row["verified"]),

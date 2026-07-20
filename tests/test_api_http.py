@@ -3,7 +3,7 @@
 Exercises the routes end-to-end — status codes, the saved named-list trios,
 busy-guard 409s, sync control dispatch, and the /media path-traversal guard —
 with fake runners, so no requests/moviepy/ffmpeg are needed. Requires FastAPI
-and httpx (present in the Docker image); on a bare host this file SKIPS loudly
+and httpx2 (present in the Docker image); on a bare host this file SKIPS loudly
 but exits 0 so the stdlib-only suite stays green.
 """
 import os
@@ -29,6 +29,10 @@ def _skip():
     return True
 
 
+def _client(app):
+    return TestClient(app, headers={"X-Archive-Request": "1"})
+
+
 def _build(tmp, runners=None):
     from core import store
     from server.jobs import JobManager
@@ -39,8 +43,40 @@ def _build(tmp, runners=None):
     os.makedirs(downloads, exist_ok=True)
     store.init_db(store.connect(db_path)).close()
     jobs = JobManager(db_path, downloads, runners=runners or {"sync": lambda *a, **k: None})
-    app = create_app(db_path=db_path, download_dir=downloads, jobs=jobs)
+    app = create_app(
+        db_path=db_path,
+        download_dir=downloads,
+        jobs=jobs,
+        allowed_hosts={"testserver"},
+    )
     return app, jobs, db_path, downloads
+
+
+def test_mutating_routes_require_browser_intent():
+    if TestClient is None:
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, _db, _dl = _build(tmp)
+        with TestClient(app) as client:
+            assert client.get(
+                "/api/status",
+                headers={"Host": "evil.example"},
+            ).status_code == 403
+            assert client.post("/api/sync/unknown").status_code == 403
+            assert client.post(
+                "/api/sync/unknown",
+                headers={"Origin": "https://evil.example"},
+            ).status_code == 403
+            same_origin = client.post(
+                "/api/sync/unknown",
+                headers={"Origin": "http://testserver"},
+            )
+            assert same_origin.status_code == 400
+            marked = client.post(
+                "/api/sync/unknown",
+                headers={"X-Archive-Request": "1"},
+            )
+            assert marked.status_code == 400
 
 
 def test_health_and_status_routes():
@@ -48,7 +84,7 @@ def test_health_and_status_routes():
         return
     with tempfile.TemporaryDirectory() as tmp:
         app, jobs, _db, _dl = _build(tmp)
-        with TestClient(app) as client:
+        with _client(app) as client:
             body = client.get("/api/status").json()
             assert body["state"] == "idle" and body["running"] is False
             assert client.get("/api/run-history").json() == []
@@ -69,7 +105,7 @@ def test_saved_list_trios_roundtrip_for_all_four_collections():
     ]
     with tempfile.TemporaryDirectory() as tmp:
         app, _jobs, _db, _dl = _build(tmp)
-        with TestClient(app) as client:
+        with _client(app) as client:
             for resource, payload, field in cases:
                 created = client.post(f"/api/{resource}", json=payload)
                 assert created.status_code == 200, (resource, created.text)
@@ -100,7 +136,7 @@ def test_items_page_and_mark_and_requeue():
         store.insert_item(conn, 2, "https://tiktok.com/b", status="done")
         conn.close()
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             page = client.get("/api/items/page", params={"status": "failed"}).json()
             assert [item["id"] for item in page["items"]] == [1]
 
@@ -135,7 +171,7 @@ def test_mutating_routes_refuse_while_a_run_is_active():
         store.insert_item(conn, 1, "https://tiktok.com/a", status="failed")
         conn.close()
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             assert client.post("/api/sync/start").json()["started"] is True
             assert started.wait(3)
             try:
@@ -163,7 +199,7 @@ def test_sync_control_dispatch_and_stop_precedence():
 
     with tempfile.TemporaryDirectory() as tmp:
         app, jobs, _db, _dl = _build(tmp, runners={"sync": blocking_runner})
-        with TestClient(app) as client:
+        with _client(app) as client:
             assert client.post("/api/sync/unknown").status_code == 400
 
             assert client.post("/api/sync/start").json()["started"] is True
@@ -190,12 +226,20 @@ def test_media_route_blocks_path_traversal_and_serves_files():
         secret = os.path.join(tmp, "secret.txt")
         with open(secret, "w") as f:
             f.write("keep out")
+        os.symlink(secret, os.path.join(downloads, "linked.txt"))
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             ok = client.get("/media/1.mp4")
             assert ok.status_code == 200 and ok.content == b"movie-bytes"
+            ranged = client.get("/media/1.mp4", headers={"Range": "bytes=1-4"})
+            assert ranged.status_code == 206
+            assert ranged.content == b"ovie"
+            assert ranged.headers["content-range"] == "bytes 1-4/11"
 
             assert client.get("/media/missing.mp4").status_code == 404
+            linked = client.get("/media/linked.txt")
+            assert linked.status_code == 403
+            assert linked.content != b"keep out"
             # Traversal out of the download dir must 403/404, never 200.
             # (A raw "/media/../secret.txt" is normalized by the CLIENT before
             # it is sent, so only percent-encoded probes exercise the guard.)
@@ -221,7 +265,7 @@ def test_media_route_never_serves_internal_archive_areas():
         with open(os.path.join(downloads, ".archive", "thumbnails", "1.webp"), "wb") as f:
             f.write(b"thumb")
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             assert client.get("/media/.archive/uploads/staged.upload").status_code == 403
             assert client.get("/media/.archive/replaced/1.mp4").status_code == 403
             ok = client.get("/media/.archive/thumbnails/1.webp")
@@ -252,7 +296,7 @@ def test_local_lens_import_status_and_search_routes():
             }]}],
         }
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             imported = client.post(
                 "/api/lens/import",
                 files={"file": ("analysis.json", json.dumps(document), "application/json")},
@@ -315,7 +359,7 @@ def test_local_analysis_is_default_pipeline_work_and_startable_in_app():
         app, jobs, _db, _downloads = _build(
             tmp, runners={"analyze": analyze_runner},
         )
-        with TestClient(app) as client:
+        with _client(app) as client:
             catalog = client.get("/api/run-catalog").json()
             analyze = next(entry for entry in catalog if entry["kind"] == "analyze")
             assert analyze["label"] == "Local analysis"
@@ -345,7 +389,7 @@ def test_archive_intelligence_history_memory_and_story_routes():
                 {"Link": "https://tiktok.com/2", "Date": "2023-07-01 10:00:00"},
             ]}},
         }
-        with TestClient(app) as client:
+        with _client(app) as client:
             imported = client.post(
                 "/api/import",
                 files={"file": ("user_data_tiktok.json", json.dumps(export_body), "application/json")},
@@ -419,7 +463,7 @@ def test_feed_ids_rejects_paging_keys_like_mark_does():
         return
     with tempfile.TemporaryDirectory() as tmp:
         app, _jobs, _db, _dl = _build(tmp)
-        with TestClient(app) as client:
+        with _client(app) as client:
             assert client.get("/api/feed/ids").json() == []
             for key, value in (("limit", "5"), ("cursor", "3"), ("feed", "true")):
                 response = client.get("/api/feed/ids", params={key: value})
@@ -431,7 +475,7 @@ def test_malformed_json_bodies_are_400_not_500():
         return
     with tempfile.TemporaryDirectory() as tmp:
         app, _jobs, _db, _dl = _build(tmp)
-        with TestClient(app) as client:
+        with _client(app) as client:
             for path in ("/api/items/mark", "/api/items/requeue", "/api/items/selection",
                          "/api/gallery-presets"):
                 response = client.post(path, content=b"{not json", headers={"Content-Type": "application/json"})
@@ -443,7 +487,7 @@ def test_library_settings_rejects_a_non_object_body():
         return
     with tempfile.TemporaryDirectory() as tmp:
         app, _jobs, _db, _dl = _build(tmp)
-        with TestClient(app) as client:
+        with _client(app) as client:
             response = client.put("/api/library-settings", json=[1, 2])  # was a 500
             assert response.status_code == 400
             assert client.get("/api/library-stats").status_code == 200
@@ -454,7 +498,7 @@ def test_invalid_utf8_body_is_400_not_500():
         return
     with tempfile.TemporaryDirectory() as tmp:
         app, _jobs, _db, _dl = _build(tmp)
-        with TestClient(app) as client:
+        with _client(app) as client:
             response = client.post("/api/items/mark", content=b'\xff\xfe{"a": 1}',
                                    headers={"Content-Type": "application/json"})
             assert response.status_code == 400  # UnicodeDecodeError path
@@ -474,7 +518,7 @@ def test_items_selection_projects_in_request_order():
         with open(os.path.join(downloads, "2.mp4"), "wb") as f:
             f.write(b"m")
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             got = client.post("/api/items/selection", json={"ids": [3, 1, 2, 999]}).json()
             assert [item["id"] for item in got] == [3, 1, 2]  # order kept, missing dropped
             by_id = {item["id"]: item for item in got}
@@ -494,7 +538,7 @@ def test_manual_song_attach_validates_field_types():
         store.insert_item(conn, 1, "https://tiktok.com/a", status="done")
         conn.close()
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             ok = client.post("/api/items/1/song", json={"title": "Track", "artist": "Artist"})
             assert ok.status_code == 200
             assert ok.json()["song"]["title"] == "Track"
@@ -521,7 +565,7 @@ def test_storage_location_crud_health_and_conflicts():
 
     with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as mounted:
         app, _jobs, db_path, _dl = _build(tmp)
-        with TestClient(app) as client:
+        with _client(app) as client:
             created = client.post(
                 "/api/storage-locations", json={"name": "NAS", "path": mounted},
             )
@@ -573,7 +617,7 @@ def test_storage_transfer_preview_rejects_stale_plan_and_runs_copy():
         with open(movie, "wb") as target:
             target.write(b"first")
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             first = client.post("/api/storage-transfers/preview", json={
                 "action": "copy", "location_id": location["id"], "ids": [1],
             })
@@ -618,7 +662,7 @@ def test_snapshot_create_list_validate_and_metadata_download():
         store.insert_item(conn, 1, "https://tiktok.com/1")
         conn.close()
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             started = client.post("/api/snapshots", json={
                 "location_id": location["id"], "name": "portable", "mode": "metadata",
             })
@@ -652,7 +696,7 @@ def test_import_upload_end_to_end():
 
     with tempfile.TemporaryDirectory() as tmp:
         app, _jobs, _db, _dl = _build(tmp)
-        with TestClient(app) as client:
+        with _client(app) as client:
             ok = _import_response(client, valid)
             assert ok.status_code == 200, ok.text
             assert ok.json()["favorites"] == 2
@@ -671,7 +715,7 @@ def test_spotify_routes_cover_status_connect_and_guards():
 
     with tempfile.TemporaryDirectory() as tmp:
         app, _jobs, _db, _dl = _build(tmp)
-        with TestClient(app) as client:
+        with _client(app) as client:
             status = client.get("/api/spotify/status").json()
             assert status["connected"] is False
             assert status["redirect_uri"].endswith("/api/spotify/callback")
@@ -717,7 +761,7 @@ def test_verify_and_library_stats_routes():
         store.insert_item(conn, 1, "https://tiktok.com/a", status="done")  # file missing
         conn.close()
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             report = client.get("/api/verify").json()
             assert report["ok"] is False
             assert report["missing"]["count"] == 1
@@ -738,7 +782,7 @@ def test_stats_route_returns_the_aggregate_payload():
                           favorited_at="2023-05-01 10:00:00", kind="video", status="done")
         conn.close()
 
-        with TestClient(app) as client:
+        with _client(app) as client:
             payload = client.get("/api/stats").json()
             assert payload["hero"]["total"] == 1
             assert payload["growth"]["monthly"] == [{"month": "2023-05", "count": 1}]
@@ -761,7 +805,7 @@ def test_smart_collections_pipeline_schedules_and_discovery_routes():
             store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
             store.set_metadata(conn, item_id, caption, author)
         conn.close()
-        with TestClient(app) as client:
+        with _client(app) as client:
             created = client.post(
                 "/api/gallery-presets",
                 json={"name": "Cats", "filters": {"search": "cats", "order": "archive"}},

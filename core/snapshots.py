@@ -9,7 +9,7 @@ import tempfile
 import uuid
 from datetime import datetime
 
-from core import layout, migrations, storage, store
+from core import archive_filesystem, layout, migrations, storage, store
 
 
 FORMAT = "tiktok-favorites-archive"
@@ -28,14 +28,58 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def _entry(root, relative):
-    relative = relative.replace(os.sep, "/")
-    if relative.startswith("/") or ".." in relative.split("/"):
+def _manifest_relative(relative):
+    if not isinstance(relative, str):
         raise SnapshotError("snapshot manifest contains an unsafe path")
-    path = os.path.realpath(os.path.join(root, *relative.split("/")))
-    if os.path.commonpath((os.path.realpath(root), path)) != os.path.realpath(root):
-        raise SnapshotError("snapshot manifest path escapes its directory")
-    return path
+    relative = relative.replace(os.sep, "/")
+    parts = relative.split("/")
+    if not relative or os.path.isabs(relative) \
+            or any(part in ("", ".", "..") for part in parts):
+        raise SnapshotError("snapshot manifest contains an unsafe path")
+    return relative
+
+
+def _entry(root, relative):
+    relative = _manifest_relative(relative)
+    try:
+        return archive_filesystem.contained_path(root, os.path.join(*relative.split("/")))
+    except archive_filesystem.ArchivePathError as exc:
+        raise SnapshotError("snapshot manifest path escapes its directory") from exc
+
+
+def _read_metadata(path, allow_partial_suffix=False):
+    if not path.endswith(".tiktok-archive") and not allow_partial_suffix:
+        raise SnapshotError("snapshot directory must end in .tiktok-archive")
+    metadata_path = os.path.join(path, "snapshot.json")
+    try:
+        with open(metadata_path, encoding="utf-8") as source:
+            metadata = json.load(source)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SnapshotError(f"snapshot metadata is unreadable: {exc}") from exc
+    if not isinstance(metadata, dict) \
+            or metadata.get("format") != FORMAT or metadata.get("version") != VERSION:
+        raise SnapshotError("snapshot format or version is incompatible")
+    if metadata.get("mode") not in ("metadata", "complete") \
+            or not isinstance(metadata.get("files"), list):
+        raise SnapshotError("snapshot metadata is malformed")
+    snapshot_schema = metadata.get("schema_version")
+    if type(snapshot_schema) is not int or not 0 <= snapshot_schema <= migrations.CURRENT_SCHEMA_VERSION:
+        raise SnapshotError("snapshot database schema is incompatible")
+    seen = set()
+    for entry in metadata["files"]:
+        if not isinstance(entry, dict) or set(entry) != {"path", "size", "sha256"}:
+            raise SnapshotError("snapshot manifest entry is malformed")
+        relative = _manifest_relative(entry["path"])
+        if type(entry["size"]) is not int or entry["size"] < 0 \
+                or not isinstance(entry["sha256"], str) \
+                or re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]) is None:
+            raise SnapshotError("snapshot manifest entry is malformed")
+        if relative in seen:
+            raise SnapshotError("snapshot manifest contains duplicate paths")
+        seen.add(relative)
+    if "database/archive.db" not in seen:
+        raise SnapshotError("snapshot manifest does not contain the Archive database")
+    return metadata, seen
 
 
 def _copy_verified(source, target):
@@ -149,34 +193,13 @@ def create_snapshot(conn, db_path, download_dir, destination_dir, name, mode="me
 
 
 def validate_snapshot(path, allow_partial_suffix=False):
-    if not path.endswith(".tiktok-archive") and not allow_partial_suffix:
-        raise SnapshotError("snapshot directory must end in .tiktok-archive")
-    metadata_path = os.path.join(path, "snapshot.json")
-    try:
-        with open(metadata_path, encoding="utf-8") as source:
-            metadata = json.load(source)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SnapshotError(f"snapshot metadata is unreadable: {exc}") from exc
-    if metadata.get("format") != FORMAT or metadata.get("version") != VERSION:
-        raise SnapshotError("snapshot format or version is incompatible")
-    if metadata.get("mode") not in ("metadata", "complete") or not isinstance(metadata.get("files"), list):
-        raise SnapshotError("snapshot metadata is malformed")
+    metadata, seen = _read_metadata(path, allow_partial_suffix)
     snapshot_schema = metadata.get("schema_version")
-    if type(snapshot_schema) is not int or not 0 <= snapshot_schema <= migrations.CURRENT_SCHEMA_VERSION:
-        raise SnapshotError("snapshot database schema is incompatible")
-    seen = set()
     for entry in metadata["files"]:
-        if not isinstance(entry, dict) or set(entry) != {"path", "size", "sha256"}:
-            raise SnapshotError("snapshot manifest entry is malformed")
-        if entry["path"] in seen:
-            raise SnapshotError("snapshot manifest contains duplicate paths")
-        seen.add(entry["path"])
         file_path = _entry(path, entry["path"])
         if not os.path.isfile(file_path) or os.path.getsize(file_path) != entry["size"] \
                 or _sha256(file_path) != entry["sha256"]:
             raise SnapshotError(f"snapshot file is missing or corrupt: {entry['path']}")
-    if "database/archive.db" not in seen:
-        raise SnapshotError("snapshot manifest does not contain the Archive database")
     actual = set()
     for root, _directories, files in os.walk(path):
         for filename in files:
@@ -209,7 +232,7 @@ def list_snapshots(destination_dir):
         path = os.path.join(destination_dir, name)
         if name.endswith(".tiktok-archive") and os.path.isdir(path):
             try:
-                metadata = validate_snapshot(path)
+                metadata, _ = _read_metadata(path)
                 result.append({"name": name, "path": path, "state": "complete", **metadata})
             except SnapshotError as exc:
                 result.append({"name": name, "path": path, "state": "invalid", "error": str(exc)})

@@ -1,7 +1,7 @@
 """FastAPI application factory.
 
-Serves the JSON API (``/api``), media files (``/media`` — range-capable via
-``FileResponse``), and the built frontend (``web/dist``) if present. Run with:
+Serves the JSON API (``/api``), securely streamed range-capable media files
+(``/media``), and the built frontend (``web/dist``) if present. Run with:
 ``uvicorn --factory server.main:create_app``.
 
 No app is built at import time — importing this module must stay side-effect
@@ -9,15 +9,17 @@ free so tests can construct apps against their own temp databases. Run with
 exactly one worker: the in-process JobManager is the single-run guard, so
 ``--workers >1`` would allow concurrent Archive runs.
 """
+import mimetypes
 import os
+from email.utils import formatdate
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core import config, layout, scheduler, store
-from server import spa
+from core import archive_filesystem, config, scheduler, store
+from server import media_range, request_security, spa
 from server.api import router
 from server.jobs import JobManager
 
@@ -37,10 +39,26 @@ class SPAStaticFiles(StaticFiles):
         return response
 
 
-def create_app(db_path=None, download_dir=None, jobs=None):
+def _file_chunks(opened, start, length):
+    """Stream an already-securely-opened descriptor and always release it."""
+    try:
+        opened.seek(start)
+        remaining = length
+        while remaining:
+            chunk = opened.read(min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+    finally:
+        opened.close()
+
+
+def create_app(db_path=None, download_dir=None, jobs=None, allowed_hosts=None):
     """Build the app. ``jobs`` is injectable — tests supply a JobManager with
     fake runners so the whole HTTP surface is exercisable without moviepy or
-    requests; production uses the real one."""
+    requests; production uses the real one. Production accepts only loopback
+    Host names; ``allowed_hosts`` lets tests provide their synthetic Host."""
     db_path = db_path or config.DB_FILE
     download_dir = os.path.abspath(download_dir or config.DOWNLOAD_DIR)
     os.makedirs(download_dir, exist_ok=True)
@@ -51,6 +69,21 @@ def create_app(db_path=None, download_dir=None, jobs=None):
     app.state.download_dir = download_dir
     app.state.jobs = jobs if jobs is not None else JobManager(db_path, download_dir)
     app.state.scheduler = scheduler.Scheduler(db_path, app.state.jobs)
+    request_policy = request_security.LocalRequestPolicy(
+        request_security.DEFAULT_ALLOWED_HOSTS if allowed_hosts is None else allowed_hosts,
+    )
+
+    @app.middleware("http")
+    async def protect_local_app(request, call_next):
+        if not request_policy.allows(
+            request.method,
+            request.url.scheme,
+            request.headers.get("host"),
+            request.headers.get("origin"),
+            request.headers.get(request_security.REQUEST_HEADER),
+        ):
+            return JSONResponse(status_code=403, content={"detail": "forbidden request source"})
+        return await call_next(request)
 
     @app.on_event("startup")
     def start_scheduler():
@@ -63,16 +96,42 @@ def create_app(db_path=None, download_dir=None, jobs=None):
     app.include_router(router)
 
     @app.get("/media/{path:path}")
-    def media(path: str):
-        base = app.state.download_dir
-        full = os.path.normpath(os.path.join(base, path))
-        if full != base and not full.startswith(base + os.sep):  # path-traversal guard
+    def media(path: str, request: Request):
+        try:
+            opened = archive_filesystem.open_public_media(app.state.download_dir, path)
+        except archive_filesystem.ArchivePathError:
             raise HTTPException(status_code=403, detail="forbidden")
-        if layout.is_private_relpath(os.path.relpath(full, base)):  # staged uploads, backups
-            raise HTTPException(status_code=403, detail="forbidden")
-        if not os.path.isfile(full):
+        except FileNotFoundError:
             raise HTTPException(status_code=404, detail="not found")
-        return FileResponse(full)  # FileResponse honors Range requests
+
+        file_stat = os.fstat(opened.fileno())
+        try:
+            selected = media_range.parse_byte_range(
+                request.headers.get("range"), file_stat.st_size,
+            )
+        except media_range.RangeNotSatisfiable:
+            opened.close()
+            return Response(
+                status_code=416,
+                headers={"Accept-Ranges": "bytes", "Content-Range": f"bytes */{file_stat.st_size}"},
+            )
+        start, end = selected or (0, file_stat.st_size - 1)
+        length = max(0, end - start + 1)
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(length),
+            "Last-Modified": formatdate(file_stat.st_mtime, usegmt=True),
+        }
+        status_code = 200
+        if selected is not None:
+            status_code = 206
+            headers["Content-Range"] = f"bytes {start}-{end}/{file_stat.st_size}"
+        return StreamingResponse(
+            _file_chunks(opened, start, length),
+            status_code=status_code,
+            media_type=mimetypes.guess_type(path)[0] or "application/octet-stream",
+            headers=headers,
+        )
 
     # Serve the built SPA at "/" if it has been built (mounted last so /api and
     # /media take precedence). Client routes such as /gallery fall back to the

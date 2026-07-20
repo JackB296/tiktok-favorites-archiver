@@ -221,6 +221,63 @@ def test_failed_copy_publishes_no_verified_placement_and_never_deletes_local():
         assert store.get_item(conn, 1)["offloaded"] == 0
 
 
+def test_move_deletes_the_exact_items_that_copy_completed():
+    with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as mounted:
+        conn, downloads, db_path = _archive(root)
+        location = storage.create_location(conn, "NAS", mounted, downloads, db_path)
+        store.insert_item(conn, 1, "https://tiktok.com/1", status="done")
+        local = os.path.join(downloads, "1.mp4")
+        with open(local, "wb") as target:
+            target.write(b"movie")
+
+        moved = storage.move_items(conn, downloads, location["id"], [999, 1])
+
+        assert moved["items"] == 1
+        assert moved["moved"] == 1
+        assert not os.path.exists(local)
+        assert store.get_item(conn, 1)["offloaded"] == 1
+        assert open(
+            os.path.join(mounted, "items", "1", "1.mp4"), "rb",
+        ).read() == b"movie"
+
+
+class _StopAfterOneItem:
+    def __init__(self):
+        self.checks = 0
+
+    def should_continue(self):
+        self.checks += 1
+        return self.checks == 1
+
+    def progress(self, _event):
+        pass
+
+
+def test_stopped_move_deletes_only_completed_items_and_can_resume():
+    with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as mounted:
+        conn, downloads, db_path = _archive(root)
+        location = storage.create_location(conn, "NAS", mounted, downloads, db_path)
+        for item_id in (1, 2):
+            store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
+            with open(os.path.join(downloads, f"{item_id}.mp4"), "wb") as target:
+                target.write(f"movie-{item_id}".encode())
+
+        stopped = storage.move_items(
+            conn, downloads, location["id"], [1, 2], control=_StopAfterOneItem(),
+        )
+
+        assert stopped["moved"] == 1
+        assert not os.path.exists(os.path.join(downloads, "1.mp4"))
+        assert os.path.isfile(os.path.join(downloads, "2.mp4"))
+        assert store.get_item(conn, 1)["offloaded"] == 1
+        assert store.get_item(conn, 2)["offloaded"] == 0
+
+        resumed = storage.move_items(conn, downloads, location["id"], [2])
+        assert resumed["moved"] == 1
+        assert not os.path.exists(os.path.join(downloads, "2.mp4"))
+        assert store.get_item(conn, 2)["offloaded"] == 1
+
+
 def test_legacy_offloaded_rows_cannot_claim_a_verified_restore():
     with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as mounted:
         conn, downloads, db_path = _archive(root)

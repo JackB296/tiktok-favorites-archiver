@@ -1,19 +1,20 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, NavLink, Link } from "react-router-dom";
 import { FilmReel, SquaresFour, MusicNotes, ChartBar, DownloadSimple, HardDrives, Archive, Sun, Moon, BookmarkSimple, Compass, MagnifyingGlass, ClockCounterClockwise, Sparkle, Scissors } from "@phosphor-icons/react";
-import { Viewer } from "./routes/Viewer";
-import { Gallery } from "./routes/Gallery";
-import { Music } from "./routes/Music";
-import { Stats } from "./routes/Stats";
-import { Dashboard } from "./routes/Dashboard";
-import { Storage } from "./routes/Storage";
-import { Backups } from "./routes/Backups";
-import { Discover } from "./routes/Discover";
-import { Lens } from "./routes/Lens";
-import { History } from "./routes/History";
-import { Memories } from "./routes/Memories";
-import { Stories } from "./routes/Stories";
 import { cx } from "./components/ui";
+
+const Viewer = lazy(() => import("./routes/Viewer").then((module) => ({ default: module.Viewer })));
+const Gallery = lazy(() => import("./routes/Gallery").then((module) => ({ default: module.Gallery })));
+const Music = lazy(() => import("./routes/Music").then((module) => ({ default: module.Music })));
+const Stats = lazy(() => import("./routes/Stats").then((module) => ({ default: module.Stats })));
+const Dashboard = lazy(() => import("./routes/Dashboard").then((module) => ({ default: module.Dashboard })));
+const Storage = lazy(() => import("./routes/Storage").then((module) => ({ default: module.Storage })));
+const Backups = lazy(() => import("./routes/Backups").then((module) => ({ default: module.Backups })));
+const Discover = lazy(() => import("./routes/Discover").then((module) => ({ default: module.Discover })));
+const Lens = lazy(() => import("./routes/Lens").then((module) => ({ default: module.Lens })));
+const History = lazy(() => import("./routes/History").then((module) => ({ default: module.History })));
+const Memories = lazy(() => import("./routes/Memories").then((module) => ({ default: module.Memories })));
+const Stories = lazy(() => import("./routes/Stories").then((module) => ({ default: module.Stories })));
 
 const TABS = [
   { to: "/", label: "Feed", icon: FilmReel, end: true },
@@ -29,6 +30,14 @@ const TABS = [
   { to: "/backups", label: "Backups", icon: Archive, end: false },
   { to: "/sync", label: "Sync", icon: DownloadSimple, end: false },
 ];
+
+function RouteFallback() {
+  return (
+    <div className="h-full bg-canvas" role="status" aria-live="polite" aria-label="Loading page">
+      <span className="sr-only">Loading page…</span>
+    </div>
+  );
+}
 
 export function App() {
   const [theme, setTheme] = useState<string>(() => localStorage.getItem("theme") ?? "dark");
@@ -74,20 +83,22 @@ export function App() {
         </header>
 
         <main className="min-h-0 flex-1">
-          <Routes>
-            <Route path="/" element={<Viewer />} />
-            <Route path="/gallery" element={<Gallery />} />
-            <Route path="/music" element={<Music />} />
-            <Route path="/stats" element={<Stats />} />
-            <Route path="/discover" element={<Discover />} />
-            <Route path="/lens" element={<Lens />} />
-            <Route path="/history" element={<History />} />
-            <Route path="/memories" element={<Memories />} />
-            <Route path="/stories" element={<Stories />} />
-            <Route path="/storage" element={<Storage />} />
-            <Route path="/backups" element={<Backups />} />
-            <Route path="/sync" element={<Dashboard />} />
-          </Routes>
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/" element={<Viewer />} />
+              <Route path="/gallery" element={<Gallery />} />
+              <Route path="/music" element={<Music />} />
+              <Route path="/stats" element={<Stats />} />
+              <Route path="/discover" element={<Discover />} />
+              <Route path="/lens" element={<Lens />} />
+              <Route path="/history" element={<History />} />
+              <Route path="/memories" element={<Memories />} />
+              <Route path="/stories" element={<Stories />} />
+              <Route path="/storage" element={<Storage />} />
+              <Route path="/backups" element={<Backups />} />
+              <Route path="/sync" element={<Dashboard />} />
+            </Routes>
+          </Suspense>
         </main>
       </div>
     </BrowserRouter>

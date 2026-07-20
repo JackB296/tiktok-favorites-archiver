@@ -41,6 +41,35 @@ def test_metadata_and_complete_snapshot_layouts_round_trip():
         ]
 
 
+def test_snapshot_listing_does_not_hash_files_or_open_snapshot_databases():
+    with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as destination:
+        conn, db_path, downloads = _archive(root)
+        snapshots.create_snapshot(
+            conn, db_path, downloads, destination, "catalog-only", "complete",
+        )
+        original_sha256 = snapshots._sha256
+        original_connect = snapshots.sqlite3.connect
+
+        def unexpected_hash(_path):
+            raise AssertionError("snapshot listing hashed an archived file")
+
+        def unexpected_database_open(*_args, **_kwargs):
+            raise AssertionError("snapshot listing opened an archived database")
+
+        snapshots._sha256 = unexpected_hash
+        snapshots.sqlite3.connect = unexpected_database_open
+        try:
+            listed = snapshots.list_snapshots(destination)
+        finally:
+            snapshots._sha256 = original_sha256
+            snapshots.sqlite3.connect = original_connect
+
+        assert len(listed) == 1
+        assert listed[0]["state"] == "complete"
+        assert listed[0]["mode"] == "complete"
+        assert listed[0]["items"] == 1
+
+
 def test_complete_snapshot_round_trips_rendered_story_media():
     with tempfile.TemporaryDirectory() as source_root, \
             tempfile.TemporaryDirectory() as snapshot_dir, \
