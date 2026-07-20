@@ -83,7 +83,7 @@ class JobManager:
 
     def _stage_has_work(self, conn, stage):
         """Whether a chained follow-up stage would do anything at all."""
-        return run_catalog.has_work(conn, stage)
+        return run_catalog.has_work(conn, stage, self.download_dir)
 
     def start(self, kind="sync", retry_of=None, **run_kwargs):
         # Non-blocking: while exclusive maintenance (e.g. a long import) holds

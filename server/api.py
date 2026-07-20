@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse, RedirectResponse, FileResponse
 from starlette.background import BackgroundTask
 
-from core import config, discovery, store, storage, snapshots, selection, run_catalog, scheduler, importer, import_history as archive_history, cobalt, curation, export, layout, verify, inventory, legacy_bootstrap, manual_media, media_index, songid, spotify, stats, lens, memory, stories, story_render
+from core import analysis, config, discovery, store, storage, snapshots, selection, run_catalog, scheduler, importer, import_history as archive_history, cobalt, curation, export, layout, verify, inventory, legacy_bootstrap, manual_media, media_index, songid, spotify, stats, lens, memory, stories, story_render
 from server import archive_items
 from server.archive_items import ArchiveItems
 from server.jobs import JobBusyError
@@ -635,7 +635,11 @@ def _remove_temp_files(paths):
 def lens_status(request: Request):
     conn = _open(request)
     try:
-        return lens.status(conn)
+        return {
+            **lens.status(conn),
+            "coverage": analysis.coverage(conn, _download_dir(request)),
+            "tools": analysis.tool_readiness(),
+        }
     finally:
         conn.close()
 

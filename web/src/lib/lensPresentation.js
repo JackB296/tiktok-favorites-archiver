@@ -45,6 +45,39 @@ export function readCaptionPreference(value) {
   return value === "true";
 }
 
+export function automaticAnalysisPhases(phases, enabled) {
+  const current = Array.isArray(phases) && phases.length
+    ? phases.filter((phase, index) => phase !== "analyze" && (phase !== "sync" || index === 0))
+    : ["sync"];
+  return enabled ? [...current, "analyze"] : current;
+}
+
+export function analysisCoverageLabel(coverage, eligible) {
+  const parts = [
+    `${coverage?.complete ?? 0} of ${eligible ?? 0} ready`,
+    `${coverage?.pending ?? 0} pending`,
+  ];
+  if (coverage?.failed) parts.push(`${coverage.failed} failed`);
+  return parts.join(" · ");
+}
+
+export function analysisProgressLabel(event) {
+  const parts = [
+    `Checked ${event?.completed ?? 0} of ${event?.total ?? 0}`,
+    `${event?.completed_sources ?? 0} sources completed`,
+  ];
+  if (event?.failed_sources) parts.push(`${event.failed_sources} failed`);
+  if (event?.skipped) parts.push(`${event.skipped} skipped`);
+  parts.push(`${event?.segments ?? 0} segments`);
+  return parts.join(" · ");
+}
+
+export function analysisCompletionMessage(current, event) {
+  return event?.event === "complete" && event?.kind === "analyze"
+    ? null
+    : current;
+}
+
 export function activeTranscriptCaption(segments, currentTime) {
   if (!Array.isArray(segments) || !segments.length
       || !Number.isFinite(currentTime) || currentTime < 0) {

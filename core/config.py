@@ -39,6 +39,20 @@ APP_PORT = int(os.environ.get("APP_PORT", "8080"))             # web server port
 SONG_ID_RATE_MAX_CALLS = int(os.environ.get("SONG_ID_RATE_MAX_CALLS", "1"))  # 1 recognition...
 SONG_ID_RATE_PERIOD = float(os.environ.get("SONG_ID_RATE_PERIOD", "2.0"))    # ...per 2 seconds
 
+# Fully local Local Lens analysis. The official Docker image provides these
+# binaries and model; paths remain overridable for bare-metal development.
+WHISPER_CPP_BIN = os.environ.get("WHISPER_CPP_BIN", "whisper-cli")
+WHISPER_MODEL = os.environ.get(
+    "WHISPER_MODEL", "/opt/whisper/models/ggml-base.bin",
+)
+TESSERACT_BIN = os.environ.get("TESSERACT_BIN", "tesseract")
+ANALYSIS_TIMEOUT = int(os.environ.get("ANALYSIS_TIMEOUT", "900"))
+ANALYSIS_MAX_OUTPUT_BYTES = int(
+    os.environ.get("ANALYSIS_MAX_OUTPUT_BYTES", str(8 * 1024 * 1024))
+)
+OCR_INTERVAL_SECONDS = float(os.environ.get("OCR_INTERVAL_SECONDS", "2.0"))
+OCR_MAX_FRAMES = int(os.environ.get("OCR_MAX_FRAMES", "600"))
+
 
 def setup_logging():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

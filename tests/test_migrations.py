@@ -138,6 +138,62 @@ def test_analysis_search_index_tracks_segment_changes():
     ).fetchone() is None
 
 
+def test_existing_analysis_segments_upgrade_as_manual_source_state():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://www.tiktok.com/@cook/video/1")
+    conn.execute("DROP TABLE IF EXISTS analysis_source_state")
+    conn.execute(
+        "INSERT INTO analysis_segment "
+        "(item_id, source, text, start_s, end_s, created_at) "
+        "VALUES (1, 'transcript', 'keep this imported text', 4, 7, '2026-01-01')"
+    )
+    conn.commit()
+
+    store.init_db(conn)
+
+    state = conn.execute(
+        "SELECT * FROM analysis_source_state "
+        "WHERE item_id = 1 AND source = 'transcript'"
+    ).fetchone()
+    assert state["origin"] == "manual"
+    assert state["status"] == "completed"
+    assert state["media_fingerprint"] is None
+    assert conn.execute(
+        "SELECT text FROM analysis_segment WHERE item_id = 1"
+    ).fetchone()["text"] == "keep this imported text"
+
+
+def test_existing_sync_pipeline_gains_analysis_once_and_respects_later_removal():
+    legacy = store.connect(":memory:")
+    legacy.executescript(LEGACY_SCHEMA + """
+        CREATE TABLE library_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            index_enabled INTEGER NOT NULL DEFAULT 1,
+            thumbnail_width INTEGER NOT NULL DEFAULT 480,
+            updated_at TEXT NOT NULL
+        );
+        INSERT INTO library_settings
+        (id, index_enabled, thumbnail_width, updated_at)
+        VALUES (1, 1, 480, '2026-01-01');
+        CREATE TABLE pipeline_setting (
+            kind TEXT PRIMARY KEY,
+            phases_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        INSERT INTO pipeline_setting(kind, phases_json, updated_at)
+        VALUES ('sync', '["sync","enrich","identify"]', '2026-01-01');
+    """)
+
+    store.init_db(legacy)
+    assert store.get_pipeline_settings(legacy)["phases"] == [
+        "sync", "enrich", "identify", "analyze",
+    ]
+
+    store.set_pipeline_settings(legacy, "sync", ["sync", "enrich"])
+    store.init_db(legacy)
+    assert store.get_pipeline_settings(legacy)["phases"] == ["sync", "enrich"]
+
+
 if __name__ == "__main__":
     import traceback
 

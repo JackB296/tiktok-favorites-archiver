@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   activeTranscriptCaption,
+  analysisCompletionMessage,
+  analysisCoverageLabel,
+  analysisProgressLabel,
+  automaticAnalysisPhases,
   lensSnippetParts,
   lensSourceLabel,
   mediaStartRequest,
@@ -43,6 +47,43 @@ assert.equal(mediaStartRequest("/media/1.mp4", null, 30), null);
 assert.equal(readCaptionPreference(null), false);
 assert.equal(readCaptionPreference("false"), false);
 assert.equal(readCaptionPreference("true"), true);
+assert.deepEqual(
+  automaticAnalysisPhases(["sync", "enrich", "identify"], true),
+  ["sync", "enrich", "identify", "analyze"],
+);
+assert.deepEqual(
+  automaticAnalysisPhases(["sync", "analyze", "enrich"], false),
+  ["sync", "enrich"],
+);
+assert.deepEqual(
+  automaticAnalysisPhases(["sync", "analyze"], true),
+  ["sync", "analyze"],
+);
+assert.equal(
+  analysisCoverageLabel({
+    complete: 8, manual: 2, generated: 6, pending: 2, failed: 1,
+  }, 10),
+  "8 of 10 ready · 2 pending · 1 failed",
+);
+assert.equal(
+  analysisProgressLabel({
+    completed: 4, total: 10, completed_sources: 7,
+    failed_sources: 1, segments: 42, skipped: 2,
+  }),
+  "Checked 4 of 10 · 7 sources completed · 1 failed · 2 skipped · 42 segments",
+);
+assert.equal(
+  analysisCompletionMessage("Stopping after the current local file…", {
+    event: "complete", kind: "analyze",
+  }),
+  null,
+);
+assert.equal(
+  analysisCompletionMessage("Automatic local analysis is off.", {
+    event: "complete", kind: "sync",
+  }),
+  "Automatic local analysis is off.",
+);
 
 const inferredCaptionSegments = [
   { id: 1, item_id: 1, source: "transcript", text: "First", start_s: 0, end_s: null },
@@ -68,14 +109,20 @@ const lensRoute = await readFile(
   new URL("../src/routes/Lens.tsx", import.meta.url),
   "utf8",
 );
+const importStart = lensRoute.indexOf("async function importAnalysis");
 const importAnalysis = lensRoute.slice(
-  lensRoute.indexOf("async function importAnalysis"),
-  lensRoute.indexOf("\n\n  return ("),
+  importStart,
+  lensRoute.indexOf("\n\n  return (", importStart),
 );
 assert.match(
   importAnalysis,
   /api\.lensStatus\(\)/,
   "Lens imports must refresh archive-wide status rather than displaying batch counts",
+);
+assert.match(
+  lensRoute,
+  /<summary[^>]*>Manual import<\/summary>/,
+  "Manual Lens import must stay available inside a closed details disclosure",
 );
 
 console.log("PASS lens presentation behavior");

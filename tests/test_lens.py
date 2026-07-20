@@ -84,6 +84,78 @@ def test_reimport_replaces_only_the_included_items():
     assert lens.search_segments(conn, "keep")[0]["item_id"] == 2
 
 
+def test_manual_import_marks_present_sources_authoritative_and_omitted_sources_missing():
+    conn = _archive()
+    lens.replace_generated_source(
+        conn,
+        1,
+        "ocr",
+        [{"source": "ocr", "text": "generated sign", "start_s": 1, "end_s": 3}],
+        "100:1",
+    )
+
+    lens.import_document(conn, {"items": [
+        {"item_id": 1, "segments": [
+            {"source": "transcript", "text": "manual words", "start_s": 2},
+        ]},
+    ]})
+
+    transcript = lens.source_state(conn, 1, "transcript")
+    assert transcript["origin"] == "manual"
+    assert transcript["status"] == "completed"
+    assert lens.source_state(conn, 1, "ocr") is None
+    assert lens.source_needs_analysis(conn, 1, "transcript", "100:1") is False
+    assert lens.source_needs_analysis(conn, 1, "ocr", "100:1") is True
+    assert lens.search_segments(conn, "generated") == []
+    assert lens.search_segments(conn, "manual")[0]["source"] == "transcript"
+
+
+def test_generated_sources_are_fingerprint_aware_and_never_replace_manual_evidence():
+    conn = _archive()
+    assert lens.source_needs_analysis(conn, 1, "ocr", "100:1") is True
+
+    assert lens.replace_generated_source(
+        conn,
+        1,
+        "ocr",
+        [{"source": "ocr", "text": "first generated sign", "start_s": 1}],
+        "100:1",
+    ) is True
+    state = lens.source_state(conn, 1, "ocr")
+    assert state["origin"] == "generated"
+    assert state["status"] == "completed"
+    assert state["media_fingerprint"] == "100:1"
+    assert lens.source_needs_analysis(conn, 1, "ocr", "100:1") is False
+    assert lens.source_needs_analysis(conn, 1, "ocr", "101:2") is True
+
+    lens.import_document(conn, {"items": [
+        {"item_id": 1, "segments": [
+            {"source": "ocr", "text": "hand corrected sign", "start_s": 3},
+        ]},
+    ]})
+    assert lens.replace_generated_source(
+        conn,
+        1,
+        "ocr",
+        [{"source": "ocr", "text": "must not win", "start_s": 5}],
+        "101:2",
+    ) is False
+    assert lens.search_segments(conn, "corrected")[0]["start_s"] == 3
+    assert lens.search_segments(conn, "must") == []
+
+
+def test_successful_empty_generated_source_is_remembered():
+    conn = _archive()
+
+    assert lens.replace_generated_source(
+        conn, 1, "transcript", [], "100:1",
+    ) is True
+
+    assert lens.source_state(conn, 1, "transcript")["status"] == "completed"
+    assert lens.source_needs_analysis(conn, 1, "transcript", "100:1") is False
+    assert lens.caption_segments(conn, 1) == []
+
+
 def test_invalid_or_unknown_item_documents_are_atomic():
     conn = _archive()
     lens.import_document(conn, {"items": [

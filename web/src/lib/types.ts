@@ -100,9 +100,34 @@ export interface ItemPage {
   next_cursor: number | null;
 }
 
-export interface LensStatus {
+export interface LensTotals {
   items: number;
   segments: number;
+}
+
+export interface AnalysisSourceCoverage {
+  complete: number;
+  manual: number;
+  generated: number;
+  pending: number;
+  failed: number;
+}
+
+export interface AnalysisToolStatus {
+  available: boolean;
+  error: string | null;
+}
+
+export interface LensStatus extends LensTotals {
+  coverage: {
+    eligible: number;
+    transcript: AnalysisSourceCoverage;
+    ocr: AnalysisSourceCoverage;
+  };
+  tools: {
+    speech: AnalysisToolStatus;
+    ocr: AnalysisToolStatus;
+  };
 }
 
 export interface LensResult {
@@ -118,7 +143,7 @@ export interface LensResult {
   feed_url: string;
 }
 
-export interface LensSearchResponse extends LensStatus {
+export interface LensSearchResponse extends LensTotals {
   query: string;
   results: LensResult[];
 }
@@ -229,7 +254,7 @@ export interface ProgressEvent {
   item_kind?: Kind | "transient";
   phase?: string | null;
   has_assets?: number;
-  event?: "complete" | "error" | "indexing" | "sidecars" | "enrichment" | "identification" | "verify" | "backfill" | "transfer";
+  event?: "complete" | "error" | "indexing" | "sidecars" | "enrichment" | "identification" | "analysis" | "verify" | "backfill" | "transfer";
   error?: string;
   indexed?: number;
   failed?: number;
@@ -242,6 +267,10 @@ export interface ProgressEvent {
   errors?: number;
   recovered?: number;
   files?: number;
+  completed_sources?: number;
+  failed_sources?: number;
+  segments?: number;
+  skipped?: number;
   title?: string | null;
 }
 

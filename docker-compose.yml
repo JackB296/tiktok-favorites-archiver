@@ -40,6 +40,14 @@ services:
       # requests, so pace bulk identification over a large library gently.
       SONG_ID_RATE_MAX_CALLS: "1"
       SONG_ID_RATE_PERIOD: "6.0"
+      # Bundled CPU-only analyzers. These paths can be overridden for a custom
+      # image, but the official image needs no host tools or hosted service.
+      WHISPER_CPP_BIN: "/usr/local/bin/whisper-cli"
+      WHISPER_MODEL: "/opt/whisper/models/ggml-base.bin"
+      TESSERACT_BIN: "/usr/bin/tesseract"
+      ANALYSIS_TIMEOUT: "900"
+      OCR_INTERVAL_SECONDS: "2.0"
+      OCR_MAX_FRAMES: "600"
     ports:
       # Bound to localhost: the app has no authentication, so it should not be
       # reachable from the rest of the network. (Plex reads ./downloads from

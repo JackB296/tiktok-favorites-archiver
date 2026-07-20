@@ -22,7 +22,7 @@ import { nextScheduleLabel, scheduleRule } from "../lib/schedulePresentation";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "ignored", "expired"];
 
-type RunAction = "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "pause" | "continue" | "stop";
+type RunAction = "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop";
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -543,7 +543,7 @@ export function Dashboard() {
           <p className="mt-1 text-sm text-ink-dim">Runs inside this app. A missed run catches up once when the app is next open and idle.</p>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <label className="text-xs text-ink-dim">Name<input value={scheduleName} onChange={(event) => setScheduleName(event.target.value)} maxLength={80} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" /></label>
-            <label className="text-xs text-ink-dim">Run<select value={scheduleKind} onChange={(event) => setScheduleKind(event.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink">{runCatalog.filter((entry) => ["sync", "backfill", "index", "sidecars", "enrich", "identify"].includes(entry.kind)).map((entry) => <option key={entry.kind} value={entry.kind}>{entry.label}</option>)}</select></label>
+            <label className="text-xs text-ink-dim">Run<select value={scheduleKind} onChange={(event) => setScheduleKind(event.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink">{runCatalog.filter((entry) => ["sync", "backfill", "index", "sidecars", "enrich", "identify", "analyze"].includes(entry.kind)).map((entry) => <option key={entry.kind} value={entry.kind}>{entry.label}</option>)}</select></label>
             <label className="text-xs text-ink-dim">Cadence<select value={scheduleCadence} onChange={(event) => setScheduleCadence(event.target.value as "daily" | "weekly")} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
             {scheduleCadence === "weekly" && <label className="text-xs text-ink-dim">Weekday<select value={scheduleWeekday} onChange={(event) => setScheduleWeekday(Number(event.target.value))} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink">{["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day, index) => <option key={day} value={index}>{day}</option>)}</select></label>}
             <label className="text-xs text-ink-dim">Local time<input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" /></label>

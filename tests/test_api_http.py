@@ -259,7 +259,11 @@ def test_local_lens_import_status_and_search_routes():
             )
             assert imported.status_code == 200, imported.text
             assert imported.json() == {"items": 1, "segments": 1}
-            assert client.get("/api/lens/status").json() == {"items": 1, "segments": 1}
+            status = client.get("/api/lens/status").json()
+            assert status["items"] == 1
+            assert status["segments"] == 1
+            assert status["coverage"]["eligible"] == 0
+            assert set(status["tools"]) == {"speech", "ocr"}
 
             searched = client.get("/api/lens/search", params={"q": "crispy parmesan"})
             assert searched.status_code == 200, searched.text
@@ -293,7 +297,38 @@ def test_local_lens_import_status_and_search_routes():
                 files={"file": ("analysis.json", '{"items":"bad"}', "application/json")},
             )
             assert bad.status_code == 400
-            assert client.get("/api/lens/status").json() == {"items": 1, "segments": 1}
+            refreshed = client.get("/api/lens/status").json()
+            assert refreshed["items"] == 1 and refreshed["segments"] == 1
+
+
+def test_local_analysis_is_default_pipeline_work_and_startable_in_app():
+    if TestClient is None:
+        return
+    started = threading.Event()
+    release = threading.Event()
+
+    def analyze_runner(conn, download_dir, control=None):
+        started.set()
+        release.wait(3)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, jobs, _db, _downloads = _build(
+            tmp, runners={"analyze": analyze_runner},
+        )
+        with TestClient(app) as client:
+            catalog = client.get("/api/run-catalog").json()
+            analyze = next(entry for entry in catalog if entry["kind"] == "analyze")
+            assert analyze["label"] == "Local analysis"
+            assert analyze["resumable"] is True
+            assert client.get("/api/pipeline-settings").json()["phases"][-1] == "analyze"
+
+            assert client.post("/api/sync/analyze").json() == {"started": True}
+            assert started.wait(3)
+            try:
+                assert client.get("/api/status").json()["phase"] == "analyze"
+            finally:
+                release.set()
+                jobs._thread.join(3)
 
 
 def test_archive_intelligence_history_memory_and_story_routes():
@@ -336,7 +371,7 @@ def test_archive_intelligence_history_memory_and_story_routes():
 
             memories = client.get("/api/memories", params={"date": "2026-07-19"})
             assert memories.status_code == 200
-            assert memories.json()["sections"][0]["item_ids"] == [1]
+            assert memories.json()["sections"][0]["item_ids"] == [2]
             assert client.post("/api/items/1/played").json()["play_count"] == 1
             assert client.post("/api/items/999/played").status_code == 404
 
@@ -744,7 +779,9 @@ def test_smart_collections_pipeline_schedules_and_discovery_routes():
 
             catalog = client.get("/api/run-catalog").json()
             assert any(entry["kind"] == "discovery-backfill" for entry in catalog)
-            assert client.get("/api/pipeline-settings").json()["phases"] == ["sync", "enrich", "identify"]
+            assert client.get("/api/pipeline-settings").json()["phases"] == [
+                "sync", "enrich", "identify", "analyze",
+            ]
             changed = client.put(
                 "/api/pipeline-settings",
                 json={"phases": ["sync", "identify", "enrich"]},

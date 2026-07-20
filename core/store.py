@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS library_settings (
     thumbnail_width INTEGER NOT NULL DEFAULT 480,
     song_id_enabled INTEGER NOT NULL DEFAULT 0,   -- opt-in; sends audio to Shazam
     default_audio_name TEXT,                       -- custom slideshow fallback filename; NULL = bundled default.mp3
+    local_analysis_pipeline_migrated INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS gallery_preset (
@@ -232,6 +233,21 @@ CREATE TABLE IF NOT EXISTS analysis_segment (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_analysis_segment_item ON analysis_segment(item_id, start_s, id);
+CREATE TABLE IF NOT EXISTS analysis_source_state (
+    item_id INTEGER NOT NULL REFERENCES item(id) ON DELETE CASCADE,
+    source TEXT NOT NULL CHECK (source IN ('transcript', 'ocr')),
+    origin TEXT NOT NULL CHECK (origin IN ('manual', 'generated')),
+    status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+    media_fingerprint TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error TEXT,
+    attempted_at TEXT NOT NULL,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(item_id, source)
+);
+CREATE INDEX IF NOT EXISTS idx_analysis_source_status
+ON analysis_source_state(status, source, item_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS analysis_search USING fts5(
     text,
     content='analysis_segment',
@@ -388,6 +404,38 @@ def init_db(conn):
         conn.execute("ALTER TABLE library_settings ADD COLUMN song_id_enabled INTEGER NOT NULL DEFAULT 0")
     if "default_audio_name" not in settings_columns:
         conn.execute("ALTER TABLE library_settings ADD COLUMN default_audio_name TEXT")
+    if "local_analysis_pipeline_migrated" not in settings_columns:
+        conn.execute(
+            "ALTER TABLE library_settings ADD COLUMN "
+            "local_analysis_pipeline_migrated INTEGER NOT NULL DEFAULT 0"
+        )
+        row = conn.execute(
+            "SELECT phases_json FROM pipeline_setting WHERE kind = 'sync'"
+        ).fetchone()
+        if row is not None:
+            phases = json.loads(row["phases_json"])
+            if "analyze" not in phases:
+                phases.append("analyze")
+                conn.execute(
+                    "UPDATE pipeline_setting SET phases_json = ?, updated_at = ? "
+                    "WHERE kind = 'sync'",
+                    (json.dumps(phases, separators=(",", ":")), _now()),
+                )
+        conn.execute(
+            "UPDATE library_settings "
+            "SET local_analysis_pipeline_migrated = 1 WHERE id = 1"
+        )
+    # Analysis rows created before in-app generation existed came from the JSON
+    # importer. Register them as manual so a generated backfill can never
+    # overwrite them. INSERT OR IGNORE makes this safe on every startup.
+    conn.execute(
+        "INSERT OR IGNORE INTO analysis_source_state "
+        "(item_id, source, origin, status, media_fingerprint, attempts, "
+        "last_error, attempted_at, completed_at, updated_at) "
+        "SELECT item_id, source, 'manual', 'completed', NULL, 0, NULL, "
+        "MIN(created_at), MIN(created_at), MIN(created_at) "
+        "FROM analysis_segment GROUP BY item_id, source"
+    )
     # Additive migration: remember which Spotify playlist a push created, so a
     # re-push updates it instead of duplicating.
     playlist_columns = {row["name"] for row in conn.execute("PRAGMA table_info(song_playlist)")}
@@ -411,7 +459,13 @@ def init_db(conn):
     conn.execute(
         "INSERT OR IGNORE INTO pipeline_setting(kind, phases_json, updated_at) "
         "VALUES ('sync', ?, ?)",
-        (json.dumps(["sync", "enrich", "identify"], separators=(",", ":")), _now()),
+        (
+            json.dumps(
+                ["sync", "enrich", "identify", "analyze"],
+                separators=(",", ":"),
+            ),
+            _now(),
+        ),
     )
     migrations.install_registry(conn)
     from core import discovery

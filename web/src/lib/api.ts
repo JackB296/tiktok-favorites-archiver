@@ -1,4 +1,4 @@
-import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, ImportRecord, MemoryResponse, PlayRecord, Story, StoryInput, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats, LensStatus, LensSearchResponse, ItemCaptionsResponse } from "./types";
+import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, ImportRecord, MemoryResponse, PlayRecord, Story, StoryInput, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats, LensStatus, LensTotals, LensSearchResponse, ItemCaptionsResponse } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -46,7 +46,7 @@ export const api = {
   importLens: (file: File) => {
     const body = new FormData();
     body.append("file", file);
-    return json<LensStatus>("/api/lens/import", { method: "POST", body });
+    return json<LensTotals>("/api/lens/import", { method: "POST", body });
   },
   creators: (q = "", order = "frequency", cursor = 0) => json<DiscoveryPage>(`/api/creators?q=${encodeURIComponent(q)}&order=${encodeURIComponent(order)}&cursor=${cursor}`),
   hashtags: (q = "", order = "frequency", cursor = 0) => json<DiscoveryPage>(`/api/hashtags?q=${encodeURIComponent(q)}&order=${encodeURIComponent(order)}&cursor=${cursor}`),
@@ -291,7 +291,7 @@ export const api = {
     return json<LegacyBootstrapResult>("/api/import/legacy-apply", { method: "POST", body });
   },
 
-  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "pause" | "continue" | "stop") =>
+  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop") =>
     json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}`, { method: "POST" }),
 
   /** Subscribe to the SSE progress stream. Returns an unsubscribe fn. */

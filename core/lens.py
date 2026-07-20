@@ -101,6 +101,10 @@ def import_document(conn, document):
                 "DELETE FROM analysis_segment WHERE item_id = ?",
                 (item["item_id"],),
             )
+            conn.execute(
+                "DELETE FROM analysis_source_state WHERE item_id = ?",
+                (item["item_id"],),
+            )
             conn.executemany(
                 "INSERT INTO analysis_segment "
                 "(item_id, source, text, start_s, end_s, created_at) "
@@ -113,6 +117,17 @@ def import_document(conn, document):
                     for segment in item["segments"]
                 ],
             )
+            sources = sorted({segment["source"] for segment in item["segments"]})
+            conn.executemany(
+                "INSERT INTO analysis_source_state "
+                "(item_id, source, origin, status, media_fingerprint, attempts, "
+                "last_error, attempted_at, completed_at, updated_at) "
+                "VALUES (?, ?, 'manual', 'completed', NULL, 0, NULL, ?, ?, ?)",
+                [
+                    (item["item_id"], source, timestamp, timestamp, timestamp)
+                    for source in sources
+                ],
+            )
         conn.execute("RELEASE lens_import")
     except Exception:
         conn.execute("ROLLBACK TO lens_import")
@@ -122,6 +137,120 @@ def import_document(conn, document):
         "items": len(items),
         "segments": sum(len(item["segments"]) for item in items),
     }
+
+
+def source_state(conn, item_id, source):
+    if source not in SOURCES:
+        raise LensError("source must be transcript or ocr")
+    return conn.execute(
+        "SELECT * FROM analysis_source_state WHERE item_id = ? AND source = ?",
+        (item_id, source),
+    ).fetchone()
+
+
+def source_needs_analysis(conn, item_id, source, media_fingerprint):
+    state = source_state(conn, item_id, source)
+    return state_needs_analysis(state, media_fingerprint)
+
+
+def state_needs_analysis(state, media_fingerprint):
+    if state is None:
+        return True
+    if state["origin"] == "manual":
+        return False
+    return (
+        state["status"] != "completed"
+        or state["media_fingerprint"] != media_fingerprint
+    )
+
+
+def replace_generated_source(conn, item_id, source, segments, media_fingerprint):
+    if store.get_item(conn, item_id) is None:
+        raise LensError("favorite not found")
+    if not isinstance(media_fingerprint, str) or not media_fingerprint:
+        raise LensError("media fingerprint is required")
+    normalized = validate_document({
+        "items": [{"item_id": item_id, "segments": segments}],
+    })[0]["segments"]
+    if any(segment["source"] != source for segment in normalized):
+        raise LensError("generated segments must match their source")
+
+    existing = source_state(conn, item_id, source)
+    if existing is not None and existing["origin"] == "manual":
+        return False
+
+    timestamp = _now()
+    attempts = (existing["attempts"] if existing is not None else 0) + 1
+    conn.execute("SAVEPOINT lens_generated_source")
+    try:
+        conn.execute(
+            "DELETE FROM analysis_segment WHERE item_id = ? AND source = ?",
+            (item_id, source),
+        )
+        conn.executemany(
+            "INSERT INTO analysis_segment "
+            "(item_id, source, text, start_s, end_s, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    item_id, segment["source"], segment["text"],
+                    segment["start_s"], segment["end_s"], timestamp,
+                )
+                for segment in normalized
+            ],
+        )
+        conn.execute(
+            "INSERT INTO analysis_source_state "
+            "(item_id, source, origin, status, media_fingerprint, attempts, "
+            "last_error, attempted_at, completed_at, updated_at) "
+            "VALUES (?, ?, 'generated', 'completed', ?, ?, NULL, ?, ?, ?) "
+            "ON CONFLICT(item_id, source) DO UPDATE SET "
+            "origin = 'generated', status = 'completed', "
+            "media_fingerprint = excluded.media_fingerprint, "
+            "attempts = excluded.attempts, last_error = NULL, "
+            "attempted_at = excluded.attempted_at, "
+            "completed_at = excluded.completed_at, updated_at = excluded.updated_at",
+            (
+                item_id, source, media_fingerprint, attempts,
+                timestamp, timestamp, timestamp,
+            ),
+        )
+        conn.execute("RELEASE lens_generated_source")
+    except Exception:
+        conn.execute("ROLLBACK TO lens_generated_source")
+        conn.execute("RELEASE lens_generated_source")
+        raise
+    return True
+
+
+def record_generated_failure(conn, item_id, source, media_fingerprint, error):
+    if store.get_item(conn, item_id) is None:
+        raise LensError("favorite not found")
+    if not isinstance(media_fingerprint, str) or not media_fingerprint:
+        raise LensError("media fingerprint is required")
+    existing = source_state(conn, item_id, source)
+    if existing is not None and existing["origin"] == "manual":
+        return False
+    timestamp = _now()
+    attempts = (existing["attempts"] if existing is not None else 0) + 1
+    conn.execute(
+        "INSERT INTO analysis_source_state "
+        "(item_id, source, origin, status, media_fingerprint, attempts, "
+        "last_error, attempted_at, completed_at, updated_at) "
+        "VALUES (?, ?, 'generated', 'failed', ?, ?, ?, ?, NULL, ?) "
+        "ON CONFLICT(item_id, source) DO UPDATE SET "
+        "origin = 'generated', status = 'failed', "
+        "media_fingerprint = excluded.media_fingerprint, "
+        "attempts = excluded.attempts, last_error = excluded.last_error, "
+        "attempted_at = excluded.attempted_at, completed_at = NULL, "
+        "updated_at = excluded.updated_at",
+        (
+            item_id, source, media_fingerprint, attempts,
+            str(error)[:2_000], timestamp, timestamp,
+        ),
+    )
+    conn.commit()
+    return True
 
 
 def status(conn):

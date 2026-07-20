@@ -1,4 +1,8 @@
-import type { CaptionSegment } from "./types";
+import type {
+  AnalysisSourceCoverage,
+  CaptionSegment,
+  ProgressEvent,
+} from "./types";
 
 export type LensSnippetPart = { text: string; highlight: boolean };
 
@@ -15,3 +19,18 @@ export function activeTranscriptCaption(
   segments: CaptionSegment[],
   currentTime: number,
 ): CaptionSegment | null;
+export function automaticAnalysisPhases(
+  phases: string[],
+  enabled: boolean,
+): string[];
+export function analysisCoverageLabel(
+  coverage: AnalysisSourceCoverage,
+  eligible: number,
+): string;
+export function analysisProgressLabel(
+  event: ProgressEvent,
+): string;
+export function analysisCompletionMessage(
+  current: string | null,
+  event: ProgressEvent,
+): string | null;

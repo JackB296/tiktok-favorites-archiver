@@ -1,7 +1,7 @@
 """Single catalog of Archive run workers, actions, pipelines, and eligibility."""
 from dataclasses import dataclass
 
-from core import discovery, enrich, identify, sidecars, snapshots, storage, store, sync, verify
+from core import analysis, discovery, enrich, identify, sidecars, snapshots, storage, store, sync, verify
 
 
 def _run_verify(conn, download_dir, control=None):
@@ -26,12 +26,13 @@ class RunSpec:
 
 
 _SPECS = {
-    "sync": RunSpec("sync", "start", sync.run_sync, ("sync", "enrich", "identify"), "Sync", "Download pending Favorites."),
+    "sync": RunSpec("sync", "start", sync.run_sync, ("sync", "enrich", "identify", "analyze"), "Sync", "Download pending Favorites."),
     "backfill": RunSpec("backfill", "backfill", sync.run_backfill, ("backfill",), "Asset backfill", "Restore slideshow source assets.", True),
     "index": RunSpec("index", "reindex", sync.run_index, ("index",), "Gallery index", "Rebuild thumbnails and media facts.", True),
     "sidecars": RunSpec("sidecars", "sidecars", sidecars.run_sidecars, ("sidecars",), "Media sidecars", "Write media-server metadata.", True),
     "enrich": RunSpec("enrich", "enrich", enrich.run_enrichment, ("enrich",), "Search metadata", "Fetch missing captions and creator names.", True),
     "identify": RunSpec("identify", "identify", identify.run_identification, ("identify",), "Song identification", "Identify songs in archived media.", True),
+    "analyze": RunSpec("analyze", "analyze", analysis.run_analysis, ("analyze",), "Local analysis", "Generate local speech and on-screen text.", True),
     "storage-copy": RunSpec("storage-copy", None, storage.run_copy, ("storage-copy",), "Storage copy", "Copy and verify selected media.", True),
     "storage-move": RunSpec("storage-move", None, storage.run_move, ("storage-move",), "Storage move", "Copy, verify, then remove local media.", True),
     "storage-restore": RunSpec("storage-restore", None, storage.run_restore, ("storage-restore",), "Storage restore", "Restore verified external media.", True),
@@ -61,7 +62,7 @@ def kind_for_action(action):
         raise ValueError(f"unknown Archive run action: {action}")
 
 
-SYNC_FOLLOW_UPS = ("enrich", "identify", "sidecars", "index")
+SYNC_FOLLOW_UPS = ("enrich", "identify", "analyze", "sidecars", "index")
 
 
 def validate_pipeline(kind, phases):
@@ -100,7 +101,7 @@ def default_runners():
     return {kind: spec.worker for kind, spec in _SPECS.items()}
 
 
-def has_work(conn, kind):
+def has_work(conn, kind, download_dir=None):
     """Whether an optional pipeline stage has eligible work."""
     get(kind)  # validate first
     if kind == "enrich":
@@ -108,6 +109,11 @@ def has_work(conn, kind):
     if kind == "identify":
         return bool(store.get_library_settings(conn)["song_id_enabled"]) \
             and bool(store.items_needing_identification(conn))
+    if kind == "analyze":
+        return bool(
+            download_dir is not None
+            and analysis.items_needing_analysis(conn, download_dir)
+        )
     if kind == "discovery-backfill":
         state = discovery.ensure_backfill(conn)
         return state["status"] != "completed"

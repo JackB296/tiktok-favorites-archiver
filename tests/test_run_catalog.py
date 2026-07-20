@@ -1,6 +1,7 @@
 """Archive run catalog is the single source for names, workers, and pipelines."""
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -9,7 +10,7 @@ from core import run_catalog, store
 
 def test_catalog_contains_every_existing_user_run_and_action_name():
     assert set(run_catalog.kinds()) == {
-        "sync", "backfill", "index", "sidecars", "enrich", "identify",
+        "sync", "backfill", "index", "sidecars", "enrich", "identify", "analyze",
         "storage-copy", "storage-move", "storage-restore",
         "snapshot",
         "snapshot-restore",
@@ -18,7 +19,10 @@ def test_catalog_contains_every_existing_user_run_and_action_name():
     }
     assert {
         action: run_catalog.kind_for_action(action)
-        for action in ("start", "backfill", "reindex", "sidecars", "enrich", "identify", "discovery")
+        for action in (
+            "start", "backfill", "reindex", "sidecars", "enrich", "identify",
+            "analyze", "discovery",
+        )
     } == {
         "start": "sync",
         "backfill": "backfill",
@@ -26,12 +30,15 @@ def test_catalog_contains_every_existing_user_run_and_action_name():
         "sidecars": "sidecars",
         "enrich": "enrich",
         "identify": "identify",
+        "analyze": "analyze",
         "discovery": "discovery-backfill",
     }
 
 
 def test_sync_pipeline_and_default_workers_live_in_the_catalog():
-    assert run_catalog.pipeline_for("sync") == ("sync", "enrich", "identify")
+    assert run_catalog.pipeline_for("sync") == (
+        "sync", "enrich", "identify", "analyze",
+    )
     assert run_catalog.pipeline_for("backfill") == ("backfill",)
     assert set(run_catalog.default_runners()) == set(run_catalog.kinds())
 
@@ -44,6 +51,15 @@ def test_followup_eligibility_preserves_enrich_and_identify_rules():
     assert run_catalog.has_work(conn, "identify") is False
     store.set_library_settings(conn, song_id_enabled=True)
     assert run_catalog.has_work(conn, "identify") is True
+
+
+def test_analysis_followup_requires_unprocessed_readable_local_media():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://x/1", status="done")
+    with tempfile.TemporaryDirectory() as downloads:
+        assert run_catalog.has_work(conn, "analyze", downloads) is False
+        open(os.path.join(downloads, "1.mp4"), "wb").close()
+        assert run_catalog.has_work(conn, "analyze", downloads) is True
 
 
 def test_unknown_names_are_rejected_consistently():
