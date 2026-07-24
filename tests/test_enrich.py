@@ -78,6 +78,59 @@ def test_enrichment_job_reports_progress_and_stops_between_items():
     assert events[-1]["unavailable"] == 0
 
 
+def test_unavailable_items_are_skipped_by_default_but_retried_on_recheck():
+    # The fix for "get metadata re-tries all 6803 every run": an item that came
+    # back with no oEmbed metadata is marked 'unavailable' and skipped by the
+    # automatic (Sync-chained) run, but an explicit backfill (recheck) retries it.
+    conn = store.init_db(store.connect(":memory:"))
+    store.upsert_link(conn, "https://tiktok.com/a")   # id 1
+    limiter = cobalt.RateLimiter(1000, 1000, now=lambda: 0.0, sleep=lambda s: None)
+
+    # First pass: oEmbed returns nothing -> marked 'unavailable'.
+    first = []
+    enrich.enrich_items(conn, getter=lambda link: first.append(link) or None, limiter=limiter)
+    assert first == ["https://tiktok.com/a"]
+    assert store.get_item(conn, 1)["enrich_status"] == "unavailable"
+
+    # Automatic re-run: the unavailable item is not re-fetched.
+    again = []
+    enrich.enrich_items(conn, getter=lambda link: again.append(link) or None, limiter=limiter)
+    assert again == []
+    assert enrich.items_needing_enrichment(conn) == []
+
+    # Backfill (recheck=True): it is retried, and this time metadata exists.
+    backfilled = []
+    n = enrich.enrich_items(
+        conn,
+        getter=lambda link: backfilled.append(link) or {"title": "found now", "author_name": "amy"},
+        limiter=limiter, recheck=True,
+    )
+    assert backfilled == ["https://tiktok.com/a"]
+    assert n == 1
+    assert store.get_item(conn, 1)["caption"] == "found now"
+    assert store.get_item(conn, 1)["enrich_status"] == "ok"
+
+
+def test_new_items_are_still_enriched_after_others_marked_unavailable():
+    # A brand-new favorite (never attempted) is picked up by the automatic run
+    # even while previously-failed items are correctly skipped.
+    conn = store.init_db(store.connect(":memory:"))
+    store.upsert_link(conn, "https://tiktok.com/old")   # id 1 -> will be unavailable
+    limiter = cobalt.RateLimiter(1000, 1000, now=lambda: 0.0, sleep=lambda s: None)
+    enrich.enrich_items(conn, getter=lambda link: None, limiter=limiter)
+    assert store.get_item(conn, 1)["enrich_status"] == "unavailable"
+
+    store.upsert_link(conn, "https://tiktok.com/new")   # id 2 -> never attempted
+    fetched = []
+    enrich.enrich_items(
+        conn,
+        getter=lambda link: fetched.append(link) or {"title": "fresh", "author_name": "ned"},
+        limiter=limiter,
+    )
+    assert fetched == ["https://tiktok.com/new"]        # only the new one, not the unavailable one
+    assert store.get_item(conn, 2)["caption"] == "fresh"
+
+
 def test_enrichment_progress_counts_links_that_return_no_metadata():
     conn = store.init_db(store.connect(":memory:"))
     store.upsert_link(conn, "https://tiktok.com/a")

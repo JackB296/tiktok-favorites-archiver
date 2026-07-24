@@ -229,13 +229,13 @@ export function Dashboard() {
     }
   }
 
-  async function act(a: RunAction) {
+  async function act(a: RunAction, opts?: { recheck?: boolean }) {
     setRunActionError(null);
     if (a === "enrich") setEnrichmentProgress(null);
     if (a === "identify") setIdentificationProgress(null);
     if (a === "backfill") setBackfillProgress(null);
     try {
-      const result = await api.syncAction(a);
+      const result = await api.syncAction(a, opts);
       if ("started" in result && result.started === false) setRunActionError({ action: a, message: "Another Archive run is already active." });
     } catch (error) {
       setRunActionError({ action: a, message: (error as Error).message });
@@ -336,11 +336,16 @@ export function Dashboard() {
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-4 text-sm font-semibold text-ink"><span>Gallery search metadata{running && status?.phase === "enrich" ? <span className="ml-2 text-xs font-normal text-active">running</span> : null}</span><CaretDown size={16} className="text-ink-faint transition group-open:rotate-180" /></summary>
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-5 py-4">
             <div>
-              <p className="mt-1 text-sm text-ink-dim">Fetches missing captions and creators from TikTok so author, hashtag, and caption search cover more of the archive. This makes one rate-limited request per favorite that has no caption yet; it can be paused or stopped. It also runs automatically after every Sync, so new favorites get their metadata without another click.</p>
+              <p className="mt-1 text-sm text-ink-dim">Fetches missing captions and creators from TikTok so author, hashtag, and caption search cover more of the archive. This makes one rate-limited request per favorite that has no caption yet; it can be paused or stopped. It also runs automatically after every Sync, so new favorites get their metadata without another click. Automatic runs only touch favorites never tried before; use <span className="font-medium text-ink">Re-check all</span> to retry every favorite still missing a caption, including ones TikTok returned nothing for previously.</p>
             </div>
-            <Button variant="ghost" disabled={running} onClick={() => act("enrich")}>
-              <ArrowClockwise size={16} /> Fetch missing metadata
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="ghost" disabled={running} onClick={() => act("enrich")}>
+                <ArrowClockwise size={16} /> Fetch new metadata
+              </Button>
+              <Button variant="ghost" disabled={running} onClick={() => act("enrich", { recheck: true })} title="Backfill: retry every favorite still missing a caption, including ones a previous run found no metadata for.">
+                <ArrowClockwise size={16} /> Re-check all
+              </Button>
+            </div>
           {enrichmentProgress?.event === "enrichment" && (
             <p className="mt-3 text-sm text-ink-dim">
               {`Checking ${enrichmentProgress.completed ?? 0} of ${enrichmentProgress.total ?? 0}: ${enrichmentProgress.enriched ?? 0} updated, ${enrichmentProgress.unavailable ?? 0} returned no metadata`}

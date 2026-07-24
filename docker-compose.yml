@@ -10,13 +10,23 @@ services:
     restart: unless-stopped
     environment:
       API_URL: "http://cobalt:9000/"
-      # Cobalt's built-in rate limit. Its default (~20 requests/minute) is meant
-      # for public instances and makes bulk syncs/backfills crawl: every call
-      # gets a 429 and a ~53s backoff. This instance is private (not exposed
-      # outside the compose network), so give the app real headroom. The app's
-      # own limiter (RATE_MAX_CALLS/RATE_PERIOD below) must stay under this.
-      RATELIMIT_MAX: "300"
+      # Cobalt's built-in rate limits. The public defaults are meant for public
+      # instances and make bulk syncs/backfills crawl: every call gets a 429 and
+      # a ~53s backoff. This instance is private (not exposed outside the compose
+      # network), so give the app real headroom. The app's own limiter
+      # (RATE_MAX_CALLS/RATE_PERIOD below) must stay under RATELIMIT_MAX.
+      #
+      # There are TWO independent limits and BOTH must be raised. RATELIMIT_MAX
+      # gates the resolve API (POST /). TUNNEL_RATELIMIT_MAX gates the media
+      # stream (GET /tunnel) and defaults to only 40/min — so every download
+      # after the first ~40 in a window 429s and fails, even though resolves
+      # succeed. Each archived favorite makes one resolve AND one tunnel request,
+      # so the tunnel budget must cover the download concurrency, not just the
+      # resolve rate.
+      RATELIMIT_MAX: "600"
       RATELIMIT_WINDOW: "60"
+      TUNNEL_RATELIMIT_MAX: "600"
+      TUNNEL_RATELIMIT_WINDOW: "60"
     expose:
       - "9000"
 
@@ -31,7 +41,8 @@ services:
       DB_FILE: "/app/data/archive.db"
       APP_PORT: "8080"
       # Keep this comfortably below Cobalt's RATELIMIT_MAX/WINDOW above:
-      # 4 calls/second = 240/minute < Cobalt's 300/minute budget.
+      # 4 calls/second = 240/minute < Cobalt's 600/minute resolve budget, and
+      # the matching tunnel budget (TUNNEL_RATELIMIT_MAX) covers the downloads.
       CONCURRENCY: "4"
       RATE_MAX_CALLS: "4"
       RATE_PERIOD: "1.0"

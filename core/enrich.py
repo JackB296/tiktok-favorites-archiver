@@ -43,20 +43,23 @@ def fetch_metadata(link, getter=None):
     return parse_oembed(data)
 
 
-def items_needing_enrichment(conn):
-    """Items with a real link and no caption yet (skips synthetic local:// files)."""
-    return [
-        row for row in store.all_items(conn)
-        if row["caption"] is None and not str(row["link"]).startswith("local://")
-    ]
+def items_needing_enrichment(conn, recheck=False):
+    """Items with a real link and no caption yet (skips synthetic local:// files).
+
+    Automatic runs (``recheck=False``) only see never-attempted items, so a Sync
+    stops re-fetching oEmbed for the entire caption-less backlog every time; an
+    explicit backfill (``recheck=True``) retries every caption-less item.
+    """
+    return store.items_needing_enrichment(conn, recheck=recheck)
 
 
-def enrich_items(conn, getter=None, limiter=None, progress=None, should_continue=None):
+def enrich_items(conn, getter=None, limiter=None, progress=None, should_continue=None,
+                 recheck=False):
     """Fetch + store caption/author for items that lack it. Returns count enriched."""
     getter = getter or _default_getter
     if limiter is None:
         limiter = RateLimiter(config.RATE_MAX_CALLS, config.RATE_PERIOD)
-    items = items_needing_enrichment(conn)
+    items = items_needing_enrichment(conn, recheck=recheck)
     enriched = 0
     unavailable = 0
     if progress:
@@ -70,6 +73,7 @@ def enrich_items(conn, getter=None, limiter=None, progress=None, should_continue
             store.set_metadata(conn, item["id"], caption, author)
             enriched += 1
         else:
+            store.set_metadata_unavailable(conn, item["id"])
             unavailable += 1
         if progress:
             progress({
@@ -81,13 +85,18 @@ def enrich_items(conn, getter=None, limiter=None, progress=None, should_continue
 
 
 def run_enrichment(conn, download_dir, progress=None, wait=None, getter=None, limiter=None,
-                   control=None):
-    """Fetch missing Gallery search metadata as a pausable Archive run."""
+                   control=None, recheck=False):
+    """Fetch missing Gallery search metadata as a pausable Archive run.
+
+    ``recheck`` (the explicit backfill) retries every caption-less item,
+    including ones a previous run already found no metadata for; the default
+    (used by the Sync-chained follow-up) only touches never-attempted items.
+    """
     if control is None:
         control = runs.RunControl(conn, progress=progress, wait=wait)
     return enrich_items(
         conn, getter=getter, limiter=limiter, progress=control.progress,
-        should_continue=control.should_continue,
+        should_continue=control.should_continue, recheck=recheck,
     )
 
 
@@ -97,6 +106,8 @@ def run_cli(argv=None):
     parser = argparse.ArgumentParser(prog="core enrich",
                                      description="Fetch captions/authors via TikTok oEmbed.")
     parser.add_argument("--db", default=config.DB_FILE)
+    parser.add_argument("--recheck", action="store_true",
+                        help="Re-try every caption-less favorite, including ones previously found to have no metadata (backfill).")
     args = parser.parse_args(argv)
     config.setup_logging()
     conn = store.init_db(store.connect(args.db))
@@ -107,5 +118,5 @@ def run_cli(argv=None):
         got = "caption" if event.get("caption") else "no metadata"
         logging.info(f"[{event['id']}] {got}")
 
-    n = enrich_items(conn, progress=progress)
+    n = enrich_items(conn, progress=progress, recheck=args.recheck)
     logging.info(f"Enriched {n} item(s)")

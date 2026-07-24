@@ -110,8 +110,9 @@ def test_persistent_failure_returns_false_and_cleans_up():
 
 
 class _FailingResponse:
-    def __init__(self, status_code):
+    def __init__(self, status_code, headers=None):
         self.status_code = status_code
+        self.headers = headers or {}
         self.closed = False
 
     def raise_for_status(self):
@@ -141,6 +142,32 @@ def test_http_5xx_is_retried_but_4xx_is_permanent():
         assert download.download_file("http://x/v", target + "b") is False
         assert _sleeps == []                          # 4xx breaks immediately
         assert gone.closed                            # response still closed
+
+
+def test_http_429_is_retried_not_treated_as_permanent():
+    # Cobalt's tunnel returns 429 when the media-stream rate limit is hit. It is
+    # a 4xx but must be retried, not failed — the regression that made "later
+    # videos" fail during a bulk run.
+    with tempfile.TemporaryDirectory() as d:
+        target = os.path.join(d, "1.mp4")
+        _serve(None)
+        responses = [_FailingResponse(429), _Response([b"ok"])]
+        download.requests.get = lambda url, stream=True, timeout=None: responses.pop(0)
+        _sleeps.clear()
+        assert download.download_file("http://x/v", target) is True
+        assert len(_sleeps) == 1                       # backed off once, then succeeded
+        assert _sleeps[0] == config.RETRY_DELAY        # no Retry-After → first-attempt backoff
+
+
+def test_http_429_honors_retry_after_header():
+    with tempfile.TemporaryDirectory() as d:
+        target = os.path.join(d, "1.mp4")
+        _serve(None)
+        responses = [_FailingResponse(429, headers={"Retry-After": "7"}), _Response([b"ok"])]
+        download.requests.get = lambda url, stream=True, timeout=None: responses.pop(0)
+        _sleeps.clear()
+        assert download.download_file("http://x/v", target) is True
+        assert _sleeps == [7.0]                         # honored the server's Retry-After
 
 
 def test_unexpected_error_stops_without_retrying_and_cleans_up():

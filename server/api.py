@@ -1532,7 +1532,14 @@ def sync_control(request: Request, action: str):
         finally:
             conn.close()
     if kind is not None:
-        return {"started": jm.start(kind)}
+        run_kwargs = {}
+        # An explicit "?recheck=1" on the manual metadata run is the backfill:
+        # retry every caption-less favorite, including ones a prior run found no
+        # oEmbed metadata for. Without it (and for the Sync-chained follow-up),
+        # enrich only touches never-attempted favorites.
+        if kind == "enrich" and request.query_params.get("recheck") in ("1", "true"):
+            run_kwargs["recheck"] = True
+        return {"started": jm.start(kind, **run_kwargs)}
     if action == "pause":
         if not jm.pause():
             raise HTTPException(status_code=409, detail="no run in progress")

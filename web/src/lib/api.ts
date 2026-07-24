@@ -309,8 +309,8 @@ export const api = {
     return json<LegacyBootstrapResult>("/api/import/legacy-apply", { method: "POST", body });
   },
 
-  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop") =>
-    json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}`, { method: "POST" }),
+  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop", opts?: { recheck?: boolean }) =>
+    json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}${opts?.recheck ? "?recheck=1" : ""}`, { method: "POST" }),
 
   /** Subscribe to the SSE progress stream. Returns an unsubscribe fn. */
   events: (onEvent: (e: ProgressEvent) => void): (() => void) => {

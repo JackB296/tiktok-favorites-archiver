@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS item (
     error        TEXT,
     caption      TEXT,
     author       TEXT,
+    enrich_status TEXT,                  -- NULL=never tried, 'ok'=got metadata, 'unavailable'=tried, none returned
     thumbnail_path TEXT,
     custom_thumbnail_path TEXT,
     duration_s    REAL,
@@ -364,6 +365,7 @@ END;
 """
 
 _ITEM_MIGRATIONS = {
+    "enrich_status": "TEXT",
     "favorite_order": "INTEGER",
     "thumbnail_path": "TEXT",
     "custom_thumbnail_path": "TEXT",
@@ -760,10 +762,38 @@ def set_metadata(conn, item_id, caption, author):
     from core import discovery
     with conn:
         conn.execute(
-            "UPDATE item SET caption = ?, author = ?, updated_at = ? WHERE id = ?",
+            "UPDATE item SET caption = ?, author = ?, enrich_status = 'ok', updated_at = ? WHERE id = ?",
             (caption, author, _now(), item_id),
         )
         discovery.upsert_item_identities(conn, item_id, author, caption)
+
+
+def set_metadata_unavailable(conn, item_id):
+    """Remember that enrichment ran and oEmbed returned nothing.
+
+    NULL ``enrich_status`` = never attempted; ``'unavailable'`` is remembered so
+    an automatic (Sync-chained) enrich skips it, while an explicit backfill
+    (``recheck``) still retries it. Mirrors ``set_item_song_no_match``.
+    """
+    _update(conn, item_id, enrich_status="unavailable")
+
+
+def items_needing_enrichment(conn, recheck=False):
+    """Items with a real link and no caption yet (skips synthetic local:// files).
+
+    NULL ``enrich_status`` = never attempted. An item that was tried but returned
+    no metadata is marked ``'unavailable'`` and skipped on automatic runs so a
+    Sync no longer re-hits oEmbed for the whole caption-less backlog every time;
+    ``recheck`` (the explicit backfill) drops that filter and retries them all.
+    """
+    sql = (
+        "SELECT * FROM item "
+        "WHERE caption IS NULL AND link NOT LIKE 'local://%'"
+    )
+    if not recheck:
+        sql += " AND enrich_status IS NULL"
+    sql += " ORDER BY id"
+    return conn.execute(sql).fetchall()
 
 
 def record_work_outcome(conn, item_id, outcome):

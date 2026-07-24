@@ -9,6 +9,24 @@ from core import config
 
 _sleep = time.sleep  # indirection so tests can observe retry pacing without waiting
 
+# HTTP statuses worth retrying: transient server errors, plus 408 (request
+# timeout) and 429 (rate limited). 429 is a 4xx but is emphatically NOT
+# permanent — Cobalt's tunnel endpoint returns it when the media-stream rate
+# limit is hit, and the correct response is to back off and retry, not fail the
+# whole item. Any other 4xx (404/410/…) stays permanent.
+_RETRYABLE_STATUSES = frozenset({408, 429})
+
+
+def _retry_wait(response, attempt):
+    """Seconds to wait before the next retry: honor Retry-After, else back off."""
+    header = getattr(response, "headers", {}).get("Retry-After") if response is not None else None
+    if header:
+        try:
+            return min(float(header), 60.0)  # cap so one busy window can't stall a worker for minutes
+        except (TypeError, ValueError):
+            pass
+    return min(config.RETRY_DELAY * (2 ** attempt), 60.0)  # exponential backoff, capped
+
 
 def download_file(url, filename, max_retries=5):
     tmp_filename = filename + ".part"
@@ -31,12 +49,14 @@ def download_file(url, filename, max_retries=5):
             logging.info(f"Downloaded: {filename}")
             return True
         except HTTPError as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            if status is None or status < 500:
+            response = getattr(e, "response", None)
+            status = getattr(response, "status_code", None)
+            if status is None or (status < 500 and status not in _RETRYABLE_STATUSES):
                 logging.exception(f"Failed to download {url}: HTTP {status}")
-                break  # 4xx is permanent; retrying won't help
-            logging.error(f"Error downloading {url}: HTTP {status}. Retrying {attempt + 1}/{max_retries}...")
-            _sleep(config.RETRY_DELAY)
+                break  # other 4xx is permanent; retrying won't help
+            wait = _retry_wait(response, attempt)
+            logging.warning(f"Error downloading {url}: HTTP {status}. Retrying {attempt + 1}/{max_retries} in {wait:.1f}s...")
+            _sleep(wait)
         except (ChunkedEncodingError, ConnectionError, Timeout) as e:
             logging.error(f"Error downloading {url}: {e}. Retrying {attempt + 1}/{max_retries}...")
             _sleep(config.RETRY_DELAY)

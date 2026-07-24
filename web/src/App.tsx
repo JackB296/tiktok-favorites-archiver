@@ -62,7 +62,7 @@ export function App() {
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <div className="flex h-[100dvh] flex-col">
         <a href="#app-main" className="sr-only z-[60] rounded-[var(--radius-control)] bg-accent px-3 py-2 text-sm font-medium text-on-accent focus:not-sr-only focus:absolute focus:left-3 focus:top-3">Skip to content</a>
-        <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line bg-canvas/80 px-2 backdrop-blur sm:px-4">
+        <header className="relative z-40 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-line bg-canvas/80 px-2 backdrop-blur sm:px-4">
           <Link to="/gallery" aria-label="Open Gallery" title="Open Gallery" className="flex shrink-0 items-center gap-2 rounded-[var(--radius-control)] text-ink transition hover:text-accent">
             <BookmarkSimple size={18} weight="fill" className="text-accent" />
             <span className="hidden text-sm font-semibold min-[700px]:inline">Favorites Archive</span>
