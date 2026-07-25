@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, NavLink, Link } from "react-router-dom";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { BrowserRouter, Routes, Route, NavLink, Link, useLocation } from "react-router-dom";
 import { FilmReel, SquaresFour, MusicNotes, ChartBar, DownloadSimple, HardDrives, Archive, Sun, Moon, BookmarkSimple, Compass, MagnifyingGlass, ClockCounterClockwise, Sparkle, Star, WaveSine, Copy, Television, CaretDown } from "@phosphor-icons/react";
 import { cx } from "./components/ui";
 import { navigationGroups, primaryNavigation } from "./lib/navigation";
@@ -42,6 +42,54 @@ function NavigationLink({ to, label, compact = false }: { to: string; label: key
   </NavLink>;
 }
 
+function MoreMenu() {
+  const menu = useRef<HTMLDetailsElement>(null);
+  const { pathname } = useLocation();
+
+  const close = useCallback(() => {
+    if (menu.current) menu.current.open = false;
+  }, []);
+
+  // A <details> menu stays open until its own summary is clicked again, so
+  // dismiss it the way a menu is expected to behave: anything outside it,
+  // Escape, or navigating somewhere.
+  useEffect(() => { close(); }, [pathname, close]);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const element = menu.current;
+      if (element?.open && !element.contains(event.target as Node)) close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [close]);
+
+  return (
+    <details ref={menu} className="group relative">
+      <summary className="flex h-9 cursor-pointer list-none items-center gap-1 rounded-[var(--radius-control)] px-2 text-sm text-ink-dim hover:bg-elevated hover:text-ink">
+        More <CaretDown size={14} aria-hidden className="transition group-open:rotate-180" />
+      </summary>
+      {/* Re-selecting the page you are already on leaves the path unchanged,
+          so close on the click itself too. */}
+      <div onClick={close} className="absolute right-0 top-11 z-50 grid w-72 gap-3 rounded-[var(--radius-media)] border border-line bg-surface p-3 shadow-2xl">
+        {navigationGroups.map((group) => <section key={group.label} aria-label={`${group.label} tools`}>
+          <p className="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-ink-faint">{group.label}</p>
+          <div className="grid grid-cols-2 gap-1">
+            {group.items.filter((item) => item.to !== "/").map((item) => <NavigationLink key={item.to} to={item.to} label={item.label} />)}
+          </div>
+        </section>)}
+      </div>
+    </details>
+  );
+}
+
 function RouteFallback() {
   return (
     <div className="h-full bg-canvas" role="status" aria-live="polite" aria-label="Loading page">
@@ -71,19 +119,7 @@ export function App() {
             {primaryNavigation.map((item) => item.to === "/gallery" || item.to === "/sync"
               ? <span key={item.to} className="hidden min-[700px]:inline-flex"><NavigationLink to={item.to} label={item.label} /></span>
               : <NavigationLink key={item.to} to={item.to} label={item.label} />)}
-            <details className="group relative">
-              <summary className="flex h-9 cursor-pointer list-none items-center gap-1 rounded-[var(--radius-control)] px-2 text-sm text-ink-dim hover:bg-elevated hover:text-ink">
-                More <CaretDown size={14} aria-hidden className="transition group-open:rotate-180" />
-              </summary>
-              <div className="absolute right-0 top-11 z-50 grid w-72 gap-3 rounded-[var(--radius-media)] border border-line bg-surface p-3 shadow-2xl">
-                {navigationGroups.map((group) => <section key={group.label} aria-label={`${group.label} tools`}>
-                  <p className="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-ink-faint">{group.label}</p>
-                  <div className="grid grid-cols-2 gap-1">
-                    {group.items.filter((item) => item.to !== "/").map((item) => <NavigationLink key={item.to} to={item.to} label={item.label} />)}
-                  </div>
-                </section>)}
-              </div>
-            </details>
+            <MoreMenu />
             <button
               onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
               aria-label="Toggle theme"

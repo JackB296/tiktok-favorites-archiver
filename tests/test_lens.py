@@ -187,6 +187,38 @@ def test_invalid_or_unknown_item_documents_are_atomic():
     assert lens.search_segments(conn, "replacement") == []
 
 
+def test_sampled_frames_report_one_ocr_match_per_favorite():
+    conn = _archive()
+    # One overlay held on screen, sampled every two seconds. Frame noise makes
+    # the stored text differ each time, so only the favorite identifies it.
+    frames = [
+        {"source": "ocr", "text": f"GARLIC BABY POTATOES {noise}", "start_s": index * 2}
+        for index, noise in enumerate(["", "H Code w/", "� � ,", "72 _ *"])
+    ]
+    lens.import_document(conn, {"items": [
+        {"item_id": 1, "segments": frames + [
+            {"source": "transcript", "text": "Roast the potatoes hot.", "start_s": 1},
+            {"source": "transcript", "text": "Serve the potatoes warm.", "start_s": 9},
+        ]},
+        {"item_id": 2, "segments": [
+            {"source": "ocr", "text": "SMASHED POTATOES", "start_s": 5},
+        ]},
+    ]})
+
+    matches = lens.search_segments(conn, "potatoes")
+    frames_by_item = {
+        match["item_id"]: match for match in matches if match["source"] == "ocr"
+    }
+    assert len([match for match in matches if match["source"] == "ocr"]) == 2
+    assert sorted(frames_by_item) == [1, 2]
+    assert frames_by_item[1]["start_s"] == 0
+    # Spoken matches are not frame samples, so both moments survive.
+    assert len([match for match in matches if match["source"] == "transcript"]) == 2
+    assert sorted(match["item_id"] for match in lens.search_segments(
+        conn, "potatoes", source="ocr",
+    )) == [1, 2]
+
+
 def test_search_ignores_punctuation_only_queries_and_rejects_unknown_sources():
     conn = _archive()
     assert lens.search_segments(conn, "?! #") == []

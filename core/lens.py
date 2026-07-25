@@ -290,7 +290,7 @@ def search_segments(conn, query, source=None, limit=50):
         return []
     limit = max(1, min(int(limit), 100))
     source_clause = " AND segment.source = ?" if source else ""
-    params = [expression]
+    params = [expression, expression]
     if source:
         params.append(source)
     params.append(limit)
@@ -301,7 +301,22 @@ def search_segments(conn, query, source=None, limit=50):
         "bm25(analysis_search) AS rank "
         "FROM analysis_search "
         "JOIN analysis_segment segment ON segment.id = analysis_search.rowid "
-        "WHERE analysis_search MATCH ?"
+        "WHERE analysis_search MATCH ? "
+        # OCR samples one frame every few seconds, so text that stays on screen
+        # is stored once per frame. Frame noise keeps those segments from being
+        # byte-identical, so collapse by favorite instead of by text: a video
+        # contributes its best-ranked frame, not one row per sample.
+        "AND (segment.source != 'ocr' OR segment.id IN ("
+        "SELECT id FROM ("
+        "SELECT frame.id AS id, ROW_NUMBER() OVER ("
+        "PARTITION BY frame.item_id "
+        "ORDER BY bm25(analysis_search), frame.start_s, frame.id"
+        ") AS repeat_rank "
+        "FROM analysis_search "
+        "JOIN analysis_segment frame ON frame.id = analysis_search.rowid "
+        "WHERE analysis_search MATCH ? AND frame.source = 'ocr'"
+        ") WHERE repeat_rank = 1"
+        "))"
         f"{source_clause} "
         "ORDER BY rank, segment.item_id, segment.start_s, segment.id LIMIT ?",
         tuple(params),

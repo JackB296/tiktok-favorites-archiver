@@ -88,6 +88,33 @@ def test_import_detail_is_bounded_but_counts_remain_complete():
     assert import_history.get_import(conn, 9999) is None
 
 
+def test_listing_carries_the_newest_diff_and_counts_only_for_older_checkpoints():
+    conn = store.init_db(store.connect(":memory:"))
+    with tempfile.TemporaryDirectory() as tmp:
+        downloads = os.path.join(tmp, "downloads")
+        os.makedirs(downloads)
+        first_path = os.path.join(tmp, "first.json")
+        second_path = os.path.join(tmp, "second.json")
+        _write_export(first_path, [("B", "2022"), ("A", "2021")])
+        _write_export(second_path, [("C", "2023"), ("B", "2022")])
+        importer.import_all(conn, first_path, downloads)
+        importer.import_all(conn, second_path, downloads)
+
+    newest, older = import_history.list_imports(conn)
+    detail = import_history.get_import(conn, newest["id"])
+
+    # The page opens on the newest checkpoint, so its diff arrives with the
+    # list rather than costing a second request.
+    assert newest["comparison"] == detail["comparison"]
+    assert [entry["link"] for entry in newest["comparison"]["new"]] == ["C"]
+    assert [entry["link"] for entry in newest["comparison"]["removed"]] == ["A"]
+    # Older checkpoints stay a one-line summary until they are opened.
+    assert sorted(older["comparison"]) == ["counts"]
+    assert older["comparison"]["counts"] == {
+        "new": 2, "removed": 0, "unchanged": 0, "protected": 0,
+    }
+
+
 def test_duplicate_export_links_create_one_membership_without_aborting_checkpoint():
     conn = store.init_db(store.connect(":memory:"))
     with tempfile.TemporaryDirectory() as tmp:

@@ -56,10 +56,15 @@ function ChangeList({
   );
 }
 
+function hasChanges(record: ImportRecord | undefined): record is ImportRecord {
+  return !!record && !!record.comparison.new && !!record.comparison.removed;
+}
+
 export function History() {
   const [records, setRecords] = useState<ImportRecord[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [detail, setDetail] = useState<ImportRecord | null>(null);
+  // Checkpoints are immutable, so a diff only ever has to be fetched once.
+  const [details, setDetails] = useState<Record<number, ImportRecord>>({});
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -68,23 +73,29 @@ export function History() {
       .then((next) => {
         setRecords(next);
         setSelectedId(next[0]?.id ?? null);
+        // The listing ships the newest checkpoint's diff, so the page can
+        // render in full without waiting on a second request.
+        if (hasChanges(next[0])) setDetails({ [next[0].id]: next[0] });
       })
       .catch((error) => setMessage((error as Error).message))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
-    if (selectedId == null) {
-      setDetail(null);
-      return;
-    }
+    if (selectedId == null || details[selectedId]) return;
     let alive = true;
-    setDetail(null);
     api.importDetail(selectedId)
-      .then((next) => { if (alive) { setDetail(next); setMessage(null); } })
+      .then((next) => {
+        if (alive) {
+          setDetails((current) => ({ ...current, [next.id]: next }));
+          setMessage(null);
+        }
+      })
       .catch((error) => { if (alive) setMessage((error as Error).message); });
     return () => { alive = false; };
-  }, [selectedId]);
+  }, [selectedId, details]);
+
+  const detail = selectedId == null ? null : details[selectedId] ?? null;
 
   if (loading) {
     return <div className="mx-auto max-w-6xl space-y-3 px-4 py-8"><Skeleton className="h-24" /><Skeleton className="h-80" /></div>;

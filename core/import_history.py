@@ -24,122 +24,130 @@ def _digest(favorites):
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _membership(conn, import_id):
-    if import_id is None:
-        return {}
-    rows = conn.execute(
-        "SELECT item_id, link, favorited_at FROM import_membership "
-        "WHERE import_id = ? ORDER BY item_id",
+# A favorite dropped from an export is "safely archived" when the media is
+# still readable locally, or when a verified copy sits on a managed location.
+_PROTECTED = (
+    "(item.status = 'done' AND item.offloaded = 0 AND item.archive_missing = 0) "
+    "OR EXISTS ("
+    "SELECT 1 FROM media_placement placement "
+    "WHERE placement.item_id = item.id "
+    "AND placement.verified = 1 AND placement.is_active = 1"
+    ")"
+)
+
+
+def _membership_count(conn, import_id):
+    return conn.execute(
+        "SELECT COUNT(*) AS count FROM import_membership WHERE import_id = ?",
         (import_id,),
-    ).fetchall()
-    return {
-        row["link"]: {
+    ).fetchone()["count"]
+
+
+def _changed_entries(conn, present_id, absent_id, limit, *, protection=False):
+    """Favorites recorded in `present_id` whose links are absent from `absent_id`.
+
+    The diff stays in SQLite: an export holds tens of thousands of memberships
+    but a page only ever shows `limit` of them, so reading both sides into
+    Python to subtract them costs far more than it returns.
+    """
+    joins = ""
+    conditions = ""
+    params = []
+    if absent_id is not None:
+        joins = (
+            "LEFT JOIN import_membership absent "
+            "ON absent.import_id = ? AND absent.link = present.link "
+        )
+        conditions = " AND absent.link IS NULL"
+        params.append(absent_id)
+    params.extend((present_id, limit))
+    query = (
+        "SELECT present.item_id AS item_id, present.link AS link, "
+        "present.favorited_at AS favorited_at "
+        f"FROM import_membership present {joins}"
+        f"WHERE present.import_id = ?{conditions} "
+        "ORDER BY present.item_id, present.link LIMIT ?"
+    )
+    if protection:
+        # Archive health is resolved for the page-sized slice only. Joining
+        # item before the limit would drag every membership row through it.
+        query = (
+            f"SELECT changed.*, CASE WHEN {_PROTECTED} THEN 1 ELSE 0 END AS protected "
+            f"FROM ({query}) changed JOIN item ON item.id = changed.item_id "
+            "ORDER BY changed.item_id, changed.link"
+        )
+    rows = conn.execute(query, tuple(params)).fetchall()
+    entries = []
+    for row in rows:
+        entry = {
             "item_id": row["item_id"],
             "link": row["link"],
             "favorited_at": row["favorited_at"],
         }
-        for row in rows
-    }
-
-
-def _protected_item_ids(conn, item_ids):
-    protected = set()
-    ids = list(dict.fromkeys(int(item_id) for item_id in item_ids))
-    for start in range(0, len(ids), 500):
-        chunk = ids[start:start + 500]
-        placeholders = ",".join("?" for _ in chunk)
-        rows = conn.execute(
-            "SELECT DISTINCT item.id FROM item "
-            "LEFT JOIN media_placement placement "
-            "ON placement.item_id = item.id "
-            "AND placement.verified = 1 AND placement.is_active = 1 "
-            f"WHERE item.id IN ({placeholders}) AND ("
-            "(item.status = 'done' AND item.offloaded = 0 AND item.archive_missing = 0) "
-            "OR placement.id IS NOT NULL"
-            ")",
-            chunk,
-        ).fetchall()
-        protected.update(row["id"] for row in rows)
-    return protected
+        if protection:
+            entry["protected"] = bool(row["protected"])
+        entries.append(entry)
+    return entries
 
 
 def _comparison(conn, current_id, previous_id, change_limit=200):
-    current = _membership(conn, current_id)
-    previous = _membership(conn, previous_id)
-    new_links = current.keys() - previous.keys()
-    removed_links = previous.keys() - current.keys()
-    new = sorted(
-        (current[link] for link in new_links),
-        key=lambda entry: (entry["item_id"], entry["link"]),
-    )
-    removed = sorted(
-        (previous[link] for link in removed_links),
-        key=lambda entry: (entry["item_id"], entry["link"]),
-    )
-    protected_ids = _protected_item_ids(
-        conn, [entry["item_id"] for entry in removed],
-    )
-    for entry in removed:
-        entry["protected"] = entry["item_id"] in protected_ids
-    protected = sum(1 for entry in removed if entry["protected"])
     limit = max(1, min(int(change_limit), 1_000))
+    counts = _comparison_counts(conn, current_id, previous_id)
+    # The counts already settle whether a side has anything in it, so an
+    # export that only gained favorites never runs the removed-side diff.
     return {
-        "counts": {
-            "new": len(new),
-            "removed": len(removed),
-            "unchanged": len(current.keys() & previous.keys()),
-            "protected": protected,
-        },
-        "new": new[:limit],
-        "removed": removed[:limit],
-        "truncated": len(new) > limit or len(removed) > limit,
+        "counts": counts,
+        "new": (
+            _changed_entries(conn, current_id, previous_id, limit)
+            if counts["new"] else []
+        ),
+        "removed": (
+            _changed_entries(conn, previous_id, current_id, limit, protection=True)
+            if counts["removed"] else []
+        ),
+        "truncated": counts["new"] > limit or counts["removed"] > limit,
     }
 
 
+def _protected_count(conn, current_id, previous_id):
+    return conn.execute(
+        "SELECT COUNT(*) AS count FROM import_membership previous "
+        "LEFT JOIN import_membership current "
+        "ON current.import_id = ? AND current.link = previous.link "
+        "JOIN item ON item.id = previous.item_id "
+        f"WHERE previous.import_id = ? AND current.link IS NULL AND ({_PROTECTED})",
+        (current_id, previous_id),
+    ).fetchone()["count"]
+
+
 def _comparison_counts(conn, current_id, previous_id):
+    current_total = _membership_count(conn, current_id)
     if previous_id is None:
-        row = conn.execute(
-            "SELECT COUNT(*) AS count FROM import_membership WHERE import_id = ?",
-            (current_id,),
-        ).fetchone()
         return {
-            "new": row["count"],
+            "new": current_total,
             "removed": 0,
             "unchanged": 0,
             "protected": 0,
         }
-    row = conn.execute(
-        "SELECT "
-        "SUM(CASE WHEN previous.link IS NULL THEN 1 ELSE 0 END) AS new_count, "
-        "SUM(CASE WHEN previous.link IS NOT NULL THEN 1 ELSE 0 END) AS unchanged_count "
-        "FROM import_membership current "
-        "LEFT JOIN import_membership previous "
+    # Links are unique per import, so one overlap count settles all three
+    # totals — no anti-join needed for the two sides that only add rows.
+    unchanged = conn.execute(
+        "SELECT COUNT(*) AS count FROM import_membership current "
+        "JOIN import_membership previous "
         "ON previous.import_id = ? AND previous.link = current.link "
         "WHERE current.import_id = ?",
         (previous_id, current_id),
-    ).fetchone()
-    removed = conn.execute(
-        "SELECT COUNT(*) AS removed_count, "
-        "COALESCE(SUM(CASE WHEN ("
-        "(item.status = 'done' AND item.offloaded = 0 AND item.archive_missing = 0) "
-        "OR EXISTS ("
-        "SELECT 1 FROM media_placement placement "
-        "WHERE placement.item_id = item.id "
-        "AND placement.verified = 1 AND placement.is_active = 1"
-        ")) "
-        "THEN 1 ELSE 0 END), 0) AS protected_count "
-        "FROM import_membership previous "
-        "LEFT JOIN import_membership current "
-        "ON current.import_id = ? AND current.link = previous.link "
-        "JOIN item ON item.id = previous.item_id "
-        "WHERE previous.import_id = ? AND current.link IS NULL",
-        (current_id, previous_id),
-    ).fetchone()
+    ).fetchone()["count"]
+    removed = _membership_count(conn, previous_id) - unchanged
     return {
-        "new": row["new_count"] or 0,
-        "removed": removed["removed_count"] or 0,
-        "unchanged": row["unchanged_count"] or 0,
-        "protected": removed["protected_count"] or 0,
+        "new": current_total - unchanged,
+        "removed": removed,
+        "unchanged": unchanged,
+        # Only a dropped favorite can be protected, so an export that only
+        # gained favorites skips the item join entirely.
+        "protected": (
+            _protected_count(conn, current_id, previous_id) if removed else 0
+        ),
     }
 
 
@@ -198,13 +206,13 @@ def record_import(conn, favorites, source_name=None):
     }
 
 
-def list_imports(conn, limit=50):
+def list_imports(conn, limit=50, change_limit=200):
     limit = max(1, min(int(limit), 200))
     rows = conn.execute(
         "SELECT * FROM import_history ORDER BY id DESC LIMIT ?", (limit,),
     ).fetchall()
     records = []
-    for row in rows:
+    for index, row in enumerate(rows):
         previous = conn.execute(
             "SELECT id FROM import_history WHERE id < ? ORDER BY id DESC LIMIT 1",
             (row["id"],),
@@ -213,9 +221,13 @@ def list_imports(conn, limit=50):
         records.append({
             **_row_record(row),
             "previous_id": previous_id,
-            "comparison": {
-                "counts": _comparison_counts(conn, row["id"], previous_id),
-            },
+            # The newest checkpoint is the one a reader opens on, so its full
+            # diff rides along and spares the client a second round trip.
+            "comparison": (
+                _comparison(conn, row["id"], previous_id, change_limit=change_limit)
+                if index == 0
+                else {"counts": _comparison_counts(conn, row["id"], previous_id)}
+            ),
         })
     return records
 
