@@ -39,6 +39,18 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      # The lockfile is generated on macOS, and npm's optional-deps bug
+      # (npm/cli#4828) then omits the Linux native binaries. Same workaround
+      # as the Dockerfile, with glibc variants for the Actions runner.
+      - name: Install Linux native optional deps
+        run: |
+          ROLLUP_V=$(node -p "require('./package-lock.json').packages['node_modules/rollup'].version")
+          LCSS_V=$(node -p "require('./package-lock.json').packages['node_modules/lightningcss'].version")
+          OXIDE_V=$(node -p "require('./package-lock.json').packages['node_modules/@tailwindcss/oxide'].version")
+          npm install --no-save --ignore-scripts \
+            "@rollup/rollup-linux-x64-gnu@${ROLLUP_V}" \
+            "lightningcss-linux-x64-gnu@${LCSS_V}" \
+            "@tailwindcss/oxide-linux-x64-gnu@${OXIDE_V}"
       - name: Behavior tests
         run: npm test
       - name: Type-check and production build

@@ -89,9 +89,13 @@ def test_health_and_status_routes():
             assert body["state"] == "idle" and body["running"] is False
             assert client.get("/api/run-history").json() == []
             assert client.get("/api/incremental/stop-marker").status_code == 404
-            # The absent POST falls through to the SPA static mount, which
-            # correctly rejects unsupported methods with 405.
-            assert client.post("/api/incremental/import").status_code == 405
+            # When the SPA is built, the absent POST falls through to the
+            # static mount, which rejects unsupported methods with 405; on a
+            # checkout without web/dist there is no mount and it is a plain 404.
+            spa_built = os.path.isdir(
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "dist")
+            )
+            assert client.post("/api/incremental/import").status_code == (405 if spa_built else 404)
 
 
 def test_saved_list_trios_roundtrip_for_all_four_collections():

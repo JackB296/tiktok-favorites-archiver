@@ -235,7 +235,7 @@ up at most one missed occurrence after restart.
 ## Details worth knowing
 
 - **Dead links stay meaningful.** When TikTok reports that an original post is gone, the favorite becomes an unavailable archive marker instead of a recurring failure. Its number and position remain visible in Feed and Gallery, and automatic Sync runs do not retry it.
-- **Original slideshow audio.** Photo posts request the full original sound. If TikTok has already deleted it, a bundled default track fills in instead of failing the encode — replaceable with your own MP3 from the Sync tab's media settings. (The bundled track is an ambient pad synthesized with ffmpeg for this project, so it carries the repo's MIT license.)
+- **Original slideshow audio.** Photo posts request the full original sound. If TikTok has already deleted it, a bundled default track fills in instead of failing the encode — replaceable with your own MP3 from the Sync tab's media settings.
 - **Push playlists to Spotify.** In the Music tab, connect your own free Spotify app once, then push any saved playlist to a private Spotify playlist. Matches come from each song's stored link or a search; unmatched songs are reported rather than guessed, and re-pushing updates the same playlist.
 - **Asset backfill.** Already had downloads before this existed? The Sync tab's Backfill re-fetches the raw slideshow images for your existing files so they render in the viewer. Local Lens has its own **Analyze missing** backfill for speech and OCR.
 - **Provenance.** `downloads/manifest.csv` maps each file to its source link, type, and status alongside the database.

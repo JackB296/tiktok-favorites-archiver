@@ -35,7 +35,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src/whisper.cpp
-RUN curl -fsSL "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v${WHISPER_CPP_VERSION}.tar.gz" -o /tmp/whisper.cpp.tar.gz \
+RUN curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v${WHISPER_CPP_VERSION}.tar.gz" -o /tmp/whisper.cpp.tar.gz \
     && echo "${WHISPER_CPP_SHA256}  /tmp/whisper.cpp.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/whisper.cpp.tar.gz --strip-components=1 \
     && cmake -S . -B build \
@@ -48,7 +48,7 @@ RUN curl -fsSL "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v${WHI
     && install -Dm755 build/bin/whisper-cli /out/bin/whisper-cli \
     && strip /out/bin/whisper-cli \
     && install -d /out/models \
-    && curl -fsSL "https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_MODEL_REVISION}/ggml-base.bin" -o /out/models/ggml-base.bin \
+    && curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_MODEL_REVISION}/ggml-base.bin" -o /out/models/ggml-base.bin \
     && echo "${WHISPER_MODEL_SHA256}  /out/models/ggml-base.bin" | sha256sum -c -
 
 # ---- Stage 3: the Python app (FastAPI + downloader core) ----
