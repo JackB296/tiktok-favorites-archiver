@@ -1,0 +1,51 @@
+# Umbrel app: TikTok Favorites Archive + its Cobalt companion.
+#
+# Note on image pinning: official umbrel-apps submissions require images
+# pinned to a version tag plus sha256 digest. This file tracks :latest for
+# the community-store draft; pin it before submitting upstream.
+services:
+  app_proxy:
+    environment:
+      APP_HOST: tiktok-favorites-archiver_app_1
+      APP_PORT: 8080
+
+  app:
+    image: ghcr.io/jackb296/tiktok-favorites-archiver:latest
+    restart: on-failure
+    depends_on:
+      - cobalt
+    environment:
+      COBALT_API_URL: "http://tiktok-favorites-archiver_cobalt_1:9000/"
+      # Umbrel puts every app behind its app proxy, so requests arrive with
+      # the umbrel hostname (umbrel.local, the device IP, or a Tor address)
+      # in the Host header while the app itself is only reachable through
+      # the proxy. "*" is appropriate here: the proxy is the access control
+      # layer, and the app's own Host allowlist cannot know which name the
+      # proxy will be addressed by.
+      ALLOWED_HOSTS: "*"
+      # Keep RATE_MAX_CALLS/RATE_PERIOD comfortably below Cobalt's
+      # RATELIMIT_MAX/RATELIMIT_WINDOW below: 4/s = 240/min < 600/min.
+      CONCURRENCY: "4"
+      RATE_MAX_CALLS: "4"
+      RATE_PERIOD: "1.0"
+      # Shazam throttles sustained traffic; pace bulk song identification.
+      SONG_ID_RATE_MAX_CALLS: "1"
+      SONG_ID_RATE_PERIOD: "6.0"
+    volumes:
+      - ${APP_DATA_DIR}/downloads:/app/downloads
+      - ${APP_DATA_DIR}/data:/app/data
+
+  cobalt:
+    image: ghcr.io/imputnet/cobalt:11
+    init: true
+    restart: on-failure
+    environment:
+      API_URL: "http://tiktok-favorites-archiver_cobalt_1:9000/"
+      # Cobalt's public-instance defaults make bulk syncs crawl, and its
+      # tunnel limit defaults to only 40/min. This instance is private to
+      # the app's network, so both limits are raised to match the
+      # archiver's docker-compose defaults.
+      RATELIMIT_MAX: "600"
+      RATELIMIT_WINDOW: "60"
+      TUNNEL_RATELIMIT_MAX: "600"
+      TUNNEL_RATELIMIT_WINDOW: "60"

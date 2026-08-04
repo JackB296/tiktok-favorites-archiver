@@ -11,11 +11,14 @@
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript"></a>
   <img src="https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white" alt="SQLite">
   <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker"></a>
+  <a href="https://github.com/JackB296/tiktok-favorites-archiver/actions/workflows/ci.yml"><img src="https://github.com/JackB296/tiktok-favorites-archiver/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3FB950" alt="License: MIT"></a>
 </p>
 
 <p align="center">
   <img src="screenshots/feed.png" alt="The Feed: a vertical, TikTok-style scroll of your saved favorites" width="880">
+  <br>
+  <sub>All screenshots show a synthetic demo archive — generated gradients and made-up creators, no real TikTok content.</sub>
 </p>
 
 Videos download as-is. Photo slideshows are rebuilt into MP4s with their original sound. A local web app runs the downloads and browses the results, and Plex handles the TV. Everything runs on your own machine through a self-hosted [Cobalt](https://github.com/imputnet/cobalt) instance, so your favorites never pass through anyone else's server.
@@ -34,20 +37,14 @@ File numbering is stable: `147.mp4` stays archive item 147 in the database. Favo
 
 - **Runs entirely on your machine.** The app and its own Cobalt resolver come up together with one `docker compose up`. Nothing you import or download touches a third-party server.
 - **Resilient download engine.** A bounded worker pool holds a configurable request rate and backs off on HTTP 429. Progress lives in SQLite, downloads stream to a `.part` file and are renamed into place only when complete, and a rerun resumes exactly where it stopped.
-- **Rebuilds photo slideshows.** TikTok photo posts are re-encoded into MP4s with their original audio (FFmpeg via MoviePy), each image centered on a canvas sized to the largest slide, with the raw images kept for the in-app carousel.
+- **Rebuilds photo slideshows.** TikTok photo posts are re-encoded into MP4s with their original audio (FFmpeg via MoviePy), with the raw images kept for the in-app carousel.
 - **Scales to a real library.** The Feed and Gallery stay responsive at 11,000+ favorites through row virtualization, media preloading, and range-based streaming from the backend.
-- **Identifies songs (opt-in).** Shazam names the track in each favorite and shows it in Feed and Gallery. A Music tab lists every identified song, opens each in Spotify, YouTube, or Apple Music, saves playlists, and can push a saved playlist to your own Spotify account. It stays off until you turn it on; enabling it uploads a short audio clip per video to Shazam, the only time the app sends your media's audio to an outside service.
-- **Shows you your own habits.** A Stats tab turns the archive into charts: how it grew over time, when you favorite (a day×hour heatmap), how long your favorites run, your top creators, songs, and hashtags, and archive health — all from data already on disk, no new services.
-- **Owns backup and storage.** Configure mounted folders or NAS shares, preview and verify copy/move/restore operations, and create portable metadata or complete Archive snapshots with checksum validation and guarded rollback restore.
-- **Automates on your terms.** Saved Gallery presets are live Smart collections, Sync follow-ups are configurable, and daily or weekly runs execute inside the app with timezone/DST-safe catch-up.
-- **Finds what you remember.** Local Lens generates timestamped speech and on-screen text inside the app with bundled, CPU-only local tools, then jumps straight to the matching moment. Existing JSON imports remain available as a manual override.
-- **Makes the archive feel alive.** Memory Lane resurfaces anniversaries and overlooked favorites, while Archive Time Machine shows exactly what appeared or disappeared between TikTok exports without deleting local media.
-- **Adds your own meaning.** Curator Deck gives every favorite private stars, tags, notes, and a guided review state; Gallery can filter those annotations without changing TikTok metadata.
-- **Explores by vibe.** Vibe Atlas ranks captions, creators, songs, transcripts, and screen text with a deterministic local TF-IDF embedding. It needs no model download and sends no text or media away.
-- **Verifies duplicates safely.** Duplicate Radar caches streaming SHA-256 digests, reports exact duplicate groups and potential reclaimable space, and never deletes or offloads media.
-- **Turns collections into channels.** Archive Channels resolve a saved Smart Collection live, optionally shuffle or prefer unwatched favorites, and continuously advance through the normal Feed.
-- **Built to be operated.** Live per-item progress over Server-Sent Events, an archive integrity check, a one-click recovery inbox, saved and shareable filters, and a portable CSV inventory.
-- **Tested and typed.** The download engine is a standalone Python package with a stdlib-first unit suite (the HTTP-tier file additionally self-skips unless FastAPI is installed). The frontend talks to a small typed API and never reaches Cobalt directly.
+- **Searches inside the videos.** Local Lens generates timestamped speech transcripts and on-screen text with bundled, CPU-only tools (whisper.cpp and Tesseract, in the container), then jumps straight to the matching moment. Nothing is sent to a hosted service.
+- **More than a folder of MP4s.** Stats charts your favoriting habits, Discover browses by creator and hashtag, Memories resurfaces old saves, Curate adds private stars/tags/notes, Vibes finds similar posts with a local text embedding, Duplicates reports byte-identical files, and Channels turn saved searches into continuous feeds. All of it computed locally from data already on disk.
+- **Owns backup and storage.** Mounted folders or NAS shares with previewed, checksummed copy/move/restore, plus portable archive snapshots with guarded rollback.
+- **Built to be operated.** Live per-item progress over Server-Sent Events, daily/weekly scheduled runs, an integrity check, a one-click recovery inbox, and a CSV inventory.
+- **Identifies songs (opt-in, off by default).** Shazam names each favorite's track; the Music tab collects them, opens them in your music service, and can push playlists to your own Spotify account. Enabling it is the only time audio leaves your machine.
+- **Tested.** The download engine is a standalone Python package with a stdlib-only unit suite; the SPA has behavior tests over its logic modules; CI runs both plus a full image build.
 
 ## Quick start
 
@@ -56,16 +53,24 @@ You need [Docker](https://www.docker.com/).
 ```bash
 git clone https://github.com/JackB296/tiktok-favorites-archiver.git
 cd tiktok-favorites-archiver
-docker compose up --build
+docker compose up -d
 ```
 
-Open **http://localhost:8080**. That one command starts the app and its own Cobalt instance together, so there is nothing else to install. Then:
+Open **http://localhost:8080**. That pulls the prebuilt image from GHCR and starts the app and its own Cobalt instance together, so there is nothing else to install or compile. (Prefer to build from source? `docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d`.) Then:
 
 1. Open the **Sync** tab, upload your TikTok data export (the how-to button walks you through getting it), and press Start.
 2. Watch each favorite download in real time.
 3. Browse them in **Feed** and **Gallery**.
 
 Media is written to `./downloads` on your host. Point Plex at that folder and your favorites play on the TV.
+
+The whole first run, in 30 seconds:
+
+<p align="center">
+  <img src="screenshots/demo.gif" alt="First run: uploading a TikTok export, watching downloads complete live, then scrolling the archived feed" width="880">
+</p>
+
+Running **Unraid, CasaOS, or Umbrel**? Ready-made install templates with per-platform steps live in [templates/](templates/).
 
 ## The app
 
@@ -77,6 +82,10 @@ It opens at your newest favorite, remembers where you left off ("go to last watc
 
 ### Gallery
 
+<p align="center">
+  <img src="screenshots/gallery.png" alt="The Gallery: a virtualized thumbnail grid with search, filters, and per-card status badges" width="880">
+</p>
+
 A searchable thumbnail grid of everything, ranked best-match first.
 
 - **Search and filter.** Search by caption, hashtag, or author (from TikTok's public oEmbed data). Beyond the All / Videos / Slideshows filter, an advanced panel covers date range, duration, file size, resolution, orientation, codec, download status, and attempt count, plus include/exclude author and tag lists, eleven repeatable sort orders, and a fresh random shuffle.
@@ -87,11 +96,19 @@ A searchable thumbnail grid of everything, ranked best-match first.
 
 ### Music
 
+<p align="center">
+  <img src="screenshots/music.png" alt="The Music tab: songs identified across favorites, each opening in Spotify, YouTube, or Apple Music" width="880">
+</p>
+
 Every identified song collects here, most-used first. Each track shows how many favorites use it, opens in Spotify, YouTube, or Apple Music, and can start a Feed of exactly the favorites that share it. Tick songs to save a named playlist. The tab is empty until you enable song identification in Sync and run it.
 
 Connect your own Spotify account (a free developer app's Client ID, one-time) and each saved playlist gains a push button that creates it as a private Spotify playlist, matching each song by its stored link or a search. Pushing again updates the same playlist instead of duplicating, and the app reports exactly which songs it could not confidently match. Nothing reaches Spotify until you connect and press push.
 
 ### Stats
+
+<p align="center">
+  <img src="screenshots/stats.png" alt="The Stats tab: growth charts, a favoriting heatmap, and archive health, all computed locally" width="880">
+</p>
 
 A read-only dashboard over data the archive already has. A summary strip (total favorites, video/slideshow mix, total watch-length, disk usage, percent archived) leads into four sections: **Growth** (cumulative favorites and per-month saves), **You as a watcher** (a day-of-week × hour favoriting heatmap, a duration histogram with your median, and the confirmed-silent share), **Top of your archive** (most-favorited creators, most-used songs, and top hashtags, each linking into a filtered Gallery or the Music tab), and **Archive health** (a lifecycle donut and the most common failure reasons). Favorites without a saved date sit out of the time charts and are disclosed, never guessed.
 
@@ -100,6 +117,10 @@ A read-only dashboard over data the archive already has. A summary strip (total 
 Creators and Hashtags become first-class, Unicode-normalized identities. Discover searches and orders both sets by name, use count, or recent activity, then opens an exact Gallery or Feed selection—`@ann` never accidentally includes `@anna`. Existing caption and author fields remain available while an automatic, resumable backfill upgrades older databases.
 
 ### Local Lens
+
+<p align="center">
+  <img src="screenshots/lens.png" alt="Local Lens: search timestamped speech and on-screen text, generated on your own machine" width="880">
+</p>
 
 Local Lens searches inside a favorite instead of only searching its caption.
 The official Docker image includes `whisper.cpp` with the multilingual base
@@ -214,7 +235,7 @@ up at most one missed occurrence after restart.
 ## Details worth knowing
 
 - **Dead links stay meaningful.** When TikTok reports that an original post is gone, the favorite becomes an unavailable archive marker instead of a recurring failure. Its number and position remain visible in Feed and Gallery, and automatic Sync runs do not retry it.
-- **Original slideshow audio.** Photo posts request the full original sound. If TikTok has already deleted it, a bundled default track fills in instead of failing the encode — replaceable with your own MP3 from the Sync tab's media settings.
+- **Original slideshow audio.** Photo posts request the full original sound. If TikTok has already deleted it, a bundled default track fills in instead of failing the encode — replaceable with your own MP3 from the Sync tab's media settings. (The bundled track is an ambient pad synthesized with ffmpeg for this project, so it carries the repo's MIT license.)
 - **Push playlists to Spotify.** In the Music tab, connect your own free Spotify app once, then push any saved playlist to a private Spotify playlist. Matches come from each song's stored link or a search; unmatched songs are reported rather than guessed, and re-pushing updates the same playlist.
 - **Asset backfill.** Already had downloads before this existed? The Sync tab's Backfill re-fetches the raw slideshow images for your existing files so they render in the viewer. Local Lens has its own **Analyze missing** backfill for speech and OCR.
 - **Provenance.** `downloads/manifest.csv` maps each file to its source link, type, and status alongside the database.
@@ -223,8 +244,10 @@ up at most one missed occurrence after restart.
 - **Song identification (opt-in).** Off by default. When you turn it on, a rate-limited Sync run uploads a short audio clip per video to Shazam and records the match. It remembers the ones Shazam cannot place so a rerun skips them, and a per-post search lets you set or correct a song by hand. Enabling it is the only time the app sends your audio to an outside service.
 - **Media-server metadata.** One click writes a `.nfo` title file and `.jpg` poster next to every video, so Plex, Jellyfin, and Kodi show real titles and artwork instead of bare numbers. Your media files are never modified.
 - **Integrity check.** Sync can verify the whole archive: finished favorites missing their video (one click re-queues them), stray files no favorite claims, and leftover temp files from interrupted runs.
-- **Localhost only.** The app has no login, so Docker binds it to `127.0.0.1`; nothing else on your network can reach it. Plex reads `./downloads` from disk and is unaffected.
+- **Local by default.** The app has no login, so Docker binds it to `127.0.0.1` out of the box; nothing else on your network can reach it. Plex reads `./downloads` from disk and is unaffected. Want to reach it from your phone or another machine? See [Access from other devices](#access-from-other-devices-lan-tailscale-reverse-proxy).
 - **Backups.** The Backups tab produces validated portable snapshots. A stopped-app copy of `./downloads` plus `./appdata/archive.db` remains a valid manual fallback.
+- **Scripting the API.** Reads are plain HTTP (`curl localhost:8080/api/stats`). Mutating requests additionally need the header `X-Archive-Request: 1` — it's the app's CSRF guard, and without it any POST answers 403.
+- **File ownership (Linux).** The container runs as root by default, so Docker creates `./downloads` and `./appdata` root-owned. To keep them owned by your user, pre-create the folders and set `user: "1000:1000"` on the `app` service (commented in the compose file).
 
 ## Project layout
 
@@ -273,19 +296,23 @@ With Docker, set these on the `app` service in `docker-compose.yml`:
 | `COBALT_API_URL` | `http://cobalt:9000/` | Address of the Cobalt service |
 | `DOWNLOAD_DIR` | `/app/downloads` | Where media is saved |
 | `CONCURRENCY` | `4` | Simultaneous downloads |
-| `RATE_MAX_CALLS` / `RATE_PERIOD` | `8` / `1.0` | Requests allowed per window, in seconds |
+| `RATE_MAX_CALLS` / `RATE_PERIOD` | `4` / `1.0` | Requests allowed per window, in seconds |
 | `DB_FILE` | `/app/data/archive.db` | Path of the SQLite archive database |
 | `APP_PORT` | `8080` | Port the web app listens on |
+| `ALLOWED_HOSTS` | *(empty)* | Extra Host names the app answers to (comma-separated) for LAN/Tailscale/reverse-proxy access; loopback is always allowed |
 | `RETRY_DELAY` | `2.0` | Seconds between download retry attempts |
-| `SONG_ID_RATE_MAX_CALLS` / `SONG_ID_RATE_PERIOD` | `1` / `2.0` | Shazam recognitions allowed per window, in seconds |
+| `SONG_ID_RATE_MAX_CALLS` / `SONG_ID_RATE_PERIOD` | `1` / `6.0` | Shazam recognitions allowed per window, in seconds |
 | `WHISPER_CPP_BIN` | `/usr/local/bin/whisper-cli` | Local speech CLI path |
 | `WHISPER_MODEL` | `/opt/whisper/models/ggml-base.bin` | Local multilingual speech model path |
 | `TESSERACT_BIN` | `/usr/bin/tesseract` | Local OCR CLI path |
 | `ANALYSIS_TIMEOUT` | `900` | Maximum seconds for one local tool subprocess |
+| `ANALYSIS_MAX_OUTPUT_BYTES` | `8388608` | Maximum bytes read from one local tool's output |
 | `OCR_INTERVAL_SECONDS` | `2.0` | Seconds between sampled OCR frames |
 | `OCR_MAX_FRAMES` | `600` | Maximum OCR frames sampled from one favorite |
 
-If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATELIMIT_WINDOW` in the same file to match. If you change `APP_PORT`, update the `ports:` mapping too.
+Values above are what the shipped `docker-compose.yml` and image resolve to when you change nothing; the compose file's comments explain each choice (a few, like the download rate and Shazam pacing, deliberately differ from the bare-code defaults in `core/config.py`). If you raise the concurrency and rate, raise Cobalt's `RATELIMIT_MAX` and `RATELIMIT_WINDOW` in the same file to match. If you change `APP_PORT`, update the `ports:` mapping too.
+
+Run the server with exactly one uvicorn worker (the Docker image already does). The in-process job manager is what guarantees only one archive run at a time; `--workers 2` would break that guarantee.
 
 For a mounted Storage location, add a bind mount to the `app` service, rebuild,
 then register the container path in **Storage**:
@@ -304,9 +331,34 @@ and keep the container path stable across restarts.
 
 </details>
 
+## Access from other devices (LAN, Tailscale, reverse proxy)
+
+Out of the box the app only answers requests addressed to `localhost` — both the Docker port binding and an application-level Host allowlist enforce that, because there is no login. To use it from other devices, tell the app which names it may answer to with `ALLOWED_HOSTS`, and open a path to it. Pick the one that fits:
+
+**Tailscale (recommended — archive on a spare machine, watch from anywhere).** Leave the port binding on `127.0.0.1` exactly as shipped. On the machine running the app:
+
+```bash
+tailscale serve --bg 8080
+```
+
+Then set the app's Tailscale name in `docker-compose.yml` and restart:
+
+```yaml
+ALLOWED_HOSTS: "machine-name.your-tailnet.ts.net"
+```
+
+Open `https://machine-name.your-tailnet.ts.net` from any device on your tailnet — phone included. Tailscale terminates HTTPS and proxies to localhost, so nothing is exposed beyond your tailnet and the loopback binding never changes.
+
+**Plain LAN.** Change the port mapping to `"8080:8080"` and set `ALLOWED_HOSTS` to however you'll address the machine, e.g. `"nas.local,192.168.1.20"`. Anyone on the network can then reach your archive — do this only on a network you trust.
+
+**Reverse proxy (Caddy, nginx, Traefik).** Proxy to `127.0.0.1:8080`, keep the loopback binding, and set `ALLOWED_HOSTS` to the site name the proxy serves. The app has no authentication of its own, so if the proxy is reachable beyond your trusted network, put auth in front of it at the proxy layer.
+
+A request with a Host name not on the list gets `403 forbidden request source` — if you see that, the fix is adding the name you used to `ALLOWED_HOSTS`. A malformed entry (a URL or a path instead of a host name) makes the container fail at startup with a clear error (and restart-loop under compose) rather than 403 mysteriously later; `docker compose logs app` shows it. Setting `ALLOWED_HOSTS: "*"` accepts any name, but explicit names are safer — the allowlist is also the app's DNS-rebinding guard.
+
 ## Upgrading an existing web archive
 
-Pull the code and run `docker compose up --build` against the same `downloads`
+Pull the code, then `docker compose pull && docker compose up -d` (or rebuild
+with the build overlay if you run from source) against the same `downloads`
 and `appdata` bind mounts. Startup applies additive schema migrations only; it
 does not hash, copy, rename, or delete media. Creator/Hashtag discovery then
 backfills in bounded, persisted batches when the Archive is idle. It can resume
@@ -434,3 +486,5 @@ This is a tool for **privately archiving your own favorited content** from the d
 ## License
 
 [MIT](LICENSE) © Jack Bialecki
+
+Release notes live in the [CHANGELOG](CHANGELOG.md).

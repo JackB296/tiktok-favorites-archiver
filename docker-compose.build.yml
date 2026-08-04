@@ -1,0 +1,5 @@
+# Overlay: build the app image from this checkout instead of pulling GHCR.
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
+services:
+  app:
+    build: .

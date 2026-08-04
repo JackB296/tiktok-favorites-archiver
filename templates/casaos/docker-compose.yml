@@ -1,0 +1,125 @@
+# CasaOS app definition for TikTok Favorites Archive + its Cobalt companion.
+# Install via CasaOS: "+" -> Install a customized app -> Import, then paste
+# this file's contents. Both containers install together as one app.
+name: tiktok-favorites-archiver
+services:
+  app:
+    image: ghcr.io/jackb296/tiktok-favorites-archiver:latest
+    container_name: tiktok-favorites-archiver
+    restart: unless-stopped
+    depends_on:
+      - cobalt
+    environment:
+      # Cobalt is reachable by service name inside this app's compose network.
+      COBALT_API_URL: "http://cobalt:9000/"
+      # Keep RATE_MAX_CALLS/RATE_PERIOD comfortably below Cobalt's
+      # RATELIMIT_MAX/RATELIMIT_WINDOW below: 4/s = 240/min < 600/min.
+      CONCURRENCY: "4"
+      RATE_MAX_CALLS: "4"
+      RATE_PERIOD: "1.0"
+      # Shazam throttles sustained traffic; pace bulk song identification.
+      SONG_ID_RATE_MAX_CALLS: "1"
+      SONG_ID_RATE_PERIOD: "6.0"
+      # "*" answers to any Host header so the CasaOS dashboard link works out
+      # of the box, but it weakens the app's DNS-rebinding guard. Recommended:
+      # replace with the names you use, e.g. "192.168.1.20,casaos.local".
+      ALLOWED_HOSTS: "*"
+    ports:
+      - target: 8080
+        published: "8080"
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: /DATA/Media/TikTokFavorites
+        target: /app/downloads
+      - type: bind
+        source: /DATA/AppData/tiktok-favorites-archiver/data
+        target: /app/data
+    x-casaos:
+      envs:
+        - container: COBALT_API_URL
+          description:
+            en_US: URL of the Cobalt instance used to resolve downloads. Defaults to the bundled cobalt service; only change it if you run Cobalt elsewhere.
+        - container: ALLOWED_HOSTS
+          description:
+            en_US: Host header allowlist. "*" accepts any host name, which makes the dashboard link work everywhere but weakens the DNS-rebinding guard. Strongly recommended to replace it with your server's IP or hostname, comma-separated. Loopback is always allowed. The app has no login, so keep it on a trusted network.
+        - container: CONCURRENCY
+          description:
+            en_US: Simultaneous download workers.
+        - container: RATE_MAX_CALLS
+          description:
+            en_US: Max Cobalt API calls per RATE_PERIOD seconds. Keep below Cobalt's RATELIMIT_MAX budget.
+        - container: RATE_PERIOD
+          description:
+            en_US: Window in seconds for RATE_MAX_CALLS.
+        - container: SONG_ID_RATE_MAX_CALLS
+          description:
+            en_US: Shazam song-identification calls per SONG_ID_RATE_PERIOD seconds.
+        - container: SONG_ID_RATE_PERIOD
+          description:
+            en_US: Window in seconds for SONG_ID_RATE_MAX_CALLS.
+      ports:
+        - container: "8080"
+          description:
+            en_US: Web interface.
+      volumes:
+        - container: /app/downloads
+          description:
+            en_US: Downloaded videos, slideshows, and audio. Point Plex or Jellyfin here.
+        - container: /app/data
+          description:
+            en_US: SQLite database and application state.
+
+  cobalt:
+    image: ghcr.io/imputnet/cobalt:11
+    container_name: tiktok-favorites-archiver-cobalt
+    init: true
+    restart: unless-stopped
+    environment:
+      API_URL: "http://cobalt:9000/"
+      # Cobalt's public-instance defaults make bulk syncs crawl, and the
+      # tunnel limit defaults to only 40/min. This instance is private (not
+      # published outside the app's network), so both limits are raised.
+      RATELIMIT_MAX: "600"
+      RATELIMIT_WINDOW: "60"
+      TUNNEL_RATELIMIT_MAX: "600"
+      TUNNEL_RATELIMIT_WINDOW: "60"
+    expose:
+      - "9000"
+    x-casaos:
+      envs:
+        - container: API_URL
+          description:
+            en_US: URL this Cobalt instance is reachable at from the archiver. Leave as the service-name URL unless you publish Cobalt's port.
+        - container: RATELIMIT_MAX
+          description:
+            en_US: Max resolve API calls per RATELIMIT_WINDOW seconds.
+        - container: TUNNEL_RATELIMIT_MAX
+          description:
+            en_US: Max media download (tunnel) requests per TUNNEL_RATELIMIT_WINDOW seconds. Separate from RATELIMIT_MAX.
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: app
+  store_app_id: tiktok-favorites-archiver
+  author: JackB296
+  developer: JackB296
+  icon: https://raw.githubusercontent.com/JackB296/tiktok-favorites-archiver/main/templates/icon.png
+  thumbnail: ""
+  title:
+    en_US: TikTok Favorites Archive
+  tagline:
+    en_US: Turn your TikTok data export into a local, browsable archive.
+  description:
+    en_US: Self-hosted archiver that downloads the favorites from your TikTok data export through a bundled Cobalt instance and serves them as a local feed and gallery with search, curation, and playback. Media is stored on disk under /DATA/Media/TikTokFavorites, so Plex or Jellyfin can read it directly. Nothing is uploaded anywhere.
+  category: Media
+  port_map: "8080"
+  scheme: http
+  index: /
+  tips:
+    before_install:
+      en_US: |
+        1. You need a TikTok data export to feed the app: in TikTok go to Settings, Account, Download your data, request JSON or TXT, and download the file when it is ready (this can take a day or two). Upload it on the app's Sync tab after install.
+        2. ALLOWED_HOSTS ships as "*" so the dashboard link works immediately, but that weakens the app's DNS-rebinding protection. After install, edit the app's settings and replace "*" with the IP or hostname you actually use, e.g. "192.168.1.20". The app has no login, so keep it on a trusted network.

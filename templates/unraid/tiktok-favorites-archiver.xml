@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>tiktok-favorites-archiver</Name>
+  <Repository>ghcr.io/jackb296/tiktok-favorites-archiver:latest</Repository>
+  <Registry>https://ghcr.io/jackb296/tiktok-favorites-archiver</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/JackB296/tiktok-favorites-archiver/issues</Support>
+  <Project>https://github.com/JackB296/tiktok-favorites-archiver</Project>
+  <Overview>Turns your TikTok data export into a local, browsable archive. Upload the export, and the app downloads your favorited videos through a Cobalt instance, stores them on disk, and serves a local feed and gallery with search, curation, and playback. Everything runs on your server; nothing is uploaded anywhere.&#xD;
+&#xD;
+Requires a companion Cobalt container to resolve downloads. Install the "cobalt" template from this same repository first (or point COBALT_API_URL at an existing Cobalt instance), then set COBALT_API_URL below to its address.&#xD;
+&#xD;
+You also need a TikTok data export (Settings, Account, Download your data) to feed the app. Downloaded media lands in the Downloads path below, so you can point Plex or Jellyfin at it directly.</Overview>
+  <Category>MediaApp:Video Downloaders:</Category>
+  <WebUI>http://[IP]:[PORT:8080]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/JackB296/tiktok-favorites-archiver/main/templates/unraid/tiktok-favorites-archiver.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/JackB296/tiktok-favorites-archiver/main/templates/icon.png</Icon>
+  <Config Name="WebUI Port" Target="8080" Default="8080" Mode="tcp" Description="Port the web interface listens on." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="Downloads" Target="/app/downloads" Default="/mnt/user/media/tiktok-favorites/" Mode="rw" Description="Where downloaded videos, slideshows, and audio are stored. Point Plex/Jellyfin at this folder." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media/tiktok-favorites/</Config>
+  <Config Name="AppData" Target="/app/data" Default="/mnt/user/appdata/tiktok-favorites-archiver/" Mode="rw" Description="SQLite database and application state. Kept separate from the media folder." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/tiktok-favorites-archiver/</Config>
+  <Config Name="COBALT_API_URL" Target="COBALT_API_URL" Default="http://[unraid-ip]:9000/" Mode="" Description="URL of your Cobalt instance. Replace [unraid-ip] with your server's LAN IP if you installed the companion cobalt template on this server (it publishes port 9000). The archiver cannot download anything without it." Type="Variable" Display="always" Required="true" Mask="false">http://[unraid-ip]:9000/</Config>
+  <Config Name="ALLOWED_HOSTS" Target="ALLOWED_HOSTS" Default="*" Mode="" Description="Host header allowlist. '*' answers to any host name, which makes the WebUI work out of the box but weakens the app's DNS-rebinding guard. Strongly recommended: replace '*' with the names you actually use to reach this server, comma-separated, e.g. '192.168.1.20,tower.local'. Requests to loopback are always allowed. The app has no login, so do not expose this port beyond your trusted network." Type="Variable" Display="always" Required="true" Mask="false">*</Config>
+  <Config Name="CONCURRENCY" Target="CONCURRENCY" Default="4" Mode="" Description="Simultaneous download workers." Type="Variable" Display="advanced" Required="false" Mask="false">4</Config>
+  <Config Name="RATE_MAX_CALLS" Target="RATE_MAX_CALLS" Default="4" Mode="" Description="Max Cobalt API calls per RATE_PERIOD seconds. Keep the resulting rate comfortably below Cobalt's RATELIMIT_MAX budget (4 calls/second = 240/minute against the companion template's 600/minute)." Type="Variable" Display="advanced" Required="false" Mask="false">4</Config>
+  <Config Name="RATE_PERIOD" Target="RATE_PERIOD" Default="1.0" Mode="" Description="Window in seconds for RATE_MAX_CALLS." Type="Variable" Display="advanced" Required="false" Mask="false">1.0</Config>
+  <Config Name="SONG_ID_RATE_MAX_CALLS" Target="SONG_ID_RATE_MAX_CALLS" Default="1" Mode="" Description="Shazam song-identification calls per SONG_ID_RATE_PERIOD seconds. Shazam throttles sustained traffic, so keep this gentle for bulk identification." Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+  <Config Name="SONG_ID_RATE_PERIOD" Target="SONG_ID_RATE_PERIOD" Default="6.0" Mode="" Description="Window in seconds for SONG_ID_RATE_MAX_CALLS." Type="Variable" Display="advanced" Required="false" Mask="false">6.0</Config>
+</Container>

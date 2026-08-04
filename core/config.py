@@ -33,6 +33,11 @@ CONCURRENCY = int(os.environ.get("CONCURRENCY", "4"))          # simultaneous it
 RATE_MAX_CALLS = int(os.environ.get("RATE_MAX_CALLS", "8"))    # at most this many Cobalt calls...
 RATE_PERIOD = float(os.environ.get("RATE_PERIOD", "1.0"))      # ...per this many seconds
 APP_PORT = int(os.environ.get("APP_PORT", "8080"))             # web server port
+# Extra Host names the web app may be reached at (comma-separated), for LAN,
+# Tailscale, or reverse-proxy access — e.g. "nas.local,machine.tailnet.ts.net".
+# Loopback names are always allowed; "*" allows any Host but gives up the
+# DNS-rebinding protection the allowlist provides.
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "")
 
 # Song identification (opt-in): a deliberately conservative outbound rate to
 # Shazam, since it is an external service that can throttle or block heavy use.

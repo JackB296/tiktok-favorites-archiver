@@ -175,7 +175,7 @@ img_dir/
 data/
 appdata/
 
-# Local planning / scaffolding docs — not part of the published project
+# Local working notes (specs, plans, research) — deliberately not published.
 docs/
 tasks/
 plans/

@@ -1,6 +1,10 @@
 # Boots the official Cobalt instance + this archive app together.
-#   docker compose up --build
+#   docker compose up -d
 # Then open http://localhost:8080
+#
+# This pulls the prebuilt app image from GHCR. To build from source instead
+# (e.g. you're developing, or you want to audit what you run):
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
 services:
   cobalt:
     # Official Cobalt API image. Check https://github.com/imputnet/cobalt
@@ -31,8 +35,13 @@ services:
       - "9000"
 
   app:
-    build: .
+    image: ghcr.io/jackb296/tiktok-favorites-archiver:latest
     restart: unless-stopped
+    # The container runs as root by default, which is simplest for a first run.
+    # On Linux, to keep ./downloads and ./appdata owned by your own user
+    # instead of root, create both folders first and uncomment (with your
+    # uid:gid from `id -u`/`id -g`):
+    # user: "1000:1000"
     depends_on:
       - cobalt
     environment:
@@ -59,10 +68,23 @@ services:
       ANALYSIS_TIMEOUT: "900"
       OCR_INTERVAL_SECONDS: "2.0"
       OCR_MAX_FRAMES: "600"
+      # Extra Host names the app may be reached at, comma-separated. Loopback
+      # is always allowed. Set this when you access the app from another
+      # device — see "Access from other devices" in the README. Examples:
+      #   ALLOWED_HOSTS: "nas.local"                      # LAN hostname
+      #   ALLOWED_HOSTS: "machine.tailnet-name.ts.net"    # Tailscale MagicDNS
+      #   ALLOWED_HOSTS: "192.168.1.20,archive.home.lan"  # IP + reverse proxy
+      # ALLOWED_HOSTS: ""
     ports:
-      # Bound to localhost: the app has no authentication, so it should not be
-      # reachable from the rest of the network. (Plex reads ./downloads from
-      # disk directly and is unaffected.)
+      # Bound to localhost: the app has no authentication, so out of the box it
+      # is not reachable from the rest of the network. (Plex reads ./downloads
+      # from disk directly and is unaffected.)
+      #
+      # Tailscale users don't need to change this: `tailscale serve` proxies to
+      # localhost. To expose the app on your LAN instead, replace the line with
+      #   - "8080:8080"
+      # and set ALLOWED_HOSTS above — everyone on the network can then reach
+      # your archive, so only do that on a network you trust.
       - "127.0.0.1:8080:8080"
     volumes:
       # Media lands here on the host — point Plex at ./downloads.

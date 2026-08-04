@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The suite itself is stdlib-only; installing the web tier lets the
+      # HTTP-level suite (tests/test_api_http.py) run instead of self-skipping.
+      - name: Install web tier
+        run: pip install -r requirements-web.txt -c constraints.txt
+      - name: Run every test file through its own harness
+        run: |
+          failures=0
+          for f in tests/test_*.py; do
+            echo "== $f"
+            python3 "$f" || failures=1
+          done
+          [ "$failures" -eq 0 ]
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Behavior tests
+        run: npm test
+      - name: Type-check and production build
+        run: npm run build
+
+  docker-image-builds:
+    # Keeps the Dockerfile honest (it compiles whisper.cpp and verifies model
+    # checksums). amd64 only here — the release workflow does multi-arch.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

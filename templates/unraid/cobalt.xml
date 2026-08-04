@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>cobalt</Name>
+  <Repository>ghcr.io/imputnet/cobalt:11</Repository>
+  <Registry>https://ghcr.io/imputnet/cobalt</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/JackB296/tiktok-favorites-archiver/issues</Support>
+  <Project>https://github.com/imputnet/cobalt</Project>
+  <Overview>Cobalt media downloader API. This template exists as the companion for tiktok-favorites-archiver, which uses it to resolve and download TikTok media; it is an API only and has no web interface of its own.&#xD;
+&#xD;
+The rate-limit defaults here match what the archiver's own docker-compose ships: Cobalt's public-instance defaults would make bulk syncs crawl (every call gets a 429 and a long backoff), and its tunnel limit defaults to only 40/min, so both the resolve limit (RATELIMIT_MAX) and the tunnel limit (TUNNEL_RATELIMIT_MAX) are raised to 600/min. Only run these relaxed limits on a private instance that is not exposed to the internet.</Overview>
+  <Category>Downloaders:</Category>
+  <TemplateURL>https://raw.githubusercontent.com/JackB296/tiktok-favorites-archiver/main/templates/unraid/cobalt.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/imputnet/cobalt/main/web/static/favicon.png</Icon>
+  <ExtraParams>--init</ExtraParams>
+  <Config Name="API Port" Target="9000" Default="9000" Mode="tcp" Description="Port the Cobalt API listens on. The archiver's COBALT_API_URL should point at this port." Type="Port" Display="always" Required="true" Mask="false">9000</Config>
+  <Config Name="API_URL" Target="API_URL" Default="http://[unraid-ip]:9000/" Mode="" Description="The URL this Cobalt instance is reachable at. Cobalt embeds it in the download links it hands out, so it must be an address the archiver container can actually reach. Replace [unraid-ip] with your server's LAN IP and keep the port in sync with the API Port above." Type="Variable" Display="always" Required="true" Mask="false">http://[unraid-ip]:9000/</Config>
+  <Config Name="RATELIMIT_MAX" Target="RATELIMIT_MAX" Default="600" Mode="" Description="Resolve API budget: max resolve calls per RATELIMIT_WINDOW seconds. The archiver's RATE_MAX_CALLS/RATE_PERIOD must stay under this." Type="Variable" Display="advanced" Required="false" Mask="false">600</Config>
+  <Config Name="RATELIMIT_WINDOW" Target="RATELIMIT_WINDOW" Default="60" Mode="" Description="Window in seconds for RATELIMIT_MAX." Type="Variable" Display="advanced" Required="false" Mask="false">60</Config>
+  <Config Name="TUNNEL_RATELIMIT_MAX" Target="TUNNEL_RATELIMIT_MAX" Default="600" Mode="" Description="Media stream budget: max tunnel (download) requests per TUNNEL_RATELIMIT_WINDOW seconds. This is separate from RATELIMIT_MAX and defaults to only 40/min upstream, which stalls bulk downloads; each archived favorite makes one resolve AND one tunnel request." Type="Variable" Display="advanced" Required="false" Mask="false">600</Config>
+  <Config Name="TUNNEL_RATELIMIT_WINDOW" Target="TUNNEL_RATELIMIT_WINDOW" Default="60" Mode="" Description="Window in seconds for TUNNEL_RATELIMIT_MAX." Type="Variable" Display="advanced" Required="false" Mask="false">60</Config>
+</Container>

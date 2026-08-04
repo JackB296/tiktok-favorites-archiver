@@ -1,0 +1,29 @@
+manifestVersion: 1
+id: tiktok-favorites-archiver
+category: media
+name: TikTok Favorites Archive
+version: "1.0.0"
+tagline: Turn your TikTok data export into a local, browsable archive
+description: >-
+  Self-hosted archiver that downloads the favorites from your TikTok data
+  export through a bundled Cobalt instance and serves them as a local feed
+  and gallery with search, curation, and playback.
+
+
+  Request your data export in TikTok (Settings, Account, Download your data),
+  upload the file on the Sync tab, and the app fetches each favorited video,
+  stores it on disk, and keeps a SQLite catalog alongside. Media lands in the
+  app's data directory, so Plex or Jellyfin can read it directly. Everything
+  runs on your Umbrel; nothing is uploaded anywhere.
+developer: JackB296
+website: https://github.com/JackB296/tiktok-favorites-archiver
+dependencies: []
+repo: https://github.com/JackB296/tiktok-favorites-archiver
+support: https://github.com/JackB296/tiktok-favorites-archiver/issues
+port: 8480
+gallery: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""
+submitter: JackB296
+submission: https://github.com/JackB296/tiktok-favorites-archiver

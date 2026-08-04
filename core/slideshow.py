@@ -83,6 +83,9 @@ def create_slideshow(images, audio, output_filename, duration_per_image=config.D
         clip.write_videofile(
             tmp_output, codec="libx264", fps=24,
             ffmpeg_params=["-crf", "18", "-pix_fmt", "yuv420p"],
+            # moviepy 1.x otherwise writes its audio temp file to the process
+            # CWD, which is not writable when the container runs as non-root.
+            temp_audiofile=os.path.join(tmpdir, "snd.mp3"),
         )
         os.replace(tmp_output, output_filename)
         return True

@@ -31,6 +31,48 @@ def test_mutations_accept_the_custom_marker_or_an_exact_same_origin():
     ) is True
 
 
+def test_parse_extra_hosts_accepts_names_ports_wildcard_and_rejects_junk():
+    parse = request_security.parse_extra_hosts
+    assert parse(None) == frozenset()
+    assert parse("") == frozenset()
+    assert parse("nas.local") == {"nas.local"}
+    assert parse("NAS.local:8080, machine.tailnet.ts.net ,") == {
+        "nas.local", "machine.tailnet.ts.net",
+    }
+    assert parse("[fd7a::2]:8080") == {"fd7a::2"}
+    assert parse("*") == {request_security.WILDCARD}
+    for junk in ("user@nas.local", "http://nas.local", "nas.local/path"):
+        try:
+            parse(junk)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {junk!r}")
+
+
+def test_extra_hosts_extend_but_do_not_replace_the_loopback_allowlist():
+    policy = request_security.LocalRequestPolicy(
+        request_security.DEFAULT_ALLOWED_HOSTS | {"nas.local"},
+    )
+    assert policy.allows("GET", "http", "nas.local:8080", None, None) is True
+    assert policy.allows("GET", "http", "localhost:8080", None, None) is True
+    assert policy.allows("GET", "http", "evil.example:8080", None, None) is False
+    assert policy.allows(
+        "POST", "http", "nas.local:8080", None, request_security.REQUEST_MARKER,
+    ) is True
+    assert policy.allows("POST", "http", "nas.local:8080", None, None) is False
+
+
+def test_wildcard_allows_any_valid_host_but_still_requires_write_intent():
+    policy = request_security.LocalRequestPolicy({request_security.WILDCARD})
+    assert policy.allows("GET", "http", "anything.example:8080", None, None) is True
+    assert policy.allows("GET", "http", "user@bad", None, None) is False
+    assert policy.allows("POST", "http", "anything.example:8080", None, None) is False
+    assert policy.allows(
+        "POST", "http", "anything.example:8080", None, request_security.REQUEST_MARKER,
+    ) is True
+
+
 def test_cross_site_forms_untrusted_hosts_and_unmarked_clients_are_rejected():
     policy = _policy()
     cases = (

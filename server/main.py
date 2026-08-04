@@ -58,11 +58,16 @@ def _file_chunks(opened, start, length):
 def create_app(db_path=None, download_dir=None, jobs=None, allowed_hosts=None):
     """Build the app. ``jobs`` is injectable — tests supply a JobManager with
     fake runners so the whole HTTP surface is exercisable without moviepy or
-    requests; production uses the real one. Production accepts only loopback
-    Host names; ``allowed_hosts`` lets tests provide their synthetic Host."""
+    requests; production uses the real one. Production accepts loopback Host
+    names plus any extras named in ``ALLOWED_HOSTS`` (LAN, Tailscale, reverse
+    proxy); ``allowed_hosts`` lets tests provide their synthetic Host."""
     db_path = db_path or config.DB_FILE
     download_dir = os.path.abspath(download_dir or config.DOWNLOAD_DIR)
     os.makedirs(download_dir, exist_ok=True)
+    if allowed_hosts is None:
+        allowed_hosts = request_security.DEFAULT_ALLOWED_HOSTS | request_security.parse_extra_hosts(
+            config.ALLOWED_HOSTS,
+        )
 
     app = FastAPI(title="TikTok Favorites Archive")
     store.init_db(store.connect(db_path)).close()  # ensure schema exists at startup
