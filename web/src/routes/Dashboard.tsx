@@ -23,7 +23,7 @@ import { nextScheduleLabel, scheduleRule } from "../lib/schedulePresentation";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "ignored", "expired"];
 
-type RunAction = "start" | "backfill" | "reindex" | "sidecars" | "repair-audio" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop";
+type RunAction = "start" | "backfill" | "reindex" | "sidecars" | "repair-audio" | "repair-slideshow-audio" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop";
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -40,6 +40,7 @@ export function Dashboard() {
   const [indexProgress, setIndexProgress] = useState<ProgressEvent | null>(null);
   const [sidecarsProgress, setSidecarsProgress] = useState<ProgressEvent | null>(null);
   const [audioRepairProgress, setAudioRepairProgress] = useState<ProgressEvent | null>(null);
+  const [slideshowAudioProgress, setSlideshowAudioProgress] = useState<ProgressEvent | null>(null);
   const [enrichmentProgress, setEnrichmentProgress] = useState<ProgressEvent | null>(null);
   const [identificationProgress, setIdentificationProgress] = useState<ProgressEvent | null>(null);
   const [backfillProgress, setBackfillProgress] = useState<ProgressEvent | null>(null);
@@ -151,6 +152,7 @@ export function Dashboard() {
       if (e.event === "indexing") setIndexProgress(e);
       if (e.event === "sidecars") setSidecarsProgress(e);
       if (e.event === "audio-repair") setAudioRepairProgress(e);
+      if (e.event === "slideshow-audio") setSlideshowAudioProgress(e);
       if (e.event === "enrichment") setEnrichmentProgress(e);
       if (e.event === "identification") setIdentificationProgress(e);
       if (e.event === "backfill") setBackfillProgress(e);
@@ -240,6 +242,7 @@ export function Dashboard() {
     if (a === "identify") setIdentificationProgress(null);
     if (a === "backfill") setBackfillProgress(null);
     if (a === "repair-audio") setAudioRepairProgress(null);
+    if (a === "repair-slideshow-audio") setSlideshowAudioProgress(null);
     try {
       const result = await api.syncAction(a, opts);
       if ("started" in result && result.started === false) setRunActionError({ action: a, message: "Another Archive run is already active." });
@@ -452,6 +455,24 @@ export function Dashboard() {
               : `${statistics?.audio_repairs ?? 0} indexed local video${statistics?.audio_repairs === 1 ? "" : "s"} currently ${statistics?.audio_repairs === 1 ? "needs" : "need"} sound repair.`}
           </p>
           {actionError("repair-audio") && <p className="mt-3 text-sm text-bad" role="alert">{actionError("repair-audio")}</p>}
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Slideshow sound recovery</h2>
+              <p className="mt-1 text-sm text-ink-dim">Finds slideshows that were archived with the fallback track instead of their own sound — including ones built when a different default was in use — and refetches the real audio, rebuilding the MP4 around it. Any song "identified" from a fallback track is cleared, because it described the default, not the favorite. Where the sound is gone for good, the favorite is marked so it is never counted as that track again.</p>
+            </div>
+            <Button variant="ghost" disabled={running} onClick={() => act("repair-slideshow-audio")}>
+              <ArrowClockwise size={16} /> Recover sound
+            </Button>
+          </div>
+          <p className="mt-3 text-sm text-ink-dim">
+            {slideshowAudioProgress?.event === "slideshow-audio"
+              ? `Checking ${slideshowAudioProgress.completed ?? 0} of ${slideshowAudioProgress.total ?? 0}: ${slideshowAudioProgress.recovered ?? 0} recovered${slideshowAudioProgress.unavailable ? `, ${slideshowAudioProgress.unavailable} unavailable` : ""}`
+              : `${statistics?.slideshow_audio_repairs ?? 0} slideshow${statistics?.slideshow_audio_repairs === 1 ? " is" : "s are"} known to be carrying the fallback track${statistics?.slideshow_audio_unchecked ? `, and ${statistics.slideshow_audio_unchecked} have not been checked yet` : ""}.`}
+          </p>
+          {actionError("repair-slideshow-audio") && <p className="mt-3 text-sm text-bad" role="alert">{actionError("repair-slideshow-audio")}</p>}
         </section>
 
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">

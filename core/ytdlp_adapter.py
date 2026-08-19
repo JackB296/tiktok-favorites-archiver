@@ -343,3 +343,93 @@ def download_best_video(link, destination, ydl_class=None, inspect=None,
         return False
     finally:
         shutil.rmtree(temporary_dir, ignore_errors=True)
+
+
+def download_audio(link, destination, ydl_class=None):
+    """Download the post's audio-only rendition to ``destination`` as MP3.
+
+    The route that does not involve Cobalt at all: TikTok exposes a photo post's
+    soundtrack as a plain audio format, so this works for slideshows, whose
+    sound Cobalt's passthrough tunnel is unreliable about.
+    """
+    if ydl_class is None:
+        from yt_dlp import YoutubeDL
+        suppress_accept_encoding()
+        ydl_class = YoutubeDL
+    parent = os.path.dirname(os.path.abspath(destination))
+    os.makedirs(parent, exist_ok=True)
+    temporary_dir = tempfile.mkdtemp(prefix="ytdlp-audio-", dir=parent)
+    try:
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "noprogress": True,
+            "outtmpl": os.path.join(temporary_dir, "audio.%(ext)s"),
+            "format": "bestaudio/best",
+            "socket_timeout": 30,
+            "retries": 3,
+            "noplaylist": True,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "0",
+            }],
+        }
+        try:
+            with ydl_class(options) as ydl:
+                ydl.download([canonical_post_url(link)])
+        except Exception:
+            return False
+        produced = [
+            os.path.join(temporary_dir, name)
+            for name in os.listdir(temporary_dir)
+            if not name.endswith((".part", ".ytdl"))
+            and os.path.isfile(os.path.join(temporary_dir, name))
+        ]
+        if not produced:
+            return False
+        # Prefer the transcoded MP3; fall back to whatever single file remains
+        # when FFmpeg post-processing was unavailable.
+        chosen = next(
+            (path for path in produced if path.lower().endswith(".mp3")),
+            max(produced, key=os.path.getsize),
+        )
+        os.replace(chosen, destination)
+        return os.path.getsize(destination) > 0
+    except Exception:
+        return False
+    finally:
+        shutil.rmtree(temporary_dir, ignore_errors=True)
+
+
+# Placeholder music titles TikTok reports when a post carries no real track
+# (an original recording, or a creator's own voice). Treating these as an
+# identified song would be the same mistake as trusting the fallback audio.
+_NON_TRACK_TITLES = frozenset({
+    "original sound", "originalton", "son original", "sonido original",
+    "suono originale", "оригинальный звук", "original audio",
+})
+
+
+def extract_track(link, info=None, ydl_class=None):
+    """The post's own music credit from TikTok, or ``None``.
+
+    TikTok names the sound a post uses, so for the many favorites that use a
+    catalogued track this is an exact answer that needs no acoustic matching at
+    all. Returns ``{"title", "artist", "album"}``; a creator's own audio (which
+    TikTok labels "original sound") is reported as no track rather than as a
+    song called "original sound".
+    """
+    if info is None:
+        info = extract_post(link, include_comments=False, ydl_class=ydl_class)
+    if not info:
+        return None
+    title = (info.get("track") or "").strip()
+    artist = (info.get("artist") or "").strip()
+    if not title or title.lower() in _NON_TRACK_TITLES:
+        return None
+    return {
+        "title": title,
+        "artist": artist or None,
+        "album": (info.get("album") or "").strip() or None,
+    }

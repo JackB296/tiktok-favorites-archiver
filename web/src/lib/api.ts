@@ -367,7 +367,7 @@ export const api = {
     return json<LegacyBootstrapResult>("/api/import/legacy-apply", { method: "POST", body });
   },
 
-  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "repair-audio" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop", opts?: { recheck?: boolean }) =>
+  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "repair-audio" | "repair-slideshow-audio" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop", opts?: { recheck?: boolean }) =>
     json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}${opts?.recheck ? "?recheck=1" : ""}`, { method: "POST" }),
 
   /** Subscribe to the SSE progress stream. Returns an unsubscribe fn. */

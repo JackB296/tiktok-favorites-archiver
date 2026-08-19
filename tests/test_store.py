@@ -537,7 +537,8 @@ def test_library_statistics_summarize_indexed_archive_media():
     assert store.library_statistics(conn) == {
         "favorites": 3, "ready": 2, "videos": 2, "slideshows": 1,
         "indexed": 2, "duration_s": 150.0, "media_size": 300,
-        "audio_repairs": 1,
+        "audio_repairs": 1, "slideshow_audio_repairs": 0,
+        "slideshow_audio_unchecked": 0,
     }
 
 

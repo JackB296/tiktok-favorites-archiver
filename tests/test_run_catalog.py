@@ -15,13 +15,13 @@ def test_catalog_contains_every_existing_user_run_and_action_name():
         "snapshot",
         "snapshot-restore",
         "discovery-backfill",
-        "verify", "coverage-repair", "creator-followups",
+        "verify", "coverage-repair", "creator-followups", "slideshow-audio",
     }
     assert {
         action: run_catalog.kind_for_action(action)
         for action in (
             "start", "backfill", "reindex", "sidecars", "enrich", "identify",
-            "analyze", "repair-audio", "discovery",
+            "analyze", "repair-audio", "discovery", "repair-slideshow-audio",
         )
     } == {
         "start": "sync",
@@ -33,6 +33,7 @@ def test_catalog_contains_every_existing_user_run_and_action_name():
         "analyze": "analyze",
         "repair-audio": "audio-repair",
         "discovery": "discovery-backfill",
+        "repair-slideshow-audio": "slideshow-audio",
     }
 
 

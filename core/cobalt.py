@@ -25,14 +25,33 @@ def _result(kind, url=None, images=None, audio=None, error=None, status=None):
     return Result(kind, url, images, audio, error, status)
 
 
-def create_payload(url):
-    return {
+# TikTok slideshow soundtracks must be requested as a concrete codec.
+# ``audioFormat: "best"`` asks Cobalt to pass the original stream through
+# untouched, and for photo posts that path produces a tunnel that answers
+# HTTP 200 with **zero bytes** — a silent failure the caller can only see as an
+# empty file. Naming a format makes Cobalt transcode through FFmpeg, which
+# returns the real track. "mp3" is also what the archive stores on disk
+# (``<n>/audio.mp3``), so nothing downstream has to change.
+AUDIO_FORMAT = "mp3"
+
+
+def create_payload(url, download_mode=None):
+    """The Cobalt request body for ``url``.
+
+    ``download_mode="audio"`` asks for the soundtrack alone, which is the
+    independent second route used when a picker's own audio URL comes back
+    empty.
+    """
+    payload = {
         "url": url,
         "videoQuality": "max",
         "allowH265": True,
-        "audioFormat": "best",
+        "audioFormat": AUDIO_FORMAT,
         "tiktokFullAudio": True,
     }
+    if download_mode:
+        payload["downloadMode"] = download_mode
+    return payload
 
 
 def parse_response(data):
@@ -96,11 +115,12 @@ def _retry_after_seconds(resp):
         return None
 
 
-def _default_post(link):
+def _default_post(link, download_mode=None):
     import requests  # lazy: keeps the module importable without requests
     return requests.post(
         config.COBALT_API_URL, headers=config.HEADERS,
-        data=json.dumps(create_payload(link)), timeout=config.REQUEST_TIMEOUT,
+        data=json.dumps(create_payload(link, download_mode)),
+        timeout=config.REQUEST_TIMEOUT,
     )
 
 
@@ -144,6 +164,26 @@ def resolve(link, poster=None, limiter=None, max_retries=5, base_backoff=1.0, sl
                 return parse_response(data)
         return _result("transient", error=f"HTTP {code}", status=str(code))
     return _result("transient", error="rate limited (max retries exceeded)")
+
+
+def resolve_audio(link, poster=None, limiter=None, max_retries=5, base_backoff=1.0,
+                  sleep=time.sleep):
+    """Resolve ``link`` in audio-only mode and return a direct soundtrack URL.
+
+    A photo post has no video rendition, so Cobalt answers this mode with a
+    plain tunnel whose payload is the sound alone. This is the route used when
+    the picker response's own ``audio`` URL turns out to be empty.
+    """
+    base = poster or _default_post
+
+    def audio_poster(target):
+        return base(target, download_mode="audio")
+
+    result = resolve(
+        link, poster=audio_poster, limiter=limiter, max_retries=max_retries,
+        base_backoff=base_backoff, sleep=sleep,
+    )
+    return result.url if result.kind == "video" else None
 
 
 def check_cobalt(url):

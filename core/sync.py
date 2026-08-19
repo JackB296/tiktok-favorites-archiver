@@ -14,14 +14,20 @@ import os
 import logging
 from collections import namedtuple
 
-from core import config, indexer as archive_indexer, layout, media, runs, store
+from core import (
+    config, fallback_audio, indexer as archive_indexer, layout, media, runs, store,
+)
 
 # Injectable work backends (real ones wired in build_default_deps).
+#
+# ``audio_sources`` + ``fallback_fingerprints`` are what let a slideshow's
+# soundtrack be fetched by more than one route and checked against the default
+# tracks, so a substitution is recorded instead of archived as if it were real.
 Deps = namedtuple(
     "Deps",
     "resolve download_file build_slideshow save_assets default_audio "
-    "ytdlp_download inspect_media source_probe",
-    defaults=(None, None, None),
+    "ytdlp_download inspect_media source_probe audio_sources fallback_fingerprints",
+    defaults=(None, None, None, None, ()),
 )
 
 
@@ -135,13 +141,17 @@ def process_item(deps, download_dir, item):
         if not result.images:
             return {"status": "failed", "kind": "slideshow", "error": "no images in response"}
 
-        def encode(images, audio):
+        def encode(images, audio, audio_source):
             out = layout.movie(download_dir, n)
             if deps.build_slideshow(images, audio, out):
-                return {"status": "done", "kind": "slideshow", "has_assets": 1}
-            return {"status": "failed", "kind": "slideshow", "has_assets": 1, "error": "encode failed"}
+                return {"status": "done", "kind": "slideshow", "has_assets": 1,
+                        "audio_source": audio_source}
+            return {"status": "failed", "kind": "slideshow", "has_assets": 1,
+                    "audio_source": audio_source, "error": "encode failed"}
 
-        outcome = media.recover_slideshow_assets(deps, download_dir, n, result.images, result.audio, encode)
+        outcome = media.recover_slideshow_assets(
+            deps, download_dir, n, item["link"], result.images, result.audio, encode,
+        )
         if outcome is None:
             return {"status": "failed", "kind": "slideshow", "error": "all images failed"}
         return outcome
@@ -164,9 +174,9 @@ def process_item(deps, download_dir, item):
     return {"status": "failed", "kind": "unknown", "error": _errstr(result.error)}
 
 
-def build_default_deps(limiter=None, default_audio=None):
+def build_default_deps(limiter=None, default_audio=None, fallback_fingerprints=()):
     """Wire the real backends (lazy-imports the heavy deps)."""
-    from core import cobalt, download, slideshow, assets, media_index, ytdlp_adapter
+    from core import cobalt, download, slideshow, assets, media_index, slideshow_audio, ytdlp_adapter
     if limiter is None:
         limiter = cobalt.RateLimiter(config.RATE_MAX_CALLS, config.RATE_PERIOD)
     return Deps(
@@ -178,6 +188,8 @@ def build_default_deps(limiter=None, default_audio=None):
         ytdlp_download=ytdlp_adapter.download_best_video,
         inspect_media=media_index.inspect_media,
         source_probe=ytdlp_adapter.extract_post,
+        audio_sources=slideshow_audio.build_sources(limiter=limiter),
+        fallback_fingerprints=fallback_fingerprints,
     )
 
 
@@ -186,6 +198,7 @@ def _default_deps_for(conn, download_dir):
     name = store.get_library_settings(conn)["default_audio_name"]
     return build_default_deps(
         default_audio=media.resolve_default_audio(download_dir, name, config.DEFAULT_AUDIO),
+        fallback_fingerprints=fallback_audio.known(download_dir, custom_name=name),
     )
 
 
@@ -276,9 +289,12 @@ def backfill_item(deps, download_dir, item):
             deps,
             download_dir,
             item["id"],
+            item["link"],
             result.images,
             result.audio,
-            lambda _images, _audio: {"kind": "slideshow", "has_assets": 1},
+            lambda _images, _audio, audio_source: {
+                "kind": "slideshow", "has_assets": 1, "audio_source": audio_source,
+            },
         )
         if outcome is None:
             return {"kind": "slideshow", "has_assets": 0}

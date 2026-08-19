@@ -306,7 +306,7 @@ export interface ProgressEvent {
   item_kind?: Kind | "transient";
   phase?: string | null;
   has_assets?: number;
-  event?: "complete" | "error" | "indexing" | "sidecars" | "portable-metadata" | "audio-repair" | "enrichment" | "identification" | "analysis" | "verify" | "backfill" | "transfer";
+  event?: "complete" | "error" | "indexing" | "sidecars" | "portable-metadata" | "audio-repair" | "slideshow-audio" | "enrichment" | "identification" | "analysis" | "verify" | "backfill" | "transfer";
   error?: string;
   indexed?: number;
   failed?: number;
@@ -567,6 +567,8 @@ export interface LibraryStatistics {
   duration_s: number;
   media_size: number;
   audio_repairs: number;
+  slideshow_audio_repairs: number;
+  slideshow_audio_unchecked: number;
 }
 
 export interface GalleryPresetFilters {
@@ -880,7 +882,7 @@ export interface CommentSearchPage {
 }
 
 export interface CoverageCategory {
-  key: "source_metadata" | "comments" | "thumbnails" | "transcripts" | "ocr" | "songs" | "portable_metadata" | "audio";
+  key: "source_metadata" | "comments" | "thumbnails" | "transcripts" | "ocr" | "songs" | "portable_metadata" | "audio" | "slideshow_audio";
   label: string;
   eligible: number;
   ready: number;

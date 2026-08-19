@@ -163,6 +163,74 @@ def test_temp_clip_is_removed():
     assert seen and not os.path.exists(seen[0])  # clip cleaned up after use
 
 
+def test_the_posts_own_music_credit_is_used_when_shazam_finds_nothing():
+    """Acoustic matching misses tracks Shazam does not hold. TikTok names the
+    sound itself, so a miss is not the end of the road."""
+    conn = store.init_db(store.connect(":memory:"))
+    item = _done_audio_item(conn, "https://tiktok.com/photo/1")
+
+    source, extractor, identifier, _ = _fakes({})  # Shazam matches nothing
+    asked = []
+
+    def credit(link):
+        asked.append(link)
+        return {"title": "Echo", "artist": "Clairo", "album": "Charm"}
+
+    identify.identify_items(conn, ".", identifier=identifier, source=source,
+                            extractor=extractor, limiter=_no_op_limiter(),
+                            credit=credit)
+
+    row = store.get_item(conn, item)
+    song = store.get_song(conn, row["song_id"])
+    assert asked == ["https://tiktok.com/photo/1"]
+    assert row["song_status"] == "identified" and row["song_source"] == "source"
+    assert (song["title"], song["artist"]) == ("Echo", "Clairo")
+
+
+def test_a_shazam_match_is_not_second_guessed_by_the_credit():
+    conn = store.init_db(store.connect(":memory:"))
+    item = _done_audio_item(conn, "https://tiktok.com/a")
+
+    source, extractor, identifier, _ = _fakes({item: _match("Real", key="r")})
+    asked = []
+
+    identify.identify_items(conn, ".", identifier=identifier, source=source,
+                            extractor=extractor, limiter=_no_op_limiter(),
+                            credit=lambda link: asked.append(link))
+
+    assert asked == []
+    assert store.get_item(conn, item)["song_source"] == "auto"
+
+
+def test_a_credit_lookup_that_fails_is_recorded_as_a_plain_miss():
+    conn = store.init_db(store.connect(":memory:"))
+    item = _done_audio_item(conn, "https://tiktok.com/a")
+
+    source, extractor, identifier, _ = _fakes({})
+
+    def credit(link):
+        raise RuntimeError("TikTok said no")
+
+    identify.identify_items(conn, ".", identifier=identifier, source=source,
+                            extractor=extractor, limiter=_no_op_limiter(),
+                            credit=credit)
+
+    assert store.get_item(conn, item)["song_status"] == "no_match"
+
+
+def test_a_slideshow_carrying_the_fallback_track_is_never_identified():
+    """The whole point of recording provenance: the default track must not be
+    identified once per affected favorite and become the library's top song."""
+    conn = store.init_db(store.connect(":memory:"))
+    real = _done_audio_item(conn, "https://tiktok.com/real")
+    substituted = _done_audio_item(conn, "https://tiktok.com/substituted")
+    store.set_audio_source(conn, substituted, "fallback")
+
+    eligible = [row["id"] for row in store.items_needing_identification(conn)]
+
+    assert eligible == [real]
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

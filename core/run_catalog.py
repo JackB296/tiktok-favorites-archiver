@@ -2,7 +2,10 @@
 from dataclasses import dataclass
 import os
 
-from core import analysis, audio_repair, coverage, discovery, enrich, identify, profile_import, sidecars, snapshots, storage, store, sync, verify
+from core import (
+    analysis, audio_repair, coverage, discovery, enrich, identify, profile_import,
+    sidecars, slideshow_audio_repair, snapshots, storage, store, sync, verify,
+)
 
 
 def _run_verify(conn, download_dir, control=None):
@@ -34,6 +37,7 @@ _SPECS = {
     "index": RunSpec("index", "reindex", sync.run_index, ("index",), "Gallery index", "Rebuild thumbnails and media facts.", True),
     "sidecars": RunSpec("sidecars", "sidecars", sidecars.run_sidecars, ("sidecars",), "Media sidecars", "Write media-server metadata.", True),
     "audio-repair": RunSpec("audio-repair", "repair-audio", audio_repair.run_audio_repair, ("audio-repair",), "Repair silent videos", "Retry indexed videos with missing or silent audio through yt-dlp.", True),
+    "slideshow-audio": RunSpec("slideshow-audio", "repair-slideshow-audio", slideshow_audio_repair.run_slideshow_audio_repair, ("slideshow-audio",), "Repair slideshow audio", "Recover the original soundtrack of slideshows archived with the default track.", True),
     "coverage-repair": RunSpec("coverage-repair", None, coverage.run_repair, ("coverage-repair",), "Coverage repair", "Fill selected metadata, comment, index, analysis, song, portable metadata, or audio gaps.", True),
     "enrich": RunSpec("enrich", "enrich", enrich.run_enrichment, ("enrich",), "Search metadata", "Fetch missing captions and creator names.", True),
     "identify": RunSpec("identify", "identify", identify.run_identification, ("identify",), "Song identification", "Identify songs in archived media.", True),
@@ -126,6 +130,12 @@ def has_work(conn, kind, download_dir=None):
             store.creator_enrichment_ids(conn, "creator_analyze_requested")
             or store.creator_enrichment_ids(conn, "creator_identify_requested")
         )
+    if kind == "slideshow-audio":
+        # Work means a slideshow known to hold a substituted track, or one
+        # never classified — a classified-original archive has nothing to do.
+        return bool(download_dir is not None and any(
+            item["audio_source"] != "original" for item in store.items_with_assets(conn)
+        ))
     if kind == "audio-repair":
         return bool(
             download_dir is not None

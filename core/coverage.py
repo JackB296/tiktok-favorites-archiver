@@ -1,7 +1,10 @@
 """Fast archive completeness reporting and targeted, idempotent repair."""
 import threading
 
-from core import analysis, audio_repair, identify, indexer, portable_metadata, source_health, source_metadata, store
+from core import (
+    analysis, audio_repair, identify, indexer, portable_metadata, slideshow_audio_repair,
+    source_health, source_metadata, store,
+)
 
 
 def _category(key, label, eligible, ready, failed=0, description=""):
@@ -32,6 +35,9 @@ def report(conn):
           SUM(portable_metadata_status = 'ok') AS portable_ready,
           SUM(portable_metadata_status = 'error') AS portable_failed,
           SUM(has_audio = 1 AND COALESCE(audio_silent, 0) = 0) AS audio_ready,
+          SUM(has_assets = 1 AND offloaded = 0 AND archive_missing = 0) AS slideshow_eligible,
+          SUM(has_assets = 1 AND offloaded = 0 AND archive_missing = 0
+              AND audio_source = 'original') AS slideshow_audio_ready,
           SUM(status = 'done' AND offloaded = 0 AND archive_missing = 0
               AND indexed_at IS NOT NULL) AS indexed
         FROM item
@@ -54,6 +60,7 @@ def report(conn):
         _category("songs", "Identified songs", indexed, row["songs_ready"], row["songs_failed"], "Recognized music attached to posts."),
         _category("portable_metadata", "Portable metadata", indexed, row["portable_ready"], row["portable_failed"], "Metadata embedded into local media files."),
         _category("audio", "Usable audio", indexed, row["audio_ready"], 0, "Indexed videos with a non-silent audio stream."),
+        _category("slideshow_audio", "Slideshow sound", row["slideshow_eligible"], row["slideshow_audio_ready"], 0, "Slideshows confirmed to hold their own soundtrack rather than the fallback track."),
     ]
     return {"total_items": total, "categories": categories, "source_health": source_health.report(conn)}
 
@@ -62,7 +69,7 @@ def run_repair(conn, download_dir, targets=None, item_ids=None, progress=None,
                wait=None, control=None):
     """Repair selected coverage categories; every underlying worker is resumable."""
     targets = list(dict.fromkeys(targets or []))
-    allowed = {"source_metadata", "comments", "thumbnails", "transcripts", "ocr", "songs", "portable_metadata", "audio"}
+    allowed = {"source_metadata", "comments", "thumbnails", "transcripts", "ocr", "songs", "portable_metadata", "audio", "slideshow_audio"}
     unknown = set(targets) - allowed
     if unknown:
         raise ValueError("unknown coverage target: " + ", ".join(sorted(unknown)))
@@ -153,6 +160,10 @@ def run_repair(conn, download_dir, targets=None, item_ids=None, progress=None,
             result["audio"] = audio_repair.run_audio_repair(
                 conn, download_dir, item_ids=ids, progress=notify,
                 should_continue=should_continue,
+            )
+        if "slideshow_audio" in targets:
+            result["slideshow_audio"] = slideshow_audio_repair.run_slideshow_audio_repair(
+                conn, download_dir, control=control, item_ids=ids, progress=notify,
             )
     finally:
         if source_thread is not None:

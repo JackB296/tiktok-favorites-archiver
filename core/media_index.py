@@ -97,6 +97,42 @@ def inspect_media(path, runner=subprocess.run):
     )
 
 
+AudioFacts = namedtuple("AudioFacts", "duration_s codec file_size silent")
+
+
+def inspect_audio(path, runner=subprocess.run):
+    """Read the facts of an audio-only file (a slideshow's ``audio.mp3``).
+
+    ``inspect_media`` insists on a video stream, so a bare soundtrack needs its
+    own probe. Raises when the file holds no decodable audio at all, which is
+    exactly the "the download produced junk" case callers must not accept.
+    """
+    result = runner(
+        [
+            "ffprobe", "-v", "error", "-show_entries",
+            "format=duration:stream=codec_type,codec_name",
+            "-of", "json", path,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    data = json.loads(result.stdout)
+    audio = next(
+        (stream for stream in data.get("streams", []) if stream.get("codec_type") == "audio"),
+        None,
+    )
+    if audio is None:
+        raise ValueError("no audio stream in file")
+    peak = measure_max_volume_db(path, runner)
+    return AudioFacts(
+        float(data.get("format", {}).get("duration") or 0),
+        audio.get("codec_name") or "unknown",
+        os.path.getsize(path),
+        peak is not None and peak <= SILENCE_MAX_DB,
+    )
+
+
 def file_fingerprint(path):
     """Cheap identity for a media file (size + mtime) to detect a stale index."""
     stat = os.stat(path)

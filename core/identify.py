@@ -41,13 +41,38 @@ def _identify_one(download_dir, item_id, identifier, source, extractor):
             pass
 
 
+def _credited_match(link, credit):
+    """The post's own music credit as a SongMatch, or None.
+
+    TikTok names the sound a post uses. Acoustic matching can miss a track
+    Shazam does not hold, so consulting the credit after a miss recovers songs
+    that would otherwise be lost — and it costs a request only for the items
+    that actually missed.
+    """
+    if credit is None or not link:
+        return None
+    try:
+        track = credit(link)
+    except Exception:
+        return None
+    if not track:
+        return None
+    return songid.SongMatch(
+        key=None, title=track["title"], artist=track.get("artist"),
+        album=track.get("album"),
+    )
+
+
 def identify_items(conn, download_dir, identifier=None, source=None, extractor=None,
                    limiter=None, progress=None, should_continue=None, retry_no_match=False,
-                   item_ids=None):
+                   item_ids=None, credit=None):
     """Identify songs for items that need it. Returns the count newly identified."""
     identifier = identifier or songid.recognize
     source = source or layout.source_audio
     extractor = extractor or media_index.extract_clip
+    if credit is None:
+        from core import ytdlp_adapter
+        credit = ytdlp_adapter.extract_track
     if limiter is None:
         limiter = RateLimiter(config.SONG_ID_RATE_MAX_CALLS, config.SONG_ID_RATE_PERIOD)
 
@@ -68,13 +93,17 @@ def identify_items(conn, download_dir, identifier=None, source=None, extractor=N
         title = None
         try:
             match = _identify_one(download_dir, item_id, identifier, source, extractor)
+            matched_by = "auto"
+            if not match:
+                match = _credited_match(item["link"], credit)
+                matched_by = "source"
             if match:
                 song_id = store.upsert_song(
                     conn, songid.dedup_key(match), match.title, artist=match.artist,
                     album=match.album, art_url=match.art_url, shazam_url=match.shazam_url,
                     apple_url=match.apple_url, spotify_url=match.spotify_url, shazam_key=match.key,
                 )
-                store.set_item_song(conn, item_id, song_id, source="auto")
+                store.set_item_song(conn, item_id, song_id, source=matched_by)
                 identified += 1
                 title = match.title
             else:
@@ -106,12 +135,12 @@ def identify_items(conn, download_dir, identifier=None, source=None, extractor=N
 
 def run_identification(conn, download_dir, progress=None, wait=None, identifier=None,
                        source=None, extractor=None, limiter=None, control=None,
-                       item_ids=None):
+                       item_ids=None, credit=None):
     """Identify songs as a pausable Archive run (mirrors ``run_enrichment``)."""
     if control is None:
         control = runs.RunControl(conn, progress=progress, wait=wait)
     return identify_items(
         conn, download_dir, identifier=identifier, source=source, extractor=extractor,
         limiter=limiter, progress=control.progress, should_continue=control.should_continue,
-        item_ids=item_ids,
+        item_ids=item_ids, credit=credit,
     )

@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS item (
     kind         TEXT NOT NULL DEFAULT 'unknown',
     status       TEXT NOT NULL DEFAULT 'pending',
     has_assets   INTEGER NOT NULL DEFAULT 0,
+    audio_source TEXT,                   -- slideshows: 'original' = the post's own sound,
+                                         -- 'fallback' = a substituted default track,
+                                         -- NULL = never classified
     error        TEXT,
     caption      TEXT,
     author       TEXT,
@@ -534,6 +537,7 @@ END;
 """
 
 _ITEM_MIGRATIONS = {
+    "audio_source": "TEXT",
     "enrich_status": "TEXT",
     "favorite_order": "INTEGER",
     "thumbnail_path": "TEXT",
@@ -1324,6 +1328,8 @@ def record_work_outcome(conn, item_id, outcome):
         fields["has_assets"] = 1 if outcome["has_assets"] else 0
     if "download_source" in outcome:
         fields["download_source"] = outcome["download_source"]
+    if outcome.get("audio_source"):
+        fields["audio_source"] = outcome["audio_source"]
     fields["last_attempt_at"] = _now()
     assignments = ", ".join(f"{col} = ?" for col in fields)
     conn.execute(
@@ -1335,12 +1341,13 @@ def record_work_outcome(conn, item_id, outcome):
 
 def record_asset_recovery(conn, item_id, outcome):
     """Persist an Asset backfill classification without changing download state."""
-    _update(
-        conn,
-        item_id,
-        kind=outcome["kind"],
-        has_assets=1 if outcome["has_assets"] else 0,
-    )
+    fields = {
+        "kind": outcome["kind"],
+        "has_assets": 1 if outcome["has_assets"] else 0,
+    }
+    if outcome.get("audio_source"):
+        fields["audio_source"] = outcome["audio_source"]
+    _update(conn, item_id, **fields)
 
 
 def record_media_index(conn, item_id, index, fingerprint):
@@ -1500,6 +1507,12 @@ def items_needing_identification(conn, retry_no_match=False):
     always retried. Only confirmed audio-less items (``has_audio = 0``) are
     skipped — NULL means the item was never indexed for audio (or was indexed
     before audio detection existed), so it is still eligible.
+
+    Items whose soundtrack is a substituted default (``audio_source =
+    'fallback'``) are skipped outright. Identifying those does not describe the
+    favorite, it describes the default track — and because every one of them
+    carries the *same* track, letting them through makes that one song the most
+    common in the library and buries the real listening history under it.
     """
     skip = ["identified"]
     if not retry_no_match:
@@ -1508,10 +1521,78 @@ def items_needing_identification(conn, retry_no_match=False):
     return conn.execute(
         "SELECT * FROM item WHERE status = 'done' AND offloaded = 0 AND archive_missing = 0 "
         "AND (has_audio = 1 OR has_audio IS NULL) "
+        "AND COALESCE(audio_source, '') != 'fallback' "
         f"AND (song_status IS NULL OR song_status NOT IN ({placeholders})) "
         "ORDER BY id",
         tuple(skip),
     ).fetchall()
+
+
+def set_audio_source(conn, item_id, audio_source):
+    """Record whether this favorite's soundtrack is its own or a substitute."""
+    _update(conn, item_id, audio_source=audio_source)
+
+
+def items_with_assets(conn):
+    """Every slideshow holding raw assets, whatever its audio is classified as."""
+    return conn.execute(
+        "SELECT * FROM item WHERE has_assets = 1 AND offloaded = 0 "
+        "AND archive_missing = 0 AND link NOT LIKE 'local://%' ORDER BY id"
+    ).fetchall()
+
+
+def reset_song_identification(conn, item_ids):
+    """Forget what was 'identified' for these favorites so it can be redone.
+
+    Used when the audio those conclusions came from is found to have been the
+    fallback track: the conclusion is not merely stale, it was never about this
+    favorite at all.
+    """
+    ids = [int(value) for value in item_ids]
+    if not ids:
+        return 0
+    now = _now()
+    with conn:
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            conn.execute(
+                "UPDATE item SET song_id = NULL, song_status = NULL, song_source = NULL, "
+                "song_identified_at = NULL, song_error = NULL, search_song_text = NULL, "
+                f"updated_at = ? WHERE id IN ({placeholders})",
+                (now, *chunk),
+            )
+    return len(ids)
+
+
+def prune_unused_songs(conn):
+    """Drop song rows nothing references any more.
+
+    Clearing a fallback-derived identification usually empties the song it
+    pointed at; leaving the row behind would keep it in the Music view as a
+    track with no favorites.
+
+    Saved playlists hold song ids too, as JSON rather than a foreign key, so
+    they are read and excluded explicitly — a song the user deliberately saved
+    must survive even once no favorite is attributed to it.
+    """
+    protected = set()
+    for row in conn.execute("SELECT song_ids_json FROM song_playlist"):
+        try:
+            protected.update(int(value) for value in json.loads(row[0] or "[]"))
+        except (TypeError, ValueError):
+            # An unreadable playlist is a reason to delete nothing, not a
+            # reason to ignore it.
+            return 0
+    sql = "DELETE FROM song WHERE id NOT IN (SELECT song_id FROM item WHERE song_id IS NOT NULL)"
+    params = ()
+    if protected:
+        placeholders = ",".join("?" for _ in protected)
+        sql += f" AND id NOT IN ({placeholders})"
+        params = tuple(sorted(protected))
+    with conn:
+        cursor = conn.execute(sql, params)
+    return cursor.rowcount or 0
 
 
 def distinct_songs(conn, item_cap=100):
@@ -2459,6 +2540,12 @@ def library_statistics(conn):
                 AND link NOT LIKE 'local://%'
                 AND (has_audio = 0 OR audio_silent = 1)
                 THEN 1 ELSE 0 END) AS audio_repairs,
+            SUM(CASE WHEN audio_source = 'fallback' AND offloaded = 0
+                AND archive_missing = 0
+                THEN 1 ELSE 0 END) AS slideshow_audio_repairs,
+            SUM(CASE WHEN audio_source IS NULL AND has_assets = 1 AND offloaded = 0
+                AND archive_missing = 0
+                THEN 1 ELSE 0 END) AS slideshow_audio_unchecked,
             SUM(COALESCE(duration_s, 0)) AS duration_s,
             SUM(COALESCE(media_size, 0)) AS media_size
         FROM item
@@ -2471,6 +2558,8 @@ def library_statistics(conn):
         "slideshows": int(row["slideshows"] or 0),
         "indexed": int(row["indexed"] or 0),
         "audio_repairs": int(row["audio_repairs"] or 0),
+        "slideshow_audio_repairs": int(row["slideshow_audio_repairs"] or 0),
+        "slideshow_audio_unchecked": int(row["slideshow_audio_unchecked"] or 0),
         "duration_s": float(row["duration_s"] or 0),
         "media_size": int(row["media_size"] or 0),
     }
