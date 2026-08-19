@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowSquareOut, CaretDown, CloudArrowUp, MusicNotes, Play, SpotifyLogo, YoutubeLogo, BookmarkSimple, Trash, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, CaretDown, CloudArrowUp, MusicNotes, Play, SpotifyLogo, YoutubeLogo, BookmarkSimple, Trash, X, SquaresFour } from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport } from "../lib/types";
 import { Button, Dialog, EmptyState, Skeleton, cx } from "../components/ui";
@@ -204,6 +204,7 @@ export function Music() {
                     <div className="mt-1.5"><StreamLinks song={song} /></div>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1.5">
+                    <Link to={`/gallery?song=${song.id}`} title="Browse every archived video using this song" className="inline-flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-xs font-medium text-ink-dim transition hover:border-ink-faint hover:text-ink"><SquaresFour size={12} /> Browse videos</Link>
                     <button onClick={() => playSong(song)} title="Play the favorites that use this song" className="inline-flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-xs font-medium text-ink-dim transition hover:border-ink-faint hover:text-ink"><Play size={12} weight="fill" /> {song.uses} {song.uses === 1 ? "favorite" : "favorites"}</button>
                   </div>
                 </li>

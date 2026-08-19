@@ -1,4 +1,4 @@
-import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, ImportRecord, MemoryResponse, PlayRecord, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats, LensStatus, LensTotals, LensSearchResponse, ItemCaptionsResponse, ItemAnnotation, CurateSession, VibeResponse, DuplicateReport, ArchiveChannel, ArchiveChannelItems } from "./types";
+import type { Item, ItemPage, DiscoveryPage, RunStatus, ImportResult, ImportRecord, ProfileImportResult, CreatorMonitor, SourceMetadataDetails, SourceComment, MyfaveTTPlan, MyfaveTTImportResult, MemoryResponse, PlayRecord, StorageLocation, StorageTransferPreview, SnapshotResource, SnapshotRestorePlan, ProgressEvent, LibrarySettings, LibraryStatistics, GalleryPreset, GalleryPresetFilters, SmartCollectionSummary, GalleryTermList, PlaybackQueue, VerifyReport, RequeueResult, RunHistoryEntry, RunCatalogEntry, PipelineSettings, RunSchedule, SyncSettings, LegacyBootstrapPreview, LegacyBootstrapResult, LegacyMappingSegment, SearchSuggestions, SongCandidate, SongSummary, SongPlaylist, SpotifyStatus, SpotifyPushReport, Stats, LensStatus, LensTotals, LensSearchResponse, ItemCaptionsResponse, ItemAnnotation, CurateSession, VibeResponse, DuplicateReport, ArchiveChannel, ArchiveChannelItems, CommentSearchPage, CoverageReport, CoverageCategory } from "./types";
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
@@ -16,6 +16,7 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
 
 export interface ItemQuery {
   search?: string;
+  search_scope?: "posts" | "comments" | "songs" | "analysis" | "all";
   kind?: string;
   status?: string;
   feed?: boolean;
@@ -40,6 +41,19 @@ export const api = {
   health: () => json<{ status: string; cobalt_reachable: boolean }>("/api/health"),
 
   suggest: (q: string) => json<SearchSuggestions>(`/api/suggest?q=${encodeURIComponent(q)}`),
+
+  searchComments: (q: string, history = false, cursor?: number) => {
+    const params = new URLSearchParams({ q });
+    if (history) params.set("history", "true");
+    if (cursor != null) params.set("cursor", String(cursor));
+    return json<CommentSearchPage>(`/api/comments/search?${params}`);
+  },
+  coverage: () => json<CoverageReport>("/api/coverage"),
+  repairCoverage: (targets: CoverageCategory["key"][], filter?: Record<string, string>) =>
+    json<{ started: boolean; matched: number | null }>("/api/coverage/repair", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targets, ...(filter ? { filter } : {}) }),
+    }),
 
   stats: () => json<Stats>("/api/stats"),
   lensStatus: () => json<LensStatus>("/api/lens/status"),
@@ -113,9 +127,10 @@ export const api = {
   deleteChannel: (id: number) => json<{ ok: boolean }>(`/api/channels/${id}`, { method: "DELETE" }),
   channelItems: (id: number) => json<ArchiveChannelItems>(`/api/channels/${id}/items`),
 
-  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "audio_missing" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; min_attempts?: number; max_attempts?: number; recovery?: boolean; codec?: string; date_from?: string; date_to?: string; orientation?: string; assets?: "with" | "without"; audio?: "with" | "without"; offloaded?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string; creator?: string; hashtag?: string; starred?: boolean; private_tag?: string } = {}) => {
+  itemPage: (q: ItemQuery & { cursor?: number; limit?: number; order?: "latest" | "archive" | "size_desc" | "duration_desc" | "duration_asc" | "favorite_date_desc" | "favorite_date_asc" | "attempts_desc" | "last_attempt_desc" | "author_asc" | "audio_missing" | "random"; seed?: number; min_duration?: number; max_duration?: number; min_size?: number; max_size?: number; min_width?: number; max_width?: number; min_height?: number; max_height?: number; min_attempts?: number; max_attempts?: number; recovery?: boolean; codec?: string; date_from?: string; date_to?: string; posted_from?: string; posted_to?: string; min_views?: number; min_likes?: number; min_comments?: number; source_info?: "saved" | "unavailable" | "missing"; comments_state?: "saved" | "with_comments" | "missing"; download_source?: "cobalt" | "yt-dlp" | "legacy"; portable_metadata?: "embedded" | "failed" | "missing"; orientation?: string; assets?: "with" | "without"; audio?: "with" | "without"; offloaded?: "with" | "without"; index_state?: "indexed" | "missing" | "failed"; include?: string; exclude?: string; creator?: string; hashtag?: string; song?: number; starred?: boolean; private_tag?: string } = {}) => {
     const p = new URLSearchParams();
     if (q.search) p.set("search", q.search);
+    if (q.search_scope) p.set("search_scope", q.search_scope);
     if (q.kind) p.set("kind", q.kind);
     if (q.status) p.set("status", q.status);
     if (q.feed) p.set("feed", "true");
@@ -137,6 +152,15 @@ export const api = {
     if (q.codec) p.set("codec", q.codec);
     if (q.date_from) p.set("date_from", q.date_from);
     if (q.date_to) p.set("date_to", q.date_to);
+    if (q.posted_from) p.set("posted_from", q.posted_from);
+    if (q.posted_to) p.set("posted_to", q.posted_to);
+    if (q.min_views != null) p.set("min_views", String(q.min_views));
+    if (q.min_likes != null) p.set("min_likes", String(q.min_likes));
+    if (q.min_comments != null) p.set("min_comments", String(q.min_comments));
+    if (q.source_info) p.set("source_info", q.source_info);
+    if (q.comments_state) p.set("comments_state", q.comments_state);
+    if (q.download_source) p.set("download_source", q.download_source);
+    if (q.portable_metadata) p.set("portable_metadata", q.portable_metadata);
     if (q.orientation) p.set("orientation", q.orientation);
     if (q.assets) p.set("assets", q.assets);
     if (q.audio) p.set("audio", q.audio);
@@ -146,6 +170,7 @@ export const api = {
     if (q.exclude) p.set("exclude", q.exclude);
     if (q.creator) p.set("creator", q.creator);
     if (q.hashtag) p.set("hashtag", q.hashtag);
+    if (q.song != null) p.set("song", String(q.song));
     if (q.starred) p.set("starred", "true");
     if (q.private_tag) p.set("private_tag", q.private_tag);
     return json<ItemPage>(`/api/items/page?${p}`);
@@ -214,7 +239,7 @@ export const api = {
 
   librarySettings: () => json<LibrarySettings>("/api/library-settings"),
   libraryStats: () => json<LibraryStatistics>("/api/library-stats"),
-  updateLibrarySettings: (settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480; song_id_enabled?: boolean }) =>
+  updateLibrarySettings: (settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480; song_id_enabled?: boolean; portable_metadata_enabled?: boolean }) =>
     json<LibrarySettings>("/api/library-settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -239,10 +264,43 @@ export const api = {
     return res.text();
   },
 
-  importExport: (file: File) => {
+  importExport: (file: File, selection: "favorites" | "likes" | "both" = "favorites") => {
     const body = new FormData();
     body.append("file", file);
+    body.append("selection", selection);
     return json<ImportResult>("/api/import", { method: "POST", body });
+  },
+  importProfile: (username: string, startSync = true, monitor = false, intervalHours = 6, policy: Partial<CreatorMonitor> = {}) => json<ProfileImportResult>("/api/import/profile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, start_sync: startSync, monitor, interval_hours: intervalHours,
+      archive_mode: policy.archive_mode ?? "all", keywords: policy.keywords ?? [],
+      exclude_reposts: policy.exclude_reposts ?? false, max_backlog_days: policy.max_backlog_days ?? null,
+      collect_comments: policy.collect_comments ?? true, analyze_new: policy.analyze_new ?? false,
+      identify_songs: policy.identify_songs ?? false }),
+  }),
+  creatorMonitors: () => json<CreatorMonitor[]>("/api/creator-monitors"),
+  updateCreatorMonitor: (id: number, values: Partial<Pick<CreatorMonitor, "enabled" | "interval_hours" | "archive_mode" | "keywords" | "exclude_reposts" | "max_backlog_days" | "collect_comments" | "analyze_new" | "identify_songs">>) => json<CreatorMonitor>(`/api/creator-monitors/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
+  }),
+  checkCreatorMonitor: (id: number) => json<{ queued: boolean; started: boolean }>(`/api/creator-monitors/${id}/check`, { method: "POST" }),
+  deleteCreatorMonitor: (id: number) => json<{ ok: boolean }>(`/api/creator-monitors/${id}`, { method: "DELETE" }),
+  itemSourceMetadata: (id: number) => json<SourceMetadataDetails>(`/api/items/${id}/source-metadata`),
+  refreshItemComments: (id: number) =>
+    json<{ item_id: number; comments: SourceComment[]; saved_count: number; reported_count: number | null; changes: { added: number; removed: number; changed: number } }>(
+      `/api/items/${id}/comments/refresh`, { method: "POST" },
+    ),
+  planMyfaveTTImport: (paths: string[]) => json<MyfaveTTPlan>("/api/import/myfavett/plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+  }),
+  importMyfaveTTVideo: (videoId: string, sourcePath: string, file: File) => {
+    const body = new FormData();
+    body.append("video_id", videoId);
+    body.append("source_path", sourcePath);
+    body.append("video", file);
+    return json<MyfaveTTImportResult>("/api/import/myfavett/video", { method: "POST", body });
   },
   imports: () => json<ImportRecord[]>("/api/imports"),
   importDetail: (id: number) => json<ImportRecord>(`/api/imports/${id}`),
@@ -309,7 +367,7 @@ export const api = {
     return json<LegacyBootstrapResult>("/api/import/legacy-apply", { method: "POST", body });
   },
 
-  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop", opts?: { recheck?: boolean }) =>
+  syncAction: (action: "start" | "backfill" | "reindex" | "sidecars" | "repair-audio" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop", opts?: { recheck?: boolean }) =>
     json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}${opts?.recheck ? "?recheck=1" : ""}`, { method: "POST" }),
 
   /** Subscribe to the SSE progress stream. Returns an unsubscribe fn. */

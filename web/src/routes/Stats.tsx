@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChartBar, HardDrives, MusicNotes, SpeakerSlash, User, Warning } from "@phosphor-icons/react";
+import {
+  Binoculars, BookmarkSimple, ChartBar, ChatCircleDots, Database,
+  Eye, HardDrives, Heart, MusicNotes, ShareNetwork, SpeakerSlash, User, Warning,
+} from "@phosphor-icons/react";
 import { api } from "../lib/api";
 import type { Stats as StatsPayload } from "../lib/types";
 import { EmptyState, Skeleton, Stat } from "../components/ui";
@@ -11,7 +14,7 @@ import { Heatmap } from "../components/charts/Heatmap";
 import { Donut } from "../components/charts/Donut";
 import {
   compactCount, formatCount, formatSeconds, formatWatchLength,
-  heatmapGrid, monthLabel, monthlySeries,
+  coveragePercent, heatmapGrid, monthLabel, monthlySeries,
 } from "../lib/statsPresentation";
 import { formatSize } from "../lib/format";
 
@@ -56,6 +59,74 @@ function RankedRow({ rank, row, max }: {
   );
 }
 
+function CoverageList({ total, rows }: {
+  total: number;
+  rows: Array<{ label: string; count: number; hint: string }>;
+}) {
+  return (
+    <div className="space-y-3">
+      {rows.map((row) => {
+        const percentage = coveragePercent(row.count, total);
+        return (
+          <div key={row.label}>
+            <div className="mb-1 flex items-baseline justify-between gap-3 text-xs">
+              <span className="font-medium text-ink">{row.label}</span>
+              <span className="tabular shrink-0 text-ink-dim">{formatCount(row.count)} · {percentage.toFixed(0)}%</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-elevated" aria-label={`${row.label}: ${percentage.toFixed(0)}%`}>
+              <div className="h-full rounded-full bg-[var(--chart-mark)]" style={{ width: `${percentage}%` }} />
+            </div>
+            <p className="mt-1 text-[11px] text-ink-faint">{row.hint}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PeakPostList({ posts }: { posts: StatsPayload["reach"]["peak_posts"] }) {
+  return (
+    <ol className="space-y-1">
+      {posts.map((post, index) => (
+        <li key={post.id}>
+          <Link
+            to={`/?item=${post.id}`}
+            className="grid grid-cols-[1.25rem_minmax(0,1fr)_auto] items-center gap-2 rounded-[var(--radius-control)] px-2 py-2 transition hover:bg-elevated"
+            title="Play this post from your local archive"
+          >
+            <span className="tabular text-right text-xs text-ink-faint">{index + 1}</span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium text-ink">{post.caption}</span>
+              <span className="block truncate text-[11px] text-ink-faint">
+                {post.creator ? `@${post.creator} · ` : ""}{compactCount(post.likes)} likes · {compactCount(post.comments)} comments
+              </span>
+            </span>
+            <span className="tabular text-right">
+              <span className="block text-sm font-semibold text-ink">{compactCount(post.views)}</span>
+              <span className="block text-[10px] uppercase tracking-wide text-ink-faint">views</span>
+            </span>
+          </Link>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function ReachMetric({ icon, label, value, hint }: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  hint: string;
+}) {
+  return (
+    <div className="rounded-[var(--radius-control)] border border-line bg-elevated px-3 py-3">
+      <div className="flex items-center gap-1.5 text-xs text-ink-faint">{icon}{label}</div>
+      <p className="mt-1 text-xl font-semibold text-ink" title={formatCount(value)}>{compactCount(value)}</p>
+      <p className="mt-0.5 truncate text-xs text-ink-dim">{hint}</p>
+    </div>
+  );
+}
+
 export function Stats() {
   const [stats, setStats] = useState<StatsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +152,10 @@ export function Stats() {
     );
   }
 
-  const { hero, watcher, top, health } = stats;
+  const {
+    hero, watcher, reach, discovery_lag: discoveryLag, quality,
+    conversation, monitoring, top, health,
+  } = stats;
   if (hero.total === 0) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -97,6 +171,7 @@ export function Stats() {
   const monthTitle = (i: number) => monthLabel(growth.months[i] ?? "");
   const histogram = watcher.duration_histogram;
   const silentPct = watcher.silent.of_indexed ? (watcher.silent.count / watcher.silent.of_indexed) * 100 : 0;
+  const conversationChanges = conversation.changes.added + conversation.changes.removed + conversation.changes.changed;
 
   return (
     <div className="h-full overflow-y-auto">
@@ -107,12 +182,12 @@ export function Stats() {
         </div>
 
         {/* Hero: one lead figure, then the tiles. */}
-        <div className="mb-8 flex flex-wrap items-end gap-x-10 gap-y-4">
+        <div className="mb-8 grid gap-4 md:grid-cols-[auto_minmax(0,1fr)] md:items-end md:gap-x-10">
           <div>
             <p className="text-xs text-ink-faint">Favorites archived</p>
             <p className="text-5xl font-semibold text-ink">{formatCount(hero.total)}</p>
           </div>
-          <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat label="Videos / slideshows" value={`${compactCount(hero.videos)} / ${compactCount(hero.slideshows)}`} hint="what kind you save" />
             <Stat label="Total watch-length" value={formatWatchLength(hero.watch_seconds)} hint="across indexed videos" />
             <Stat label="On disk" value={hero.disk_bytes > 0 ? formatSize(hero.disk_bytes) : "0 MB"} hint="indexed media" />
@@ -134,6 +209,42 @@ export function Stats() {
               </ChartCard>
               <ChartCard title="Favorites per month" caption="How many you saved in each month.">
                 <ColumnChart labels={growth.months.map(monthLabel)} values={growth.counts} tipTitle={monthTitle} />
+              </ChartCard>
+            </div>
+          </section>
+
+          {/* Source counters are captured during profile/sidecar discovery.
+              The endpoint returns totals plus only five posts, so this stays
+              constant-size even when the archive contains millions of rows. */}
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">Out in the world</h2>
+            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+              <ReachMetric icon={<Eye size={14} />} label="Views" value={reach.views} hint="combined reach" />
+              <ReachMetric icon={<Heart size={14} />} label="Likes" value={reach.likes} hint="public reactions" />
+              <ReachMetric icon={<ChatCircleDots size={14} />} label="Comments" value={reach.comments} hint="reported by TikTok" />
+              <ReachMetric icon={<ShareNetwork size={14} />} label="Reposts" value={reach.reposts} hint="shared onward" />
+              <ReachMetric icon={<BookmarkSimple size={14} />} label="Saves" value={reach.saves} hint="saved by others" />
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ChartCard
+                title="Biggest posts"
+                caption="The five most-viewed posts in your archive. Click one to play the local copy."
+                note={reach.covered ? `Source counters are available for ${formatCount(reach.covered)} of ${formatCount(hero.total)} favorites.` : undefined}
+              >
+                {reach.peak_posts.length ? <PeakPostList posts={reach.peak_posts} /> : (
+                  <p className="py-6 text-center text-xs text-ink-faint">No source counters yet — run Media sidecars or import a creator profile.</p>
+                )}
+              </ChartCard>
+              <ChartCard
+                title="How early you found them"
+                caption="Time between a post going live and you favoriting it."
+                note={discoveryLag.covered ? `Based on ${formatCount(discoveryLag.covered)} favorites with both dates.` : undefined}
+              >
+                {discoveryLag.buckets.length ? (
+                  <ColumnChart labels={discoveryLag.buckets.map((b) => b.label)} values={discoveryLag.buckets.map((b) => b.count)} />
+                ) : (
+                  <p className="py-6 text-center text-xs text-ink-faint">Upload dates will appear here as source metadata is collected.</p>
+                )}
               </ChartCard>
             </div>
           </section>
@@ -181,13 +292,13 @@ export function Stats() {
                   <p className="py-6 text-center text-xs text-ink-faint">No creator names yet — run search metadata in Sync.</p>
                 )}
               </ChartCard>
-              <ChartCard title="Songs" caption="The sounds your favorites share. Click to open Music.">
+              <ChartCard title="Songs" caption="The sounds your favorites share. Click to browse matching videos.">
                 {top.songs.length ? (
                   <RankedList rows={top.songs.map((s) => ({
                     key: `song-${s.id}`,
                     label: <span className="inline-flex items-center gap-1.5"><MusicNotes size={13} className="shrink-0 text-ink-faint" />{s.artist ? `${s.title} · ${s.artist}` : s.title}</span>,
                     count: s.count,
-                    href: "/music",
+                    href: `/gallery?song=${s.id}`,
                   }))} />
                 ) : (
                   <p className="py-6 text-center text-xs text-ink-faint">No identified songs yet — enable song identification in Sync.</p>
@@ -203,6 +314,83 @@ export function Stats() {
                   }))} />
                 ) : (
                   <p className="py-6 text-center text-xs text-ink-faint">No captions yet — run search metadata in Sync.</p>
+                )}
+              </ChartCard>
+            </div>
+          </section>
+
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">Offline depth</h2>
+            <div className="grid gap-4 lg:grid-cols-3">
+              <ChartCard title="Archived resolution" caption="The actual local video files, grouped by their shorter edge.">
+                {quality.resolution.length ? (
+                  <ColumnChart labels={quality.resolution.map((b) => b.label)} values={quality.resolution.map((b) => b.count)} />
+                ) : (
+                  <p className="flex items-center justify-center gap-1.5 py-6 text-xs text-ink-faint"><Database size={14} /> Index media to see local quality.</p>
+                )}
+              </ChartCard>
+              <ChartCard
+                title="Download engines"
+                caption="Which downloader produced the archived copy."
+                note="Older files predate downloader tracking and remain labeled legacy / unknown."
+              >
+                <ColumnChart labels={quality.downloads.map((b) => b.label)} values={quality.downloads.map((b) => b.count)} />
+              </ChartCard>
+              <ChartCard title="What works without TikTok" caption="Local sidecars and embedded data that travel with the archive.">
+                <CoverageList
+                  total={quality.offline.total}
+                  rows={[
+                    { label: "Source details", count: quality.offline.source_metadata, hint: "captions, dates, creator and engagement" },
+                    { label: "Saved comments", count: quality.offline.comments, hint: "a local snapshot, including zero-comment posts" },
+                    { label: "Local thumbnails", count: quality.offline.thumbnails, hint: "browseable when the original is gone" },
+                    { label: "Portable media tags", count: quality.offline.portable_metadata, hint: "metadata embedded into local files" },
+                    { label: "Identified songs", count: quality.offline.songs, hint: "browseable by sound" },
+                  ]}
+                />
+              </ChartCard>
+            </div>
+          </section>
+
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-ink-faint">Living archive</h2>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ChartCard
+                title="Conversation time machine"
+                caption="Comment snapshots saved locally, including what changed between refreshes."
+                note={conversation.snapshots ? "Counts come from snapshot summaries; Stats never loads the comment text." : undefined}
+              >
+                {conversation.snapshots ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      <Stat label="Posts captured" value={formatCount(conversation.posts)} hint="with local history" />
+                      <Stat label="Snapshots" value={formatCount(conversation.snapshots)} hint="points in time" />
+                      <Stat label="Comments saved" value={formatCount(conversation.saved_comments)} hint="in latest copies" />
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                      <span className="rounded-full bg-ok/10 px-2 py-1 text-ok">+{formatCount(conversation.changes.added)} appeared</span>
+                      <span className="rounded-full bg-warn/10 px-2 py-1 text-warn">−{formatCount(conversation.changes.removed)} disappeared</span>
+                      <span className="rounded-full bg-elevated px-2 py-1 text-ink-dim">{formatCount(conversation.changes.changed)} edited</span>
+                    </div>
+                    {!conversationChanges && <p className="mt-2 text-xs text-ink-faint">No changes between snapshots yet.</p>}
+                  </>
+                ) : (
+                  <p className="flex items-center justify-center gap-1.5 py-6 text-xs text-ink-faint"><ChatCircleDots size={14} /> Comment history appears after Media sidecars runs.</p>
+                )}
+              </ChartCard>
+              <ChartCard
+                title="Creator radar"
+                caption="Profiles the archive checks automatically for newly published videos."
+                note={monitoring.profiles ? `${formatCount(monitoring.checked)} profiles have completed at least one check.` : undefined}
+              >
+                {monitoring.profiles ? (
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Stat label="Watching" value={formatCount(monitoring.active)} hint={`of ${formatCount(monitoring.profiles)} profiles`} />
+                    <Stat label="Found last sweep" value={formatCount(monitoring.found_last_check)} hint="new local posts" />
+                    <Stat label="Checked" value={formatCount(monitoring.checked)} hint="at least once" />
+                    <Stat label="Errors" value={formatCount(monitoring.errors)} hint="latest checks" />
+                  </div>
+                ) : (
+                  <p className="flex items-center justify-center gap-1.5 py-6 text-xs text-ink-faint"><Binoculars size={14} /> Add a monitored creator in <Link to="/sync" className="text-ink underline underline-offset-2">Sync</Link>.</p>
                 )}
               </ChartCard>
             </div>

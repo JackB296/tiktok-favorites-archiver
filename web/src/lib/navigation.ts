@@ -1,4 +1,4 @@
-export type NavigationLabel = "Feed" | "Gallery" | "Music" | "Stats" | "Sync" | "Storage" | "Backups" | "Discover" | "Lens" | "History" | "Memories" | "Curate" | "Vibes" | "Duplicates" | "Channels";
+export type NavigationLabel = "Feed" | "Gallery" | "Comments" | "Coverage" | "Music" | "Stats" | "Sync" | "Storage" | "Backups" | "Discover" | "Lens" | "History" | "Memories" | "Curate" | "Vibes" | "Duplicates" | "Channels";
 
 export type NavigationItem = {
   to: string;
@@ -30,6 +30,7 @@ export const navigationGroups: NavigationGroup[] = [
     label: "Browse",
     items: [
       { to: "/gallery", label: "Gallery", group: "Browse" },
+      { to: "/comments", label: "Comments", group: "Browse" },
       { to: "/discover", label: "Discover", group: "Browse" },
       { to: "/lens", label: "Lens", group: "Browse" },
       { to: "/stats", label: "Stats", group: "Browse" },
@@ -51,6 +52,7 @@ export const navigationGroups: NavigationGroup[] = [
       { to: "/storage", label: "Storage", group: "Manage" },
       { to: "/backups", label: "Backups", group: "Manage" },
       { to: "/duplicates", label: "Duplicates", group: "Manage" },
+      { to: "/coverage", label: "Coverage", group: "Manage" },
     ],
   },
 ];

@@ -8,6 +8,8 @@ const suites = [
   "test-schedule-presentation.mjs", "test-discovery-presentation.mjs",
   "test-lens-presentation.mjs", "test-history-presentation.mjs",
   "test-memory-presentation.mjs", "test-navigation.mjs",
+  "test-comments-presentation.mjs",
+  "test-auto-advance.mjs", "test-panel-layout.mjs",
 ];
 
 for (const suite of suites) {

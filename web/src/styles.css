@@ -107,6 +107,16 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Scroll without the chrome: the Feed and its details panel both scroll, and
+   two scrollbars over a video is visual noise. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Numbers/IDs read as data. */
 .tabular {
   font-family: var(--font-mono);

@@ -1,23 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { SpeakerSimpleHigh, SpeakerSimpleX, SpeakerSlash, ArrowSquareOut, ArrowLeft, FilmReel, Shuffle, Keyboard, CornersOut, ClockCounterClockwise, GearSix, MusicNotes } from "@phosphor-icons/react";
+import { SpeakerSimpleHigh, SpeakerSimpleX, SpeakerSlash, ArrowLeft, ArrowDown, FilmReel, Shuffle, Keyboard, CornersOut, ClockCounterClockwise, GearSix, MusicNotes, ChatCircle, CaretRight } from "@phosphor-icons/react";
 import type { Item } from "../lib/types";
 import { PostMedia } from "../components/PostMedia";
 import { PlaybackSession, usePlayback } from "../components/playback";
-import { Button, EmptyState, Skeleton } from "../components/ui";
+import { Button, EmptyState, Skeleton, cx } from "../components/ui";
 import { viewerShortcut } from "../lib/viewerShortcuts";
 import { useDelayedLoading } from "../lib/useDelayedLoading";
-import { playbackItemId, shouldPreloadItem } from "../lib/viewerFeed.js";
+import { nextAutoAdvanceItem, playbackItemId, shouldPreloadItem } from "../lib/viewerFeed.js";
 import type { FeedSource } from "../lib/feedWindow";
 import { channelFeedSource, filteredFeedSource, latestFeedSource, queueFeedSource, randomFeedSource, resumeFeedSource } from "../lib/feedSources";
 import { useFeedWindow } from "../lib/useFeedWindow";
 import type { FeedWindow } from "../lib/useFeedWindow";
 import { formatAutoGain } from "../lib/playbackVolume.js";
-import { captionParts, cleanMetadataText, hashtagGalleryUrl } from "../lib/captionPresentation.js";
-import { audioStatus, isSafeHttpUrl } from "../lib/format";
-import { primarySongUrl, songLabel } from "../lib/songLinks.js";
+import { audioStatus } from "../lib/format";
 import { MediaSettingsDialog } from "../components/MediaSettingsDialog";
 import { SongIdentifyDialog } from "../components/SongIdentifyDialog";
+import { CommentsDialog } from "../components/CommentsDialog";
+import { PostDetailsPanel } from "../components/PostDetailsPanel";
+import { PANEL_WIDTH } from "../lib/panelLayout.js";
 import { readLensStartTime } from "../lib/lensPresentation.js";
 import { api } from "../lib/api";
 import { channelAdvanceAction, channelMediaKey } from "../lib/channelPlayback";
@@ -147,14 +148,30 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
   const [fullscreen, setFullscreen] = useState(false);
   const [settingsItem, setSettingsItem] = useState<Item | null>(null);
   const [identifyItem, setIdentifyItem] = useState<Item | null>(null);
+  const [commentsItem, setCommentsItem] = useState<Item | null>(null);
   const [channelAdvanceFromId, setChannelAdvanceFromId] = useState<number | null>(null);
+  const [autoAdvance, setAutoAdvance] = useState(() => localStorage.getItem("feed-auto-advance") === "true");
+  // The panel is on unless the reader turned it off, and that choice sticks
+  // across posts and sessions rather than being re-decided every scroll.
+  const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem("feed-details-panel") !== "false");
+  const [commentsOpen, setCommentsOpen] = useState(false);
   // Fullscreen targets the non-scrolling wrapper: the control overlays hang off
   // it (staying pinned while the feed scrolls) and remain visible in fullscreen.
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  const advanceChannel = useCallback((itemId: number) => {
-    if (channelMode) setChannelAdvanceFromId(itemId);
-  }, [channelMode]);
+  const advanceAfterEnd = useCallback((itemId: number) => {
+    if (channelMode) { setChannelAdvanceFromId(itemId); return; }
+    if (!autoAdvance || activeId !== itemId) return;
+    const nextId = nextAutoAdvanceItem(items, itemId);
+    if (nextId == null) return;
+    setActiveId(nextId);
+    containerRef.current?.querySelector<HTMLElement>(`[data-id="${nextId}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [activeId, autoAdvance, channelMode, containerRef, items, setActiveId]);
+
+  useEffect(() => { localStorage.setItem("feed-auto-advance", String(autoAdvance)); }, [autoAdvance]);
+
+  useEffect(() => { localStorage.setItem("feed-details-panel", String(panelOpen)); }, [panelOpen]);
+
 
   const toggleFullscreen = useCallback(async () => {
     const target = wrapperRef.current;
@@ -203,11 +220,18 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
-      const shortcut = viewerShortcut({ key: event.key, code: event.code, repeat: event.repeat, editing: Boolean(target?.closest("input, textarea, select, button, a, [contenteditable='true']")) });
+      const shortcut = viewerShortcut({
+        key: event.key,
+        code: event.code,
+        repeat: event.repeat,
+        editing: Boolean(target?.closest("input, textarea, [contenteditable='true']")),
+        onControl: Boolean(target?.closest("button, a, select")),
+      });
       if (!shortcut) return;
       if (shortcut === "pause") { event.preventDefault(); togglePaused(); return; }
       if (shortcut === "mute") { event.preventDefault(); toggleMuted(); return; }
       if (shortcut === "fullscreen") { event.preventDefault(); void toggleFullscreen(); return; }
+      if (shortcut === "details") { event.preventDefault(); setPanelOpen((value) => !value); return; }
       if (shortcut === "prevImage" || shortcut === "nextImage") {
         event.preventDefault();
         // Seam: "viewer-slide-nav" — keyboard slide navigation reaches the active
@@ -234,6 +258,7 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
       <div className="absolute left-3 top-3 z-20 flex items-center gap-1 rounded-xl border border-white/10 bg-black/55 p-1 text-white shadow-lg shadow-black/25 backdrop-blur-md">
         {onGoToLastWatched && <><button onClick={onGoToLastWatched} aria-label="Go to last watched" title="Return to the last favorite you watched" className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition hover:bg-white/15 active:translate-y-px"><ClockCounterClockwise size={16} /><span>Last watched</span></button><span aria-hidden="true" className="mx-0.5 h-5 w-px bg-white/15" /></>}
         <button onClick={onRandom} disabled={randomizing} aria-label="Start a fresh random order" title="Shuffle the archive" className="rounded-lg p-2 transition hover:bg-white/15 disabled:opacity-50"><Shuffle size={17} /></button>
+        {!channelMode && <button onClick={() => setAutoAdvance((value) => !value)} aria-label="Automatically advance when media ends" aria-pressed={autoAdvance} title={autoAdvance ? "Auto-advance is on" : "Auto-advance is off"} className={`rounded-lg p-2 transition hover:bg-white/15 ${autoAdvance ? "bg-white/20" : ""}`}><ArrowDown size={17} /></button>}
         <button onClick={() => setShowShortcuts((value) => !value)} aria-label="Show keyboard shortcuts" aria-expanded={showShortcuts} title="Keyboard shortcuts" className="rounded-lg p-2 transition hover:bg-white/15"><Keyboard size={17} /></button>
         <button onClick={() => void toggleFullscreen()} aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} aria-pressed={fullscreen} title={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} className="rounded-lg p-2 transition hover:bg-white/15"><CornersOut size={17} /></button>
       </div>
@@ -241,17 +266,26 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
       {channelMode && <div className="absolute left-3 top-16 z-20 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">{feed.label ?? "Archive channel"} · {feed.activePosition == null ? "…" : feed.activePosition + 1} / {feed.total ?? "…"}</div>}
       {!randomMode && queueTotal > 0 && <div className="absolute left-3 top-16 z-20 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">Gallery queue · {queueReadyTotal} ready of {queueTotal} selected</div>}
       {!randomMode && queueTotal === 0 && (backHref || filterActive) && <div className="absolute left-3 top-16 z-20 flex items-center gap-2 rounded-lg border border-white/10 bg-black/55 px-2.5 py-1.5 text-xs text-white shadow-lg backdrop-blur-md">{backHref ? <Link to={backHref} state={{ restore: true }} className="inline-flex items-center gap-1 font-medium hover:underline"><ArrowLeft size={13} weight="bold" /> {filterActive ? "Back to results" : "Back to gallery"}</Link> : <span>Search results</span>}{filterActive && <span className="text-white/70">· {filteredTotal}</span>}</div>}
-      {showShortcuts && <div className={`absolute left-3 z-20 rounded-xl border border-white/10 bg-black/70 px-3 py-2 text-xs leading-5 text-white shadow-xl backdrop-blur-md ${randomMode || channelMode || queueTotal > 0 || filterActive ? "top-28" : "top-16"}`}>↑ ↓: previous or next post<br />← →: slideshow image<br />Space or video click: play or pause<br />M: mute or unmute<br />F: enter or exit fullscreen</div>}
-      <div ref={containerRef} className="h-full snap-y snap-mandatory overflow-y-scroll">
+      {showShortcuts && <div className={`absolute left-3 z-20 rounded-xl border border-white/10 bg-black/70 px-3 py-2 text-xs leading-5 text-white shadow-xl backdrop-blur-md ${randomMode || channelMode || queueTotal > 0 || filterActive ? "top-28" : "top-16"}`}>↑ ↓: previous or next post<br />← →: slideshow image<br />Space or video click: play or pause<br />M: mute or unmute<br />F: enter or exit fullscreen<br />C: show or hide the details panel</div>}
+      <div ref={containerRef} className="no-scrollbar h-full snap-y snap-mandatory overflow-y-scroll">
       {items.map((item, index) => (
-        <section
+        <PostSection
           key={item.id}
-          data-id={item.id}
-          className="relative flex h-full snap-start items-center justify-center"
-        >
-          <PostMedia key={channelMediaKey(item.id, channelMode, channelPlaybackGeneration)} item={item} active={item.id === effectivePlaybackId} preload={shouldPreloadItem(index, activeIndex, item.id, transitionTargetId)} startAtS={item.id === requestedItemId ? requestedStartS : null} loop={!channelMode} onEnded={channelMode ? () => advanceChannel(item.id) : undefined} />
+          item={item}
+          active={item.id === activeId}
+          playing={item.id === effectivePlaybackId}
+          preload={shouldPreloadItem(index, activeIndex, item.id, transitionTargetId)}
+          startAtS={item.id === requestedItemId ? requestedStartS : null}
+          mediaKey={channelMediaKey(item.id, channelMode, channelPlaybackGeneration)}
+          loop={!channelMode && !autoAdvance}
+          onEnded={channelMode || autoAdvance ? () => advanceAfterEnd(item.id) : undefined}
+          panelOpen={panelOpen}
+          onTogglePanel={() => setPanelOpen((value) => !value)}
+          commentsOpen={commentsOpen}
+          onToggleComments={() => setCommentsOpen((value) => !value)}
+          controls={
 
-          <div className="absolute right-3 top-28 flex items-center gap-2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm sm:right-4 sm:top-4">
+          <div className={cx("flex items-center rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm", panelOpen ? "w-full justify-end gap-1.5" : "gap-2")}>
             {(item.has_audio === false || item.audio_silent === true) && <span title="No sound — no audio stream, or a stream that is silent" className="inline-flex items-center gap-1 rounded-full bg-bad/90 px-2 py-1 text-[11px] font-semibold"><SpeakerSlash size={13} weight="fill" />{audioStatus(item.has_audio, item.audio_silent)}</span>}
             <button
               onClick={toggleMuted}
@@ -269,7 +303,7 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
                 max="100"
                 value={Math.round(volume * 100)}
                 onChange={(event) => setVolume(Number(event.target.value) / 100)}
-                className="h-1 w-20 cursor-pointer accent-white"
+                className={cx("h-1 cursor-pointer accent-white", panelOpen ? "w-14" : "w-20")}
               />
               <span className="tabular w-7 text-right">{Math.round(volume * 100)}%</span>
             </label>
@@ -293,35 +327,96 @@ function ViewerFeed({ feed, containerRef, onGoToLastWatched, onRandom, onOrdered
               CC
             </button>}
             {item.video_url && <button type="button" onClick={() => setIdentifyItem(item)} aria-label={`Identify the song for favorite #${item.id}`} title="Identify or fix the song" className="rounded-full p-1.5 transition hover:bg-white/15 active:translate-y-px"><MusicNotes size={20} /></button>}
+            <button type="button" onClick={() => setCommentsItem(item)} aria-label={`View comments for favorite #${item.id}`} title="View saved comments" className="rounded-full p-1.5 transition hover:bg-white/15 active:translate-y-px"><ChatCircle size={20} /></button>
             {item.video_url && <button type="button" onClick={() => setSettingsItem(item)} aria-label={`Open media settings for favorite #${item.id}`} title="Replace video or thumbnail" className="rounded-full p-1.5 transition hover:bg-white/15 active:translate-y-px"><GearSix size={20} /></button>}
           </div>
-
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/50 to-transparent px-4 pb-16 pt-28 sm:px-6">
-            <div className="mx-auto max-w-2xl">
-              {(cleanMetadataText(item.author) || cleanMetadataText(item.caption) || item.song) && <div className="rounded-[var(--radius-media)] border border-white/20 bg-black/70 p-4 text-white shadow-xl shadow-black/25 backdrop-blur-md">
-                {cleanMetadataText(item.author) && <div className="mb-2 flex items-center gap-2"><span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-white/70">Creator</span><span className="truncate text-sm font-semibold text-white">{cleanMetadataText(item.author)}</span></div>}
-                {item.song && <div className="mb-2 flex items-center gap-2"><span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-white/70">Song</span><a href={primarySongUrl(item.song)} target="_blank" rel="noreferrer" title="Find this song" className="pointer-events-auto inline-flex min-w-0 items-center gap-1.5 text-sm font-semibold text-white hover:underline"><MusicNotes size={14} weight="fill" className="shrink-0" /><span className="truncate">{songLabel(item.song)}</span></a></div>}
-                {cleanMetadataText(item.caption) && <CaptionDescription caption={cleanMetadataText(item.caption)} />}
-              </div>}
-              <div className="mt-2 flex items-center gap-2 px-1 text-xs text-white/70">
-                <span className="tabular">#{item.id}</span>
-                {isSafeHttpUrl(item.link) && <a href={item.link} target="_blank" rel="noreferrer" className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full px-2 py-1 transition hover:bg-white/10 hover:text-white"><ArrowSquareOut size={13} />Open on TikTok</a>}
-              </div>
-            </div>
-          </div>
-        </section>
+          }
+        />
       ))}
       </div>
       {settingsItem && <MediaSettingsDialog item={settingsItem} onClose={() => setSettingsItem(null)} onSaved={(updated) => { updateItem(updated); setSettingsItem(null); }} />}
       {identifyItem && <SongIdentifyDialog item={identifyItem} onClose={() => setIdentifyItem(null)} onSaved={(updated) => { updateItem(updated); setIdentifyItem(null); }} />}
+      {commentsItem && <CommentsDialog item={commentsItem} onClose={() => setCommentsItem(null)} />}
     </div>
   );
 }
 
-function CaptionDescription({ caption }: { caption: string }) {
-  return <p className="line-clamp-4 whitespace-pre-wrap break-words text-[15px] leading-6 text-white sm:text-base">
-    {captionParts(caption).map((part, index) => part.hashtag ? (
-      <Link key={`${part.text}-${index}`} to={hashtagGalleryUrl(part.hashtag)} title={`Show all favorites tagged ${part.hashtag}`} className="pointer-events-auto rounded px-0.5 font-semibold text-white underline decoration-white/35 underline-offset-2 transition hover:bg-white/15 hover:decoration-white">{part.text}</Link>
-    ) : <span key={`${part.text}-${index}`}>{part.text}</span>)}
-  </p>;
+
+/**
+ * One full-height post: the picture, its overlay controls, and the details
+ * panel floating beside it.
+ *
+ * The panel always floats, so it reads the same on every post and the media
+ * never resizes underneath you. A vertical post leaves plenty of black space
+ * for it to land in; a wide one gives up its right edge, which is what the
+ * toggle is for.
+ */
+function PostSection({
+  item, active, playing, preload, startAtS, mediaKey,
+  loop, onEnded, panelOpen, onTogglePanel, commentsOpen, onToggleComments, controls,
+}: {
+  item: Item;
+  active: boolean;
+  playing: boolean;
+  preload: boolean;
+  startAtS: number | null;
+  mediaKey: string;
+  loop: boolean;
+  onEnded?: () => void;
+  panelOpen: boolean;
+  onTogglePanel: () => void;
+  commentsOpen: boolean;
+  onToggleComments: () => void;
+  controls: React.ReactNode;
+}) {
+  const panelToggle = (position: React.CSSProperties) => (
+    <button
+      type="button"
+      onClick={onTogglePanel}
+      aria-expanded={panelOpen}
+      aria-label={panelOpen ? "Hide post details" : "Show post details"}
+      title={panelOpen ? "Hide post details (C)" : "Show post details (C)"}
+      style={position}
+      className="absolute top-1/2 z-40 flex h-16 w-6 -translate-y-1/2 items-center justify-center rounded-l-lg border border-r-0 border-white/15 bg-black/60 text-white backdrop-blur-md transition hover:bg-black/85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+    >
+      <CaretRight size={14} weight="bold" className={cx("transition", panelOpen ? "" : "rotate-180")} />
+    </button>
+  );
+
+  return (
+    <section data-id={item.id} className="relative flex h-full snap-start">
+      <div className="relative flex min-w-0 flex-1 items-center justify-center">
+        <PostMedia
+          key={mediaKey}
+          item={item}
+          active={playing}
+          preload={preload}
+          startAtS={startAtS}
+          loop={loop}
+          onEnded={onEnded}
+        />
+      </div>
+
+      {/* Controls and panel stack in one column so they line up and match. */}
+      <div
+        style={{ width: panelOpen ? PANEL_WIDTH : undefined }}
+        className={cx(
+          "absolute right-3 top-3 z-30 flex flex-col items-end gap-2",
+          commentsOpen ? "bottom-3" : "max-h-[calc(100%-1.5rem)]",
+        )}
+      >
+        {controls}
+        {panelOpen && (
+          <div className="relative min-h-0 w-full flex-1">
+            <PostDetailsPanel item={item} active={active} open={commentsOpen} onToggle={onToggleComments} />
+            {/* Rides the panel's own left edge, so a short collapsed card keeps
+                its handle beside it instead of stranded down the screen. */}
+            {panelToggle({ right: "100%" })}
+          </div>
+        )}
+      </div>
+
+      {!panelOpen && panelToggle({ right: 0 })}
+    </section>
+  );
 }

@@ -7,3 +7,4 @@ export function nextWheelTargetIndex(activeIndex: number, pendingIndex: number, 
 export function shouldCommitWheelTarget(scrollTop: number, viewportHeight: number, targetIndex: number): boolean;
 export function playbackItemId(activeId: number | null, transitionTargetId: number | null): number | null;
 export function shouldPreloadItem(index: number, activeIndex: number, itemId: number, transitionTargetId: number | null, ahead?: number): boolean;
+export function nextAutoAdvanceItem(items: Array<{ id: number }>, activeId: number | null): number | null;

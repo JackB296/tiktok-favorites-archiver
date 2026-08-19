@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { BrowserRouter, Routes, Route, NavLink, Link, useLocation } from "react-router-dom";
-import { FilmReel, SquaresFour, MusicNotes, ChartBar, DownloadSimple, HardDrives, Archive, Sun, Moon, BookmarkSimple, Compass, MagnifyingGlass, ClockCounterClockwise, Sparkle, Star, WaveSine, Copy, Television, CaretDown } from "@phosphor-icons/react";
+import { FilmReel, SquaresFour, MusicNotes, ChartBar, DownloadSimple, HardDrives, Archive, Sun, Moon, BookmarkSimple, Compass, MagnifyingGlass, ClockCounterClockwise, Sparkle, Star, WaveSine, Copy, Television, CaretDown, ChatsCircle, FirstAid } from "@phosphor-icons/react";
 import { cx } from "./components/ui";
 import { navigationGroups, primaryNavigation } from "./lib/navigation";
 
@@ -19,12 +19,15 @@ const Curate = lazy(() => import("./routes/Curate").then((module) => ({ default:
 const Vibes = lazy(() => import("./routes/Vibes").then((module) => ({ default: module.Vibes })));
 const Duplicates = lazy(() => import("./routes/Duplicates").then((module) => ({ default: module.Duplicates })));
 const Channels = lazy(() => import("./routes/Channels").then((module) => ({ default: module.Channels })));
+const Comments = lazy(() => import("./routes/Comments").then((module) => ({ default: module.Comments })));
+const Coverage = lazy(() => import("./routes/Coverage").then((module) => ({ default: module.Coverage })));
 
 const ICONS = {
   Feed: FilmReel, Gallery: SquaresFour, Music: MusicNotes, Stats: ChartBar,
   Sync: DownloadSimple, Storage: HardDrives, Backups: Archive, Discover: Compass,
   Lens: MagnifyingGlass, History: ClockCounterClockwise, Memories: Sparkle,
   Curate: Star, Vibes: WaveSine, Duplicates: Copy, Channels: Television,
+  Comments: ChatsCircle, Coverage: FirstAid,
 };
 
 function NavigationLink({ to, label, compact = false }: { to: string; label: keyof typeof ICONS; compact?: boolean }) {
@@ -145,6 +148,8 @@ export function App() {
               <Route path="/vibes" element={<Vibes />} />
               <Route path="/duplicates" element={<Duplicates />} />
               <Route path="/channels" element={<Channels />} />
+              <Route path="/comments" element={<Comments />} />
+              <Route path="/coverage" element={<Coverage />} />
               <Route path="/storage" element={<Storage />} />
               <Route path="/backups" element={<Backups />} />
               <Route path="/sync" element={<Dashboard />} />

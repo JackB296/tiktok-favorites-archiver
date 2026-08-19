@@ -98,6 +98,47 @@ def test_health_and_status_routes():
             assert client.post("/api/incremental/import").status_code == (405 if spa_built else 404)
 
 
+def test_comment_search_route_defaults_to_latest_and_can_include_history():
+    if TestClient is None:
+        return
+    from core import store
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, db_path, _dl = _build(tmp)
+        conn = store.connect(db_path)
+        try:
+            item_id = store.insert_item(conn, 1, "https://www.tiktok.com/@maker/video/123")
+            store.record_comment_snapshot(conn, item_id, [{"id": "a", "text": "old comet", "author_username": "alice"}], captured_at="2025-01-01T00:00:00Z")
+            store.record_comment_snapshot(conn, item_id, [{"id": "b", "text": "new nebula", "author_username": "bob"}], captured_at="2025-02-01T00:00:00Z")
+        finally:
+            conn.close()
+        with _client(app) as client:
+            assert client.get("/api/comments/search", params={"q": "comet"}).json()["results"] == []
+            response = client.get("/api/comments/search", params={"q": "comet", "history": "true"})
+            assert response.status_code == 200
+            assert response.json()["results"][0]["author_username"] == "alice"
+
+
+def test_coverage_route_is_fast_to_read_and_repairs_current_gallery_filter():
+    if TestClient is None:
+        return
+    from core import store
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, db_path, _dl = _build(tmp)
+        conn = store.connect(db_path)
+        try:
+            store.insert_item(conn, 1, "https://tiktok.com/1", status="done")
+            store.insert_item(conn, 2, "https://tiktok.com/2", status="failed")
+        finally:
+            conn.close()
+        with _client(app) as client:
+            report = client.get("/api/coverage")
+            assert report.status_code == 200 and report.json()["total_items"] == 2
+            repair = client.post("/api/coverage/repair", json={
+                "targets": ["comments"], "filter": {"status": "failed"},
+            })
+            assert repair.status_code == 200 and repair.json()["matched"] == 1
+
+
 def test_saved_list_trios_roundtrip_for_all_four_collections():
     if TestClient is None:
         return
@@ -156,6 +197,64 @@ def test_items_page_and_mark_and_requeue():
             assert requeued["requeued"] == [2]  # done + no file -> back to pending
 
             assert client.post("/api/items/requeue", json={"ids": []}).status_code == 400
+
+
+def test_items_page_search_scopes_and_rich_metadata_filters_are_http_queryable():
+    if TestClient is None:
+        return
+    from core import store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, db_path, _dl = _build(tmp)
+        conn = store.connect(db_path)
+        store.insert_item(conn, 1, "https://tiktok.com/a", status="done")
+        store.insert_item(conn, 2, "https://tiktok.com/b", status="done")
+        store.record_comment_snapshot(conn, 1, [{"id": "c", "text": "celadon glaze"}])
+        conn.execute(
+            "UPDATE item SET source_posted_at = '2025-02-03', view_count = 100000, "
+            "like_count = 5000, comment_count = 200, source_info_status = 'ok', "
+            "comments_status = 'ok', download_source = 'yt-dlp', "
+            "portable_metadata_status = 'ok' WHERE id = 1"
+        )
+        conn.commit()
+        conn.close()
+
+        with _client(app) as client:
+            scoped = client.get("/api/items/page", params={
+                "search": "celadon", "search_scope": "comments",
+            })
+            assert scoped.status_code == 200, scoped.text
+            assert [item["id"] for item in scoped.json()["items"]] == [1]
+            marked = client.post("/api/items/mark", json={
+                "action": "offload", "dry_run": True,
+                "filter": {"search": "celadon", "search_scope": "comments"},
+            })
+            assert marked.status_code == 200, marked.text
+            assert marked.json()["matched"] == 1
+            filtered = client.get("/api/items/page", params={
+                "posted_from": "2025-01-01", "posted_to": "2025-12-31T23:59:59",
+                "min_views": 10000, "min_likes": 1000, "min_comments": 100,
+                "source_info": "saved", "comments_state": "with_comments",
+                "download_source": "yt-dlp", "portable_metadata": "embedded",
+            })
+            assert filtered.status_code == 200, filtered.text
+            assert [item["id"] for item in filtered.json()["items"]] == [1]
+            preset = client.post("/api/gallery-presets", json={
+                "name": "Rich local search",
+                "filters": {
+                    "search": "celadon", "searchScope": "comments",
+                    "commentsState": "with_comments", "downloadSource": "yt-dlp",
+                    "minViews": "10000", "postedFrom": "2025-01-01",
+                },
+            })
+            assert preset.status_code == 200, preset.text
+            preset_id = preset.json()["id"]
+            assert client.get(f"/api/gallery-presets/{preset_id}/summary").json()["count"] == 1
+            for key, value in (
+                ("search_scope", "outside"), ("source_info", "maybe"),
+                ("min_views", "-1"), ("comments_state", "unknown"),
+            ):
+                assert client.get("/api/items/page", params={key: value}).status_code == 400
 
 
 def test_mutating_routes_refuse_while_a_run_is_active():
@@ -379,6 +478,44 @@ def test_local_analysis_is_default_pipeline_work_and_startable_in_app():
                 jobs._thread.join(3)
 
 
+def test_manual_sidecar_recheck_refreshes_comment_snapshots():
+    if TestClient is None:
+        return
+    received = []
+
+    def sidecars_runner(conn, download_dir, control=None, recheck=False):
+        received.append(recheck)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, jobs, _db, _downloads = _build(
+            tmp, runners={"sidecars": sidecars_runner},
+        )
+        with _client(app) as client:
+            assert client.post("/api/sync/sidecars?recheck=1").json() == {"started": True}
+            jobs._thread.join(3)
+
+    assert received == [True]
+
+
+def test_existing_silent_video_repair_is_startable_from_sync_controls():
+    if TestClient is None:
+        return
+    ran = []
+
+    def repair_runner(conn, download_dir, control=None):
+        ran.append(download_dir)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, jobs, _db, downloads = _build(
+            tmp, runners={"audio-repair": repair_runner},
+        )
+        with _client(app) as client:
+            assert client.post("/api/sync/repair-audio").json() == {"started": True}
+            jobs._thread.join(3)
+
+    assert ran == [downloads]
+
+
 def test_archive_intelligence_history_and_memory_routes():
     if TestClient is None:
         return
@@ -457,6 +594,20 @@ def test_library_settings_rejects_a_non_object_body():
             assert client.get("/api/library-stats").status_code == 200
 
 
+def test_portable_metadata_setting_is_off_by_default_and_can_be_enabled():
+    if TestClient is None:
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, _db, _dl = _build(tmp)
+        with _client(app) as client:
+            assert client.get("/api/library-settings").json()["portable_metadata_enabled"] == 0
+            updated = client.put(
+                "/api/library-settings", json={"portable_metadata_enabled": True},
+            )
+            assert updated.status_code == 200, updated.text
+            assert updated.json()["portable_metadata_enabled"] == 1
+
+
 def test_invalid_utf8_body_is_400_not_500():
     if TestClient is None:
         return
@@ -515,9 +666,11 @@ def test_manual_song_attach_validates_field_types():
             assert client.post("/api/items/999/song", json={"title": "T"}).status_code == 404
 
 
-def _import_response(client, payload_bytes):
+def _import_response(client, payload_bytes, selection=None):
+    data = {"selection": selection} if selection else None
     return client.post(
         "/api/import",
+        data=data,
         files={"file": ("user_data_tiktok.json", payload_bytes, "application/json")},
     )
 
@@ -673,6 +826,192 @@ def test_import_upload_end_to_end():
             assert wrong_shape.status_code == 400  # was an AttributeError 500
 
 
+def test_likes_profile_and_myfavett_import_routes_end_to_end():
+    if TestClient is None:
+        return
+    from server import api as api_module
+    from core import store
+
+    export_bytes = json.dumps({"Activity": {
+        "Favorite Videos": {"FavoriteVideoList": [{"Link": "favorite"}]},
+        "Like List": {"ItemFavoriteList": [{"Link": "liked"}]},
+    }}).encode()
+    original_profile = api_module.profile_import.import_profile
+    original_adopt = api_module.myfavett.adopt_video
+    try:
+        api_module.profile_import.import_profile = lambda conn, username, **_kwargs: {
+            "username": str(username).lstrip("@"), "discovered": 2,
+            "added": 2, "existing": 0, "item_ids": [3, 4],
+        }
+
+        def fake_adopt(_conn, _downloads, video_id, staged, source_path=None):
+            assert os.path.isfile(staged)
+            assert source_path.endswith(f"/{video_id}.mp4")
+            return {"status": "imported", "item_id": 1, "created": False, "matched_slot": True}
+
+        api_module.myfavett.adopt_video = fake_adopt
+        with tempfile.TemporaryDirectory() as tmp:
+            app, _jobs, db_path, _downloads = _build(tmp)
+            with _client(app) as client:
+                likes = _import_response(client, export_bytes, selection="likes")
+                assert likes.status_code == 200, likes.text
+                assert likes.json()["selection"] == "likes" and likes.json()["favorites"] == 1
+
+                profile = client.post("/api/import/profile", json={
+                    "username": "@cook", "start_sync": False,
+                })
+                assert profile.status_code == 200, profile.text
+                assert profile.json()["username"] == "cook"
+                assert profile.json()["sync_started"] is False
+
+                conn = store.connect(db_path)
+                try:
+                    row = conn.execute("SELECT id FROM item WHERE link = 'liked'").fetchone()
+                    item_id = row["id"]
+                    conn.execute(
+                        "UPDATE item SET link = ? WHERE id = ?",
+                        ("https://www.tiktok.com/@gone/video/12345", item_id),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+                plan = client.post("/api/import/myfavett/plan", json={"paths": [
+                    "archive/data/Favorites/videos/12345.mp4",
+                    "archive/data/Likes/covers/12345.jpg",
+                ]})
+                assert plan.status_code == 200, plan.text
+                assert plan.json()["counts"]["matched_slots"] == 1
+
+                adopted = client.post(
+                    "/api/import/myfavett/video",
+                    data={"video_id": "12345", "source_path": "archive/data/Favorites/videos/12345.mp4"},
+                    files={"video": ("12345.mp4", b"\x00\x00\x00\x18ftypisomdata", "video/mp4")},
+                )
+                assert adopted.status_code == 200, adopted.text
+                assert adopted.json()["matched_slot"] is True
+    finally:
+        api_module.profile_import.import_profile = original_profile
+        api_module.myfavett.adopt_video = original_adopt
+
+
+def test_creator_monitor_routes_add_pause_refresh_and_remove():
+    if TestClient is None:
+        return
+    from server import api as api_module
+    from core import store
+
+    original = api_module.profile_import.monitor_profile
+    try:
+        def fake_monitor(conn, username, downloads, interval_hours=6, **_kwargs):
+            normalized = str(username).lstrip("@")
+            store.save_creator_monitor(conn, normalized, interval_hours=interval_hours)
+            return {
+                "username": normalized, "discovered": 3, "added": 3,
+                "existing": 0, "item_ids": [1, 2, 3],
+            }
+
+        api_module.profile_import.monitor_profile = fake_monitor
+        with tempfile.TemporaryDirectory() as tmp:
+            app, _jobs, _db, _downloads = _build(tmp)
+            with _client(app) as client:
+                created = client.post("/api/import/profile", json={
+                    "username": "@cook", "start_sync": False,
+                    "monitor": True, "interval_hours": 12,
+                })
+                assert created.status_code == 200, created.text
+                monitors = client.get("/api/creator-monitors").json()
+                assert len(monitors) == 1 and monitors[0]["username"] == "cook"
+                assert monitors[0]["interval_hours"] == 12
+
+                monitor_id = monitors[0]["id"]
+                paused = client.patch(
+                    f"/api/creator-monitors/{monitor_id}",
+                    json={"enabled": False, "interval_hours": 24},
+                )
+                assert paused.status_code == 200, paused.text
+                assert paused.json()["enabled"] is False
+                assert paused.json()["interval_hours"] == 24
+
+                resumed = client.patch(
+                    f"/api/creator-monitors/{monitor_id}", json={"enabled": True},
+                )
+                assert resumed.status_code == 200 and resumed.json()["enabled"] is True
+
+                due = client.post(f"/api/creator-monitors/{monitor_id}/check")
+                assert due.status_code == 200 and due.json()["queued"] is True
+                assert client.delete(f"/api/creator-monitors/{monitor_id}").json() == {"ok": True}
+                assert client.get("/api/creator-monitors").json() == []
+    finally:
+        api_module.profile_import.monitor_profile = original
+
+
+def test_rich_source_metadata_route_returns_description_engagement_and_saved_comments():
+    if TestClient is None:
+        return
+    from core import source_metadata, store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, db_path, downloads = _build(tmp)
+        conn = store.connect(db_path)
+        store.upsert_link(conn, "https://www.tiktok.com/@cook/video/123")
+        source_metadata.archive(conn, downloads, 1, source_metadata.from_info({
+            "id": "123", "title": "caption", "description": "the full description",
+            "uploader": "cook", "channel": "Cook Display",
+            "view_count": 100, "like_count": 10, "comment_count": 2,
+            "comments": [{"id": "one", "author": "fan", "text": "Looks good"}],
+        }))
+        source_metadata.archive(conn, downloads, 1, source_metadata.from_info({
+            "id": "123", "title": "caption", "description": "the full description",
+            "uploader": "cook", "channel": "Cook Display",
+            "view_count": 101, "like_count": 11, "comment_count": 3,
+            "comments": [
+                {"id": "one", "author": "fan", "text": "Looks good", "like_count": 2},
+                {"id": "two", "author": "cook", "text": "Thanks"},
+            ],
+        }))
+        conn.close()
+
+        with _client(app) as client:
+            item = client.get("/api/items/page", params={"limit": 1}).json()["items"][0]
+            assert item["creator"]["key"] == "cook"
+            assert item["description"] == "the full description"
+            assert item["view_count"] == 101 and item["like_count"] == 11
+            assert item["comments_status"] == "ok"
+            details = client.get("/api/items/1/source-metadata")
+            assert details.status_code == 200, details.text
+            assert details.json()["comments"][0]["text"] == "Looks good"
+            snapshots = details.json()["comment_snapshots"]
+            assert len(snapshots) == 2
+            assert snapshots[0]["changes"] == {"added": 1, "removed": 0, "changed": 1}
+            assert snapshots[1]["comments"][0]["text"] == "Looks good"
+
+
+def test_gallery_and_feed_filter_exactly_by_identified_song():
+    if TestClient is None:
+        return
+    from core import store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, db_path, _dl = _build(tmp)
+        conn = store.connect(db_path)
+        for item_id in (1, 2, 3):
+            store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
+        wanted = store.upsert_song(conn, "shazam:wanted", "Wanted", artist="Singer")
+        other = store.upsert_song(conn, "shazam:other", "Other", artist="Singer")
+        store.set_item_song(conn, 1, wanted)
+        store.set_item_song(conn, 2, wanted)
+        store.set_item_song(conn, 3, other)
+        conn.close()
+
+        with _client(app) as client:
+            page = client.get("/api/items/page", params={"song": wanted}).json()
+            assert [item["id"] for item in page["items"]] == [2, 1]
+            assert all(item["song"]["id"] == wanted for item in page["items"])
+            assert client.get("/api/feed/ids", params={"song": wanted}).json() == [2, 1]
+            assert client.get("/api/items/page", params={"song": 0}).status_code == 400
+
+
 def test_spotify_routes_cover_status_connect_and_guards():
     if TestClient is None:
         return
@@ -750,7 +1089,11 @@ def test_stats_route_returns_the_aggregate_payload():
             payload = client.get("/api/stats").json()
             assert payload["hero"]["total"] == 1
             assert payload["growth"]["monthly"] == [{"month": "2023-05", "count": 1}]
-            assert set(payload) == {"hero", "growth", "watcher", "top", "health"}
+            assert set(payload) == {
+                "hero", "growth", "watcher", "reach", "discovery_lag",
+                "quality", "conversation", "monitoring", "top", "health",
+            }
+            assert payload["reach"]["peak_posts"] == []
 
 
 def test_smart_collections_pipeline_schedules_and_discovery_routes():
@@ -788,7 +1131,7 @@ def test_smart_collections_pipeline_schedules_and_discovery_routes():
             catalog = client.get("/api/run-catalog").json()
             assert any(entry["kind"] == "discovery-backfill" for entry in catalog)
             assert client.get("/api/pipeline-settings").json()["phases"] == [
-                "sync", "enrich", "identify", "analyze",
+                "sync", "enrich", "sidecars", "identify", "analyze",
             ]
             changed = client.put(
                 "/api/pipeline-settings",

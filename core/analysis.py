@@ -1,4 +1,5 @@
 """Fully local speech and scene-text analysis for Archive media."""
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait as futures_wait
 import json
 import math
 import os
@@ -121,7 +122,8 @@ def eligible_items(conn, download_dir):
     ]
 
 
-def items_needing_analysis(conn, download_dir):
+def items_needing_analysis(conn, download_dir, sources=None):
+    sources = tuple(sources or lens.SOURCES)
     states = {
         (row["item_id"], row["source"]): row
         for row in conn.execute("SELECT * FROM analysis_source_state")
@@ -138,7 +140,7 @@ def items_needing_analysis(conn, download_dir):
             lens.state_needs_analysis(
                 states.get((item["id"], source)), fingerprint,
             )
-            for source in lens.SOURCES
+            for source in sources
         ):
             pending.append(item)
     return pending
@@ -395,10 +397,27 @@ def run_analysis(
     control=None,
     transcribe=None,
     recognize=None,
+    item_ids=None,
+    transcript_workers=None,
+    ocr_workers=None,
+    sources=None,
 ):
     if control is None:
         control = runs.RunControl(conn, progress=progress, wait=wait)
-    items = items_needing_analysis(conn, download_dir)
+    sources = tuple(dict.fromkeys(sources or lens.SOURCES))
+    unknown_sources = set(sources) - set(lens.SOURCES)
+    if unknown_sources:
+        raise ValueError("unknown analysis source: " + ", ".join(sorted(unknown_sources)))
+    items = items_needing_analysis(conn, download_dir, sources=sources)
+    if item_ids is not None:
+        wanted = {int(value) for value in item_ids}
+        items = [item for item in items if item["id"] in wanted]
+    transcribe = transcribe or transcribe_media
+    recognize = recognize or recognize_media
+    transcript_workers = max(1, int(
+        transcript_workers or config.ANALYSIS_TRANSCRIPT_WORKERS
+    ))
+    ocr_workers = max(1, int(ocr_workers or config.ANALYSIS_OCR_WORKERS))
     totals = {
         "completed": 0,
         "total": len(items),
@@ -409,30 +428,104 @@ def run_analysis(
         "skipped": 0,
     }
     control.progress({"event": "analysis", **totals})
+
+    jobs = {source: [] for source in sources}
+    remaining = {}
+
     for item in items:
         if not control.should_continue():
             break
         try:
-            outcome = analyze_item(
-                conn,
-                download_dir,
-                item,
-                transcribe=transcribe,
-                recognize=recognize,
-            )
+            if not _is_eligible(item, download_dir):
+                raise AnalysisError("favorite does not have readable local media")
+            media_path = layout.movie(download_dir, item["id"])
+            fingerprint = media_index.file_fingerprint(media_path)
+            needed = [
+                source for source in sources
+                if lens.source_needs_analysis(
+                    conn, item["id"], source, fingerprint,
+                )
+            ]
+            if not needed:
+                raise AnalysisError("favorite no longer needs analysis")
+            remaining[item["id"]] = len(needed)
+            for source in needed:
+                jobs[source].append((item, media_path, fingerprint))
         except (AnalysisError, OSError):
             totals["completed"] += 1
             totals["skipped"] += 1
             control.progress({
                 "event": "analysis", "id": item["id"], **totals,
             })
-            continue
-        totals["completed"] += 1
-        if outcome["completed_sources"] or outcome["failed_sources"]:
+
+    def record(source, item, fingerprint, outcome):
+        try:
+            segments = outcome()
+            if lens.replace_generated_source(
+                conn, item["id"], source, segments, fingerprint,
+            ):
+                totals["completed_sources"] += 1
+                totals["segments"] += len(segments)
+        except Exception as error:
+            lens.record_generated_failure(
+                conn, item["id"], source, fingerprint, error,
+            )
+            totals["failed_sources"] += 1
+        remaining[item["id"]] -= 1
+        if remaining[item["id"]] == 0:
+            totals["completed"] += 1
             totals["items_analyzed"] += 1
-        for field in ("completed_sources", "failed_sources", "segments"):
-            totals[field] += outcome[field]
         control.progress({
             "event": "analysis", "id": item["id"], **totals,
         })
+
+    def run_source(source, source_jobs, generate, workers):
+        if not source_jobs or not control.should_continue():
+            return
+        if workers == 1:
+            for item, media_path, fingerprint in source_jobs:
+                if not control.should_continue():
+                    break
+                record(
+                    source, item, fingerprint,
+                    lambda media_path=media_path: generate(media_path),
+                )
+            return
+
+        iterator = iter(source_jobs)
+        accepting = True
+        pending = {}
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            while accepting and len(pending) < workers:
+                try:
+                    item, media_path, fingerprint = next(iterator)
+                except StopIteration:
+                    accepting = False
+                    break
+                pending[pool.submit(generate, media_path)] = (item, fingerprint)
+            while pending:
+                completed_futures, _ = futures_wait(
+                    pending, return_when=FIRST_COMPLETED,
+                )
+                for future in completed_futures:
+                    item, fingerprint = pending.pop(future)
+                    record(source, item, fingerprint, future.result)
+                    if not accepting:
+                        continue
+                    if not control.should_continue():
+                        accepting = False
+                        continue
+                    try:
+                        next_item, next_path, next_fingerprint = next(iterator)
+                    except StopIteration:
+                        accepting = False
+                        continue
+                    pending[pool.submit(generate, next_path)] = (
+                        next_item, next_fingerprint,
+                    )
+
+    if "transcript" in jobs:
+        run_source("transcript", jobs["transcript"], transcribe, transcript_workers)
+    if "ocr" in jobs:
+        run_source("ocr", jobs["ocr"], recognize, ocr_workers)
     return totals

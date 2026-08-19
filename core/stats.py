@@ -21,6 +21,7 @@ DURATION_BUCKETS = (
 
 TOP_LIMIT = 15
 ERROR_LIMIT = 8
+PEAK_POST_LIMIT = 5
 
 
 def compute_stats(conn):
@@ -29,6 +30,11 @@ def compute_stats(conn):
         "hero": _hero(conn),
         "growth": _growth(conn),
         "watcher": _watcher(conn),
+        "reach": _reach(conn),
+        "discovery_lag": _discovery_lag(conn),
+        "quality": _quality(conn),
+        "conversation": _conversation(conn),
+        "monitoring": _monitoring(conn),
         "top": _top(conn),
         "health": _health(conn),
     }
@@ -84,22 +90,35 @@ def _watcher(conn):
         if r["dow"] is not None and r["hour"] is not None
     ]
 
-    durations = [
-        r["duration_s"]
-        for r in conn.execute(
-            "SELECT duration_s FROM item WHERE duration_s IS NOT NULL ORDER BY duration_s"
-        ).fetchall()
+    # Bucket in SQLite instead of transferring every duration to Python. The
+    # partial duration index also makes the two-row median lookup inexpensive.
+    durations = conn.execute(
+        "SELECT COUNT(*) AS total,"
+        " SUM(duration_s >= 0 AND duration_s < 15) AS b0,"
+        " SUM(duration_s >= 15 AND duration_s < 30) AS b1,"
+        " SUM(duration_s >= 30 AND duration_s < 60) AS b2,"
+        " SUM(duration_s >= 60 AND duration_s < 120) AS b3,"
+        " SUM(duration_s >= 120 AND duration_s < 300) AS b4,"
+        " SUM(duration_s >= 300) AS b5 "
+        "FROM item WHERE duration_s IS NOT NULL"
+    ).fetchone()
+    duration_count = durations["total"]
+    histogram = [
+        {"label": bucket[0], "count": durations[f"b{index}"] or 0}
+        for index, bucket in enumerate(DURATION_BUCKETS)
     ]
-    histogram = []
-    for label, lo, hi in DURATION_BUCKETS:
-        count = sum(1 for d in durations if d >= lo and (hi is None or d < hi))
-        histogram.append({"label": label, "count": count})
-    if not durations:
+    if not duration_count:
         histogram = []
         median = None
     else:
-        mid = len(durations) // 2
-        median = durations[mid] if len(durations) % 2 else (durations[mid - 1] + durations[mid]) / 2.0
+        middle = conn.execute(
+            "SELECT AVG(duration_s) AS median FROM ("
+            " SELECT duration_s FROM item WHERE duration_s IS NOT NULL"
+            " ORDER BY duration_s LIMIT ? OFFSET ?"
+            ")",
+            (2 if duration_count % 2 == 0 else 1, (duration_count - 1) // 2),
+        ).fetchone()
+        median = middle["median"]
 
     # Only videos carry a silence verdict — slideshows are rebuilt with audio
     # and leave audio_silent NULL, so counting them would dilute the share and
@@ -113,6 +132,158 @@ def _watcher(conn):
         "duration_histogram": histogram,
         "median_duration_s": median,
         "silent": {"count": silent["silent"] or 0, "of_indexed": silent["indexed"]},
+    }
+
+
+def _reach(conn):
+    """Bounded source engagement summary plus five local playback links."""
+    row = conn.execute(
+        "SELECT COUNT(view_count) AS covered,"
+        " COALESCE(SUM(view_count), 0) AS views,"
+        " COALESCE(SUM(like_count), 0) AS likes,"
+        " COALESCE(SUM(comment_count), 0) AS comments,"
+        " COALESCE(SUM(repost_count), 0) AS reposts,"
+        " COALESCE(SUM(save_count), 0) AS saves FROM item"
+    ).fetchone()
+    peaks = [
+        {
+            "id": result["id"], "caption": result["caption"],
+            "creator": result["creator"], "views": result["views"] or 0,
+            "likes": result["likes"] or 0,
+            "comments": result["comments"] or 0,
+            "reposts": result["reposts"] or 0,
+            "saves": result["saves"] or 0,
+        }
+        for result in conn.execute(
+            "SELECT id, SUBSTR(COALESCE(NULLIF(description, ''), NULLIF(caption, ''),"
+            " 'Favorite #' || id), 1, 160) AS caption,"
+            " COALESCE(NULLIF(creator_username, ''), NULLIF(author, '')) AS creator,"
+            " view_count AS views, like_count AS likes, comment_count AS comments,"
+            " repost_count AS reposts, save_count AS saves FROM item "
+            "WHERE view_count IS NOT NULL ORDER BY view_count DESC, like_count DESC, id "
+            "LIMIT ?",
+            (PEAK_POST_LIMIT,),
+        ).fetchall()
+    ]
+    return {
+        "covered": row["covered"], "views": row["views"], "likes": row["likes"],
+        "comments": row["comments"], "reposts": row["reposts"], "saves": row["saves"],
+        "peak_posts": peaks,
+    }
+
+
+def _discovery_lag(conn):
+    """How soon after publication a post was favorited, in fixed buckets."""
+    row = conn.execute(
+        "WITH lagged AS ("
+        " SELECT julianday(favorited_at) - julianday(source_posted_at) AS days"
+        " FROM item WHERE favorited_at IS NOT NULL AND source_posted_at IS NOT NULL"
+        "), valid AS (SELECT days FROM lagged WHERE days IS NOT NULL AND days >= -1) "
+        "SELECT COUNT(*) AS covered,"
+        " SUM(days < 1) AS same_day,"
+        " SUM(days >= 1 AND days < 7) AS week,"
+        " SUM(days >= 7 AND days < 30) AS month,"
+        " SUM(days >= 30) AS later FROM valid"
+    ).fetchone()
+    covered = row["covered"]
+    return {
+        "covered": covered,
+        "buckets": [] if not covered else [
+            {"label": "Same day", "count": row["same_day"] or 0},
+            {"label": "Within a week", "count": row["week"] or 0},
+            {"label": "Within a month", "count": row["month"] or 0},
+            {"label": "Later", "count": row["later"] or 0},
+        ],
+    }
+
+
+def _quality(conn):
+    """Offline completeness, archived resolution, and bounded downloader mix."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS total,"
+        " SUM(source_info_status = 'ok') AS source_metadata,"
+        " SUM(comments_status = 'ok') AS comments,"
+        " SUM(COALESCE(custom_thumbnail_path, thumbnail_path, source_thumbnail_path) IS NOT NULL)"
+        " AS thumbnails,"
+        " SUM(portable_metadata_status = 'ok') AS portable_metadata,"
+        " SUM(song_id IS NOT NULL) AS songs,"
+        " SUM(download_source = 'cobalt') AS cobalt,"
+        " SUM(download_source = 'yt-dlp') AS ytdlp,"
+        " SUM(download_source IS NULL OR download_source NOT IN ('cobalt', 'yt-dlp')) AS legacy "
+        "FROM item"
+    ).fetchone()
+    resolution = conn.execute(
+        "SELECT COUNT(*) AS total,"
+        " SUM(MIN(media_width, media_height) >= 2160) AS r4k,"
+        " SUM(MIN(media_width, media_height) >= 1080"
+        "     AND MIN(media_width, media_height) < 2160) AS r1080,"
+        " SUM(MIN(media_width, media_height) >= 720"
+        "     AND MIN(media_width, media_height) < 1080) AS r720,"
+        " SUM(MIN(media_width, media_height) < 720) AS lower "
+        "FROM item WHERE kind = 'video' AND media_width > 0 AND media_height > 0"
+    ).fetchone()
+    return {
+        "offline": {
+            "total": row["total"],
+            "source_metadata": row["source_metadata"] or 0,
+            "comments": row["comments"] or 0,
+            "thumbnails": row["thumbnails"] or 0,
+            "portable_metadata": row["portable_metadata"] or 0,
+            "songs": row["songs"] or 0,
+        },
+        "resolution": [] if not resolution["total"] else [
+            {"label": "4K", "count": resolution["r4k"] or 0},
+            {"label": "1080p", "count": resolution["r1080"] or 0},
+            {"label": "720p", "count": resolution["r720"] or 0},
+            {"label": "Lower", "count": resolution["lower"] or 0},
+        ],
+        "downloads": [
+            {"label": "Cobalt", "count": row["cobalt"] or 0},
+            {"label": "yt-dlp", "count": row["ytdlp"] or 0},
+            {"label": "Legacy / unknown", "count": row["legacy"] or 0},
+        ],
+    }
+
+
+def _conversation(conn):
+    """Comment history without loading or parsing any saved comment JSON."""
+    row = conn.execute(
+        "WITH bounds AS ("
+        " SELECT item_id, MIN(id) AS first_id, MAX(id) AS latest_id"
+        " FROM comment_snapshot GROUP BY item_id"
+        ") SELECT COUNT(DISTINCT current.item_id) AS posts, COUNT(*) AS snapshots,"
+        " COALESCE(SUM(CASE WHEN current.id = bounds.latest_id"
+        " THEN current.saved_count ELSE 0 END), 0) AS saved_comments,"
+        " COALESCE(SUM(CASE WHEN current.id != bounds.first_id"
+        " THEN current.added_count ELSE 0 END), 0) AS added,"
+        " COALESCE(SUM(CASE WHEN current.id != bounds.first_id"
+        " THEN current.removed_count ELSE 0 END), 0) AS removed,"
+        " COALESCE(SUM(CASE WHEN current.id != bounds.first_id"
+        " THEN current.changed_count ELSE 0 END), 0) AS changed "
+        "FROM comment_snapshot current JOIN bounds ON bounds.item_id = current.item_id"
+    ).fetchone()
+    return {
+        "posts": row["posts"] or 0,
+        "snapshots": row["snapshots"],
+        "saved_comments": row["saved_comments"],
+        "changes": {
+            "added": row["added"], "removed": row["removed"],
+            "changed": row["changed"],
+        },
+    }
+
+
+def _monitoring(conn):
+    row = conn.execute(
+        "SELECT COUNT(*) AS profiles, SUM(enabled = 1) AS active,"
+        " SUM(last_checked_at IS NOT NULL) AS checked,"
+        " COALESCE(SUM(last_new_count), 0) AS found_last_check,"
+        " SUM(last_error IS NOT NULL) AS errors FROM creator_monitor"
+    ).fetchone()
+    return {
+        "profiles": row["profiles"], "active": row["active"] or 0,
+        "checked": row["checked"] or 0,
+        "found_last_check": row["found_last_check"], "errors": row["errors"] or 0,
     }
 
 

@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse, RedirectResponse, FileResponse
 from starlette.background import BackgroundTask
 
-from core import analysis, config, store, storage, snapshots, selection, run_catalog, scheduler, importer, import_history as archive_history, cobalt, curation, export, layout, verify, inventory, legacy_bootstrap, manual_media, media_index, songid, spotify, stats, lens
+from core import analysis, comment_search, config, coverage, store, storage, snapshots, selection, run_catalog, scheduler, importer, import_history as archive_history, cobalt, curation, export, layout, verify, inventory, legacy_bootstrap, manual_media, media_index, myfavett, profile_import, songid, source_metadata, spotify, stats, lens
 from server import archive_items
 from server.archive_items import ArchiveItems
 from server.jobs import JobBusyError
@@ -54,6 +54,7 @@ def _library_settings(conn):
         "index_enabled": row["index_enabled"],
         "thumbnail_width": row["thumbnail_width"],
         "song_id_enabled": row["song_id_enabled"],
+        "portable_metadata_enabled": row["portable_metadata_enabled"],
         "default_audio_name": row["default_audio_name"],
         "index": store.library_index_status(conn),
     }
@@ -644,7 +645,11 @@ def _legacy_mapping_segments(value):
 
 
 @router.post("/import")
-async def import_export(request: Request, file: UploadFile = File(...)):
+async def import_export(
+    request: Request,
+    file: UploadFile = File(...),
+    selection: str = Form("favorites"),
+):
     tmp_path = None
     source_name = file.filename
     try:
@@ -658,6 +663,7 @@ async def import_export(request: Request, file: UploadFile = File(...)):
                     tmp_path,
                     _download_dir(request),
                     source_name=source_name,
+                    selection=selection,
                 )
             finally:
                 conn.close()
@@ -674,6 +680,333 @@ async def import_export(request: Request, file: UploadFile = File(...)):
     finally:
         if tmp_path:
             _remove_temp_files([tmp_path])
+
+
+@router.post("/import/profile")
+async def import_profile(request: Request):
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="profile import must be an object")
+    username = body.get("username")
+    start_sync = body.get("start_sync", True)
+    monitor = body.get("monitor", False)
+    interval_hours = body.get("interval_hours", 6)
+    limit = body.get("limit")
+    policy = {
+        "archive_mode": body.get("archive_mode", "all"),
+        "keywords": body.get("keywords", []),
+        "exclude_reposts": body.get("exclude_reposts", False),
+        "max_backlog_days": body.get("max_backlog_days"),
+        "collect_comments": body.get("collect_comments", True),
+        "analyze_new": body.get("analyze_new", False),
+        "identify_songs": body.get("identify_songs", False),
+    }
+    if not isinstance(start_sync, bool):
+        raise HTTPException(status_code=400, detail="start_sync must be true or false")
+    if not isinstance(monitor, bool):
+        raise HTTPException(status_code=400, detail="monitor must be true or false")
+    if type(interval_hours) is not int or not 1 <= interval_hours <= 168:
+        raise HTTPException(status_code=400, detail="interval_hours must be between 1 and 168")
+    if policy["archive_mode"] not in ("all", "matching"):
+        raise HTTPException(status_code=400, detail="archive_mode must be all or matching")
+    if not isinstance(policy["keywords"], list) or any(not isinstance(value, str) for value in policy["keywords"]):
+        raise HTTPException(status_code=400, detail="keywords must be a list of strings")
+    if policy["archive_mode"] == "matching" and not any(value.strip() for value in policy["keywords"]):
+        raise HTTPException(status_code=400, detail="matching creator rules need at least one keyword")
+    for field in ("exclude_reposts", "collect_comments", "analyze_new", "identify_songs"):
+        if not isinstance(policy[field], bool):
+            raise HTTPException(status_code=400, detail=f"{field} must be true or false")
+    if policy["max_backlog_days"] is not None and (
+        type(policy["max_backlog_days"]) is not int or not 1 <= policy["max_backlog_days"] <= 36500
+    ):
+        raise HTTPException(status_code=400, detail="max_backlog_days must be between 1 and 36500")
+
+    def operation():
+        conn = _open(request)
+        try:
+            if monitor:
+                return profile_import.monitor_profile(
+                    conn, username, _download_dir(request),
+                    interval_hours=interval_hours,
+                    policy=policy,
+                )
+            return profile_import.import_profile(
+                conn, username, limit=limit, download_dir=_download_dir(request),
+                policy=policy,
+            )
+        finally:
+            conn.close()
+
+    try:
+        result = await _exclusive(request, operation)
+    except JobBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except profile_import.ProfileImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    result["sync_started"] = bool(start_sync and request.app.state.jobs.start("sync"))
+    return result
+
+
+@router.get("/creator-monitors")
+def creator_monitors(request: Request):
+    conn = _open(request)
+    try:
+        return store.list_creator_monitors(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/comments/search")
+def search_comments(
+    request: Request,
+    q: str = "",
+    history: bool = False,
+    limit: int = 50,
+    cursor: int | None = None,
+):
+    if not 1 <= limit <= 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+    conn = _open(request)
+    try:
+        return comment_search.search(
+            conn, q, include_history=history, limit=limit, cursor=cursor,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    finally:
+        conn.close()
+
+
+@router.get("/coverage")
+def archive_coverage(request: Request):
+    conn = _open(request)
+    try:
+        return coverage.report(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/coverage/repair")
+async def repair_archive_coverage(request: Request):
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="coverage repair must be an object")
+    targets = body.get("targets")
+    allowed = {"source_metadata", "comments", "thumbnails", "transcripts", "ocr", "songs", "portable_metadata", "audio"}
+    if not isinstance(targets, list) or not targets or any(
+        not isinstance(value, str) or value not in allowed for value in targets
+    ):
+        raise HTTPException(status_code=400, detail="targets contains an unsupported coverage category")
+    item_ids = body.get("item_ids")
+    if item_ids is not None and (
+        not isinstance(item_ids, list) or any(type(value) is not int or value < 1 for value in item_ids)
+    ):
+        raise HTTPException(status_code=400, detail="item_ids must be positive integers")
+    filters = body.get("filter")
+    if filters is not None:
+        if item_ids is not None or not isinstance(filters, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in filters.items()
+        ):
+            raise HTTPException(status_code=400, detail="filter must be a Gallery query object and cannot be combined with item_ids")
+        try:
+            query = archive_items.parse_page_query(filters)
+            for key in ("limit", "cursor", "order", "seed"):
+                if key in query:
+                    raise ValueError(f"{key} is not a filter")
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        conn = _open(request)
+        try:
+            item_ids = store.item_ids_matching(conn, **query)
+        finally:
+            conn.close()
+    started = request.app.state.jobs.start(
+        "coverage-repair", targets=list(dict.fromkeys(targets)), item_ids=item_ids,
+    )
+    return {"started": started, "matched": None if item_ids is None else len(item_ids)}
+
+
+@router.get("/items/{n}/source-metadata")
+def item_source_metadata(request: Request, n: int):
+    conn = _open(request)
+    try:
+        if store.get_item(conn, n) is None:
+            raise HTTPException(status_code=404, detail="Favorite not found")
+        path = os.path.join(_download_dir(request), f"{n}.info.json")
+        if not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="Source metadata has not been saved yet")
+        try:
+            with open(path, encoding="utf-8") as source:
+                details = json.load(source)
+        except (OSError, ValueError):
+            raise HTTPException(status_code=500, detail="Saved source metadata is unreadable")
+        details["comment_snapshots"] = store.list_comment_snapshots(conn, n)
+        return details
+    finally:
+        conn.close()
+
+
+@router.post("/items/{n}/comments/refresh")
+def refresh_item_comments(request: Request, n: int):
+    """Fetch this post's comments again, right now.
+
+    The Sync tab can re-fetch the whole library; this is the same work for one
+    post, for when a single conversation has moved on since the last sync.
+    """
+    conn = _open(request)
+    try:
+        try:
+            source_metadata.refresh_item(conn, _download_dir(request), n)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Favorite not found")
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        except Exception as error:  # network / extractor failure
+            raise HTTPException(status_code=502, detail=f"could not reach the post: {error}")
+        snapshots = store.list_comment_snapshots(conn, n)
+        latest = snapshots[0] if snapshots else None
+        return {
+            "item_id": n,
+            "comments": latest["comments"] if latest else [],
+            "saved_count": latest["saved_count"] if latest else 0,
+            "reported_count": latest["reported_count"] if latest else None,
+            "changes": latest["changes"] if latest else {"added": 0, "removed": 0, "changed": 0},
+        }
+    finally:
+        conn.close()
+
+
+@router.patch("/creator-monitors/{monitor_id}")
+async def update_creator_monitor(request: Request, monitor_id: int):
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="creator monitor must be an object")
+    enabled = body.get("enabled")
+    interval_hours = body.get("interval_hours")
+    policy_fields = {
+        "archive_mode": body.get("archive_mode"), "keywords": body.get("keywords"),
+        "exclude_reposts": body.get("exclude_reposts"),
+        "max_backlog_days": body.get("max_backlog_days", "unchanged"),
+        "collect_comments": body.get("collect_comments"),
+        "analyze_new": body.get("analyze_new"), "identify_songs": body.get("identify_songs"),
+    }
+    if enabled is not None and not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="enabled must be true or false")
+    if interval_hours is not None and (
+        type(interval_hours) is not int or not 1 <= interval_hours <= 168
+    ):
+        raise HTTPException(status_code=400, detail="interval_hours must be between 1 and 168")
+    if policy_fields["archive_mode"] is not None and policy_fields["archive_mode"] not in ("all", "matching"):
+        raise HTTPException(status_code=400, detail="archive_mode must be all or matching")
+    if policy_fields["keywords"] is not None and (
+        not isinstance(policy_fields["keywords"], list) or any(not isinstance(value, str) for value in policy_fields["keywords"])
+    ):
+        raise HTTPException(status_code=400, detail="keywords must be a list of strings")
+    for field in ("exclude_reposts", "collect_comments", "analyze_new", "identify_songs"):
+        if policy_fields[field] is not None and not isinstance(policy_fields[field], bool):
+            raise HTTPException(status_code=400, detail=f"{field} must be true or false")
+    if policy_fields["max_backlog_days"] != "unchanged" and policy_fields["max_backlog_days"] is not None and (
+        type(policy_fields["max_backlog_days"]) is not int or not 1 <= policy_fields["max_backlog_days"] <= 36500
+    ):
+        raise HTTPException(status_code=400, detail="max_backlog_days must be between 1 and 36500")
+    conn = _open(request)
+    try:
+        result = store.update_creator_monitor(
+            conn, monitor_id, enabled=enabled, interval_hours=interval_hours,
+            **policy_fields,
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="Creator monitor not found")
+        return result
+    finally:
+        conn.close()
+
+
+@router.post("/creator-monitors/{monitor_id}/check")
+def check_creator_monitor(request: Request, monitor_id: int):
+    conn = _open(request)
+    try:
+        monitor = store.get_creator_monitor(conn, monitor_id)
+        if monitor is None:
+            raise HTTPException(status_code=404, detail="Creator monitor not found")
+        if not monitor["enabled"]:
+            raise HTTPException(status_code=409, detail="Enable this creator before checking now")
+        store.check_creator_monitor_now(conn, monitor_id)
+    finally:
+        conn.close()
+    return {"queued": True, "started": request.app.state.jobs.start("creator-monitor")}
+
+
+@router.delete("/creator-monitors/{monitor_id}")
+def delete_creator_monitor(request: Request, monitor_id: int):
+    conn = _open(request)
+    try:
+        if not store.delete_creator_monitor(conn, monitor_id):
+            raise HTTPException(status_code=404, detail="Creator monitor not found")
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@router.post("/import/myfavett/plan")
+async def plan_myfavett_import(request: Request):
+    body = await _json_body(request)
+    paths = body.get("paths") if isinstance(body, dict) else None
+
+    def operation():
+        conn = _open(request)
+        try:
+            return myfavett.plan_import(conn, _download_dir(request), paths)
+        finally:
+            conn.close()
+
+    try:
+        return await _exclusive(request, operation)
+    except JobBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except myfavett.MyfaveTTImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/import/myfavett/video")
+async def import_myfavett_video(
+    request: Request,
+    video_id: str = Form(...),
+    source_path: str = Form(...),
+    video: UploadFile = File(...),
+):
+    staged = None
+    try:
+        video_id = myfavett.validate_video_id(video_id)
+        staged = await _stage_upload(
+            video,
+            f".myfavett-{video_id}-",
+            ".upload",
+            max_bytes=MAX_REPLACEMENT_VIDEO_BYTES,
+            directory=layout.uploads_dir(_download_dir(request)),
+        )
+
+        def operation():
+            conn = _open(request)
+            try:
+                return myfavett.adopt_video(
+                    conn,
+                    _download_dir(request),
+                    video_id,
+                    staged,
+                    source_path=source_path,
+                )
+            finally:
+                conn.close()
+
+        return await _exclusive(request, operation)
+    except JobBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except (myfavett.MyfaveTTImportError, manual_media.MediaReplacementError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        if staged:
+            _remove_temp_files([staged])
 
 
 @router.get("/imports")
@@ -1420,6 +1753,7 @@ async def update_library_settings(request: Request):
                 index_enabled=body.get("index_enabled"),
                 thumbnail_width=body.get("thumbnail_width"),
                 song_id_enabled=body.get("song_id_enabled"),
+                portable_metadata_enabled=body.get("portable_metadata_enabled"),
             )
             return _library_settings(conn)
         finally:
@@ -1533,11 +1867,9 @@ def sync_control(request: Request, action: str):
             conn.close()
     if kind is not None:
         run_kwargs = {}
-        # An explicit "?recheck=1" on the manual metadata run is the backfill:
-        # retry every caption-less favorite, including ones a prior run found no
-        # oEmbed metadata for. Without it (and for the Sync-chained follow-up),
-        # enrich only touches never-attempted favorites.
-        if kind == "enrich" and request.query_params.get("recheck") in ("1", "true"):
+        # Explicit refreshes retry completed metadata work. The ordinary
+        # Sync-chained stages remain incremental and only touch pending items.
+        if kind in ("enrich", "sidecars") and request.query_params.get("recheck") in ("1", "true"):
             run_kwargs["recheck"] = True
         return {"started": jm.start(kind, **run_kwargs)}
     if action == "pause":

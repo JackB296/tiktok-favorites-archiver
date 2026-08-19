@@ -8,11 +8,14 @@ import os
 from core import annotations, discovery, layout, selection, store
 
 _GALLERY_PRESET_FIELDS = {
-    "search", "kind", "status", "order", "minDuration", "maxDuration",
+    "search", "searchScope", "kind", "status", "order", "minDuration", "maxDuration",
     "minSize", "maxSize", "minWidth", "maxWidth", "minHeight", "maxHeight", "codec",
-    "dateFrom", "dateTo", "orientation", "assets", "audio", "offloaded", "indexState", "include", "exclude",
+    "dateFrom", "dateTo", "postedFrom", "postedTo",
+    "minViews", "minLikes", "minComments", "sourceInfo", "commentsState",
+    "downloadSource", "portableMetadata",
+    "orientation", "assets", "audio", "offloaded", "indexState", "include", "exclude",
     "minAttempts", "maxAttempts", "recovery",
-    "creator", "hashtag", "starred", "privateTag",
+    "creator", "hashtag", "song", "starred", "privateTag",
 }
 
 
@@ -32,6 +35,7 @@ def gallery_preset_filters(value):
 
 _PRESET_TO_PAGE = {
     "search": ("search", lambda value: value),
+    "searchScope": ("search_scope", lambda value: value),
     "kind": ("kind", lambda value: value),
     "status": ("status", lambda value: value),
     "order": ("order", lambda value: value),
@@ -49,6 +53,15 @@ _PRESET_TO_PAGE = {
     "codec": ("codec", lambda value: value),
     "dateFrom": ("date_from", lambda value: value),
     "dateTo": ("date_to", lambda value: f"{value}T23:59:59"),
+    "postedFrom": ("posted_from", lambda value: value),
+    "postedTo": ("posted_to", lambda value: f"{value}T23:59:59"),
+    "minViews": ("min_views", lambda value: value),
+    "minLikes": ("min_likes", lambda value: value),
+    "minComments": ("min_comments", lambda value: value),
+    "sourceInfo": ("source_info", lambda value: value),
+    "commentsState": ("comments_state", lambda value: value),
+    "downloadSource": ("download_source", lambda value: value),
+    "portableMetadata": ("portable_metadata", lambda value: value),
     "orientation": ("orientation", lambda value: value),
     "assets": ("assets", lambda value: value),
     "audio": ("audio", lambda value: value),
@@ -58,6 +71,7 @@ _PRESET_TO_PAGE = {
     "exclude": ("exclude", lambda value: value),
     "creator": ("creator", lambda value: value),
     "hashtag": ("hashtag", lambda value: value),
+    "song": ("song", lambda value: value),
     "starred": ("starred", lambda value: "true" if value else ""),
     "privateTag": ("private_tag", lambda value: value),
 }
@@ -182,6 +196,20 @@ def _single(value):
     return [value] if value else None
 
 
+def _positive_int(value):
+    parsed = int(value)
+    if parsed < 1:
+        raise ValueError("not a positive integer")
+    return parsed
+
+
+def _nonnegative_int(value):
+    parsed = int(value)
+    if parsed < 0:
+        raise ValueError("not a nonnegative integer")
+    return parsed
+
+
 def _boolean(value):
     normalized = value.lower()
     if normalized in ("1", "true", "yes", "on"):
@@ -198,6 +226,10 @@ def _boolean(value):
 # store.SELECTABLE_ORDERS and the route pick it up automatically.
 _PAGE_PARAMS = {
     "search": ("query", str),
+    "search_scope": ("search_scope", {
+        "posts": "posts", "comments": "comments", "songs": "songs",
+        "analysis": "analysis", "all": "all",
+    }.__getitem__),
     "kind": ("kinds", _single),
     "status": ("statuses", _single),
     "limit": ("limit", int),
@@ -220,6 +252,23 @@ _PAGE_PARAMS = {
     "exclude": ("exclude", _csv),
     "date_from": ("date_from", str),
     "date_to": ("date_to", str),
+    "posted_from": ("posted_from", str),
+    "posted_to": ("posted_to", str),
+    "min_views": ("min_views", _nonnegative_int),
+    "min_likes": ("min_likes", _nonnegative_int),
+    "min_comments": ("min_comments", _nonnegative_int),
+    "source_info": ("source_info", {
+        "saved": "saved", "unavailable": "unavailable", "missing": "missing",
+    }.__getitem__),
+    "comments_state": ("comments_state", {
+        "saved": "saved", "with_comments": "with_comments", "missing": "missing",
+    }.__getitem__),
+    "download_source": ("download_source", {
+        "cobalt": "cobalt", "yt-dlp": "yt-dlp", "legacy": "legacy",
+    }.__getitem__),
+    "portable_metadata": ("portable_metadata", {
+        "embedded": "embedded", "failed": "failed", "missing": "missing",
+    }.__getitem__),
     "assets": ("has_assets", {"with": True, "without": False}.__getitem__),
     "audio": ("has_audio", {"with": True, "without": False}.__getitem__),
     "index_state": ("index_state", str),
@@ -227,6 +276,7 @@ _PAGE_PARAMS = {
     "offloaded": ("offloaded", {"with": True, "without": False}.__getitem__),
     "creator": ("creator_key", discovery.normalize_creator),
     "hashtag": ("hashtag_key", discovery.normalize_hashtag),
+    "song": ("song_id", _positive_int),
     "starred": ("starred", _boolean),
     "private_tag": ("private_tag_key", annotations.normalize_tag),
     "feed": ("feed", _boolean),
@@ -360,6 +410,21 @@ class ArchiveItems:
             "link": row["link"],
             "caption": row["caption"],
             "author": row["author"],
+            "description": row["description"],
+            "source_posted_at": row["source_posted_at"],
+            "creator_username": row["creator_username"],
+            "creator_url": row["creator_url"],
+            "source_duration_s": row["source_duration_s"],
+            "source_width": row["source_width"],
+            "source_height": row["source_height"],
+            "view_count": row["view_count"],
+            "like_count": row["like_count"],
+            "comment_count": row["comment_count"],
+            "repost_count": row["repost_count"],
+            "save_count": row["save_count"],
+            "source_info_status": row["source_info_status"],
+            "comments_status": row["comments_status"],
+            "download_source": row["download_source"],
             "creator": identity["creator"],
             "hashtags": identity["hashtags"],
             "kind": row["kind"],
@@ -407,6 +472,7 @@ class ArchiveItems:
             song = songs.get(row["song_id"]) if songs is not None else store.get_song(self._conn, row["song_id"])
             if song is not None:
                 data["song"] = {
+                    "id": song["id"],
                     "title": song["title"],
                     "artist": song["artist"],
                     "album": song["album"],

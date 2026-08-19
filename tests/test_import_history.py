@@ -72,6 +72,25 @@ def test_repeated_export_is_recorded_with_no_membership_changes():
     }
 
 
+def test_history_compares_only_the_same_saved_video_selection():
+    conn = store.init_db(store.connect(":memory:"))
+    store.upsert_link(conn, "favorite")
+    store.upsert_link(conn, "liked")
+    favorite = import_history.record_import(conn, [("favorite", None)], selection="favorites")
+    liked = import_history.record_import(conn, [("liked", None)], selection="likes")
+    favorite_again = import_history.record_import(conn, [("favorite", None)], selection="favorites")
+
+    assert liked["previous_id"] is None
+    assert liked["comparison"]["counts"]["removed"] == 0
+    assert favorite_again["previous_id"] == favorite["id"]
+    assert favorite_again["comparison"]["counts"] == {
+        "new": 0, "removed": 0, "unchanged": 1, "protected": 0,
+    }
+    assert [record["selection"] for record in import_history.list_imports(conn)] == [
+        "favorites", "likes", "favorites",
+    ]
+
+
 def test_import_detail_is_bounded_but_counts_remain_complete():
     conn = store.init_db(store.connect(":memory:"))
     with tempfile.TemporaryDirectory() as tmp:

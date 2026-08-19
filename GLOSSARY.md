@@ -2,14 +2,17 @@
 
 ## Favorite
 
-A TikTok link imported from a user's TikTok data export. A Favorite keeps a
-stable archive number and may resolve to a video, slideshow, or unavailable
-post.
+A TikTok link imported from the default Favorites/bookmarks list in a user's
+TikTok data export. The app can also opt in to Likes and public creator
+profiles; all of these become Archive items with the same stable numbering and
+download behavior.
 
 ## Archive item
 
-The durable record for one Favorite: its source link, archive number, media
-classification, lifecycle state, metadata, and recovered slideshow assets.
+The durable record for one imported TikTok post: its source link, archive
+number, media classification, lifecycle state, metadata, and recovered
+slideshow assets. A myfaveTT file with no known source link becomes a
+local-only Archive item instead of being discarded.
 
 ## Archive run
 
@@ -25,6 +28,42 @@ running, paused, stopping, stopped, idle, or failed.
 
 The finished MP4 and, for a slideshow, the raw images and audio stored for an
 Archive item.
+
+## Creator monitor
+
+A scheduled, idempotent rescan of one public TikTok username. Its first pass
+can archive the creator's complete visible backlog; later passes add only newly
+discovered stable post IDs. A monitor can be paused, checked immediately, or
+removed without deleting already archived items.
+
+## Source sidecar
+
+A portable file stored beside an Archive item's media: privacy-safe
+`.info.json`, full `.description`, source thumbnail, available subtitles or
+automatic captions, and best-effort public comments/replies. Expiring signed
+media URLs and cookies are not persisted.
+
+## Comment snapshot
+
+A dated, local observation of the public comments and replies available for one
+Archive item. Each snapshot stores its comments in SQLite and summarizes which
+comments were added, became unavailable, or changed since the prior snapshot.
+The latest observation is also kept in the item's portable `.comments.json`.
+
+## Portable media metadata
+
+An opt-in copy of useful Source sidecar fields embedded inside an Archive MP4:
+caption, creator, description, post date, source link, poster, and available
+subtitles. The Archive copies existing video and audio streams, validates the
+new MP4 before atomic publication, and continues keeping the separate sidecars.
+
+## Audio repair
+
+A resumable maintenance run over finished, local Archive media whose index
+confirmed a missing or silent audio stream. The run retries the source through
+the quality-aware yt-dlp adapter, installs only verified audible media, keeps
+the Archive item's number and metadata, and retains the previous MP4 as the
+most recent replacement backup.
 
 ## Offloaded
 

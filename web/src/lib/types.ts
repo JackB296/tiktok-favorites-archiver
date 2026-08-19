@@ -17,6 +17,7 @@ export type SongSource = "auto" | "manual";
 
 /** A track identified for a favorite (many favorites can share one song). */
 export interface Song {
+  id?: number;
   title: string;
   artist: string | null;
   album: string | null;
@@ -50,6 +51,21 @@ export interface Item {
   link: string;
   caption: string | null;
   author: string | null;
+  description: string | null;
+  source_posted_at: string | null;
+  creator_username: string | null;
+  creator_url: string | null;
+  source_duration_s: number | null;
+  source_width: number | null;
+  source_height: number | null;
+  view_count: number | null;
+  like_count: number | null;
+  comment_count: number | null;
+  repost_count: number | null;
+  save_count: number | null;
+  source_info_status: "ok" | "unavailable" | null;
+  comments_status: "pending" | "ok" | null;
+  download_source: "cobalt" | "yt-dlp" | null;
   creator: DiscoveryIdentity | null;
   hashtags: DiscoveryIdentity[];
   kind: Kind;
@@ -240,6 +256,7 @@ export interface ImportChange {
 export interface ImportRecord {
   id: number;
   source_name: string;
+  selection: "favorites" | "likes" | "both";
   digest: string;
   favorite_count: number;
   imported_at: string;
@@ -289,7 +306,7 @@ export interface ProgressEvent {
   item_kind?: Kind | "transient";
   phase?: string | null;
   has_assets?: number;
-  event?: "complete" | "error" | "indexing" | "sidecars" | "enrichment" | "identification" | "analysis" | "verify" | "backfill" | "transfer";
+  event?: "complete" | "error" | "indexing" | "sidecars" | "portable-metadata" | "audio-repair" | "enrichment" | "identification" | "analysis" | "verify" | "backfill" | "transfer";
   error?: string;
   indexed?: number;
   failed?: number;
@@ -301,6 +318,7 @@ export interface ProgressEvent {
   no_match?: number;
   errors?: number;
   recovered?: number;
+  repaired?: number;
   files?: number;
   completed_sources?: number;
   failed_sources?: number;
@@ -311,9 +329,100 @@ export interface ProgressEvent {
 
 export interface ImportResult {
   favorites: number;
+  selection: "favorites" | "likes" | "both";
   existing_files: number;
   manifest_rows: number;
   import_record: ImportRecord;
+}
+
+export interface ProfileImportResult {
+  username: string;
+  discovered: number;
+  added: number;
+  existing: number;
+  item_ids: number[];
+  sync_started: boolean;
+  matched: number;
+}
+
+export interface CreatorMonitor {
+  id: number;
+  username: string;
+  enabled: boolean;
+  interval_hours: number;
+  next_check_at: string | null;
+  last_checked_at: string | null;
+  last_new_count: number;
+  last_error: string | null;
+  archive_mode: "all" | "matching";
+  keywords: string[];
+  exclude_reposts: boolean;
+  max_backlog_days: number | null;
+  collect_comments: boolean;
+  analyze_new: boolean;
+  identify_songs: boolean;
+  last_seen_post_ids: string[];
+  last_changed_count: number;
+  last_missing_count: number;
+}
+
+export interface SourceComment {
+  id?: string;
+  parent?: string;
+  author?: string;
+  author_id?: string;
+  author_username?: string;
+  text?: string;
+  timestamp?: number;
+  like_count?: number;
+}
+
+export interface CommentSnapshot {
+  id: number;
+  captured_at: string;
+  comments: SourceComment[];
+  saved_count: number;
+  reported_count: number | null;
+  changes: { added: number; removed: number; changed: number };
+}
+
+export interface SourceMetadataDetails {
+  post_id: string;
+  title: string | null;
+  description: string | null;
+  posted_at: string | null;
+  comments: SourceComment[];
+  comment_snapshots: CommentSnapshot[];
+  subtitle_files: Record<string, string>;
+  thumbnail_file: string | null;
+}
+
+export interface MyfaveTTPlanItem {
+  video_id: string;
+  relative_path: string;
+  item_id: number | null;
+  status: "ready" | "already_archived";
+  match: "archive_slot" | "new_local_item";
+}
+
+export interface MyfaveTTPlan {
+  items: MyfaveTTPlanItem[];
+  counts: {
+    ready: number;
+    already_archived: number;
+    matched_slots: number;
+    new_local_items: number;
+  };
+  video_files: number;
+  duplicate_files: number;
+  ignored_paths: number;
+}
+
+export interface MyfaveTTImportResult {
+  status: "imported" | "already_archived";
+  item_id: number;
+  created: boolean;
+  matched_slot?: boolean;
 }
 
 export interface StorageLocation {
@@ -440,6 +549,7 @@ export interface LibrarySettings {
   index_enabled: number;
   thumbnail_width: 320 | 480;
   song_id_enabled: number;
+  portable_metadata_enabled: number;
   default_audio_name: string | null;
   index: { total: number; indexed: number; pending: number; failed: number };
 }
@@ -456,10 +566,12 @@ export interface LibraryStatistics {
   indexed: number;
   duration_s: number;
   media_size: number;
+  audio_repairs: number;
 }
 
 export interface GalleryPresetFilters {
   search?: string;
+  searchScope?: string;
   kind?: string;
   status?: string;
   order?: string;
@@ -474,6 +586,15 @@ export interface GalleryPresetFilters {
   codec?: string;
   dateFrom?: string;
   dateTo?: string;
+  postedFrom?: string;
+  postedTo?: string;
+  minViews?: string;
+  minLikes?: string;
+  minComments?: string;
+  sourceInfo?: string;
+  commentsState?: string;
+  downloadSource?: string;
+  portableMetadata?: string;
   orientation?: string;
   assets?: string;
   audio?: string;
@@ -486,6 +607,7 @@ export interface GalleryPresetFilters {
   recovery?: boolean;
   creator?: string;
   hashtag?: string;
+  song?: string;
   starred?: boolean;
   privateTag?: string;
 }
@@ -643,6 +765,55 @@ export interface StatsWatcher {
   silent: { count: number; of_indexed: number };
 }
 
+export interface StatsPeakPost {
+  id: number;
+  caption: string;
+  creator: string | null;
+  views: number;
+  likes: number;
+  comments: number;
+  reposts: number;
+  saves: number;
+}
+
+export interface StatsReach {
+  covered: number;
+  views: number;
+  likes: number;
+  comments: number;
+  reposts: number;
+  saves: number;
+  peak_posts: StatsPeakPost[];
+}
+
+export interface StatsQuality {
+  offline: {
+    total: number;
+    source_metadata: number;
+    comments: number;
+    thumbnails: number;
+    portable_metadata: number;
+    songs: number;
+  };
+  resolution: StatsBucket[];
+  downloads: StatsBucket[];
+}
+
+export interface StatsConversation {
+  posts: number;
+  snapshots: number;
+  saved_comments: number;
+  changes: { added: number; removed: number; changed: number };
+}
+
+export interface StatsMonitoring {
+  profiles: number;
+  active: number;
+  checked: number;
+  found_last_check: number;
+  errors: number;
+}
+
 export interface StatsTopAuthor {
   author: string;
   count: number;
@@ -671,10 +842,62 @@ export interface Stats {
   hero: StatsHero;
   growth: { monthly: StatsMonth[] };
   watcher: StatsWatcher;
+  reach: StatsReach;
+  discovery_lag: { covered: number; buckets: StatsBucket[] };
+  quality: StatsQuality;
+  conversation: StatsConversation;
+  monitoring: StatsMonitoring;
   top: {
     authors: StatsTopAuthor[];
     songs: StatsTopSong[];
     hashtags: StatsTopHashtag[];
   };
   health: StatsHealth;
+}
+
+export interface CommentSearchResult {
+  id: number;
+  item_id: number;
+  snapshot_id: number;
+  comment_key: string;
+  parent_key: string | null;
+  author: string | null;
+  author_username: string | null;
+  text: string;
+  posted_at: string | null;
+  like_count: number | null;
+  captured_at: string;
+  latest: boolean;
+  caption: string;
+  item_author: string | null;
+  thread_context: Array<Pick<CommentSearchResult, "author" | "author_username" | "text" | "like_count" | "comment_key" | "parent_key">>;
+}
+
+export interface CommentSearchPage {
+  results: CommentSearchResult[];
+  next_cursor: number | null;
+  include_history: boolean;
+}
+
+export interface CoverageCategory {
+  key: "source_metadata" | "comments" | "thumbnails" | "transcripts" | "ocr" | "songs" | "portable_metadata" | "audio";
+  label: string;
+  eligible: number;
+  ready: number;
+  missing: number;
+  failed: number;
+  description: string;
+}
+
+export interface CoverageReport {
+  total_items: number;
+  categories: CoverageCategory[];
+  source_health: {
+    alerts: number;
+    sources: Array<{
+      source: string; severity: "ok" | "warning" | "error"; message: string;
+      current_rate: number; baseline_rate: number; observed_at: string;
+      current: { attempted: number; succeeded: number; empty: number; failed: number };
+    }>;
+  };
 }

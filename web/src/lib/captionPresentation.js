@@ -25,3 +25,20 @@ export function captionParts(caption) {
 export function hashtagGalleryUrl(hashtag) {
   return `/gallery?q=${encodeURIComponent(hashtag)}`;
 }
+
+/** The single blurb to show for a post.
+ *
+ * TikTok gives us a caption and a description that are usually the same
+ * sentence at different lengths — the caption is often the description cut
+ * short. Showing both just prints the text twice, so keep whichever one
+ * carries more, and treat a truncated caption as the lesser of the two.
+ */
+export function postBlurb(caption, description) {
+  const one = cleanMetadataText(caption);
+  const other = cleanMetadataText(description);
+  if (!one) return other;
+  if (!other) return one;
+  const trimmed = one.replace(/[….]+$/, "");
+  if (other.startsWith(trimmed) || other.length > one.length) return other;
+  return one;
+}

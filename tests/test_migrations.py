@@ -119,6 +119,29 @@ def test_archive_intelligence_tables_are_additive_and_idempotent():
     assert store.get_item(legacy, 7)["link"].endswith("/video/7")
 
 
+def test_import_history_selection_migrates_as_favorites_before_indexes_are_created():
+    conn = store.connect(":memory:")
+    conn.executescript("""
+        CREATE TABLE import_history (
+            id INTEGER PRIMARY KEY,
+            source_name TEXT NOT NULL,
+            digest TEXT NOT NULL,
+            favorite_count INTEGER NOT NULL,
+            imported_at TEXT NOT NULL
+        );
+        INSERT INTO import_history
+        (id, source_name, digest, favorite_count, imported_at)
+        VALUES (1, 'old.json', 'digest', 2, '2025-01-01');
+    """)
+    store.init_db(conn)
+    row = conn.execute("SELECT selection FROM import_history WHERE id = 1").fetchone()
+    index = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_import_history_selection'"
+    ).fetchone()
+    assert row["selection"] == "favorites"
+    assert index is not None
+
+
 def test_analysis_search_index_tracks_segment_changes():
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 1, "https://www.tiktok.com/@cook/video/1")
@@ -138,6 +161,45 @@ def test_analysis_search_index_tracks_segment_changes():
     assert conn.execute(
         "SELECT rowid FROM analysis_search WHERE analysis_search MATCH 'crispy'"
     ).fetchone() is None
+
+
+def test_existing_archive_upgrades_rich_and_latest_comment_search_indexes_in_place():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://www.tiktok.com/@potter/video/1", status="done")
+    conn.execute("UPDATE item SET description = 'celadon archive description' WHERE id = 1")
+    song_id = store.upsert_song(conn, "legacy:nightglass", "Aurora Waltz", artist="Night Glass")
+    store.record_comment_snapshot(conn, 1, [{"id": "c", "text": "vermilion saved comment"}])
+
+    # Recreate the pre-v6, three-column post index and remove the derived
+    # latest-comment document. The durable items and snapshots remain intact.
+    conn.executescript("""
+        DROP TRIGGER item_search_insert;
+        DROP TRIGGER item_search_delete;
+        DROP TRIGGER item_search_update;
+        DROP TABLE item_search;
+        CREATE VIRTUAL TABLE item_search USING fts5(
+            caption, author, link, content='item', content_rowid='id'
+        );
+        INSERT INTO item_search(item_search) VALUES ('rebuild');
+        UPDATE item SET song_id = %d, search_song_text = NULL WHERE id = 1;
+        DELETE FROM item_comment_search;
+        UPDATE schema_metadata SET version = 5 WHERE id = 1;
+    """ % song_id)
+    conn.commit()
+
+    store.init_db(conn)
+
+    assert migrations.schema_version(conn) == migrations.CURRENT_SCHEMA_VERSION == 7
+    assert [row["name"] for row in conn.execute("PRAGMA table_info(item_search)")] == [
+        "caption", "author", "link", "description", "creator_username", "search_song_text",
+    ]
+    assert [row["id"] for row in store.page_items(conn, query="celadon")] == [1]
+    assert [row["id"] for row in store.page_items(
+        conn, query="vermilion", search_scope="comments",
+    )] == [1]
+    assert [row["id"] for row in store.page_items(
+        conn, query="aurora", search_scope="songs",
+    )] == [1]
 
 
 def test_existing_analysis_segments_upgrade_as_manual_source_state():
@@ -188,7 +250,7 @@ def test_existing_sync_pipeline_gains_analysis_once_and_respects_later_removal()
 
     store.init_db(legacy)
     assert store.get_pipeline_settings(legacy)["phases"] == [
-        "sync", "enrich", "identify", "analyze",
+        "sync", "enrich", "sidecars", "identify", "analyze",
     ]
 
     store.set_pipeline_settings(legacy, "sync", ["sync", "enrich"])

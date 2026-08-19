@@ -20,9 +20,9 @@ def import_favorites(conn, favorites):
     return len(favorites)
 
 
-def import_export(conn, export_file):
+def import_export(conn, export_file, selection="favorites"):
     """Upsert one item per favorite, in order. Idempotent (dedups by link)."""
-    favorites = export.load_all_favorites(export_file)
+    favorites = export.load_saved_videos(export_file, selection=selection)
     return import_favorites(conn, favorites)
 
 
@@ -75,15 +75,15 @@ def regenerate_manifest(conn, download_dir):
     return written
 
 
-def import_all(conn, export_file, download_dir, source_name=None):
+def import_all(conn, export_file, download_dir, source_name=None, selection="favorites"):
     source_exists = os.path.isfile(export_file)
-    favorites = export.load_all_favorites(export_file)
+    favorites = export.load_saved_videos(export_file, selection=selection)
     n_fav = import_favorites(conn, favorites)
     n_files = import_existing_files(conn, download_dir)
     n_manifest = regenerate_manifest(conn, download_dir)
     import_record = (
         import_history.record_import(
-            conn, favorites, source_name=source_name,
+            conn, favorites, source_name=source_name, selection=selection,
         )
         if source_exists
         else None
@@ -93,6 +93,7 @@ def import_all(conn, export_file, download_dir, source_name=None):
     )
     return {
         "favorites": n_fav,
+        "selection": selection,
         "existing_files": n_files,
         "manifest_rows": n_manifest,
         "import_record": import_record,

@@ -1,12 +1,12 @@
 """Resumable Gallery-index work for finished Archive media."""
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-from core import layout, media_index, store
+from core import config, layout, media_index, store
 
 
 def _default_workers():
-    return min(4, os.cpu_count() or 1)
+    return max(1, config.INDEX_WORKERS)
 
 
 def _index_items(conn, download_dir, items, inspect, thumbnail_width, progress, should_continue, workers=None):
@@ -50,25 +50,50 @@ def _index_items(conn, download_dir, items, inspect, thumbnail_width, progress, 
         return result
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for start in range(0, total, workers):
-            if should_continue and not should_continue():
+        accepting = not should_continue or should_continue()
+        iterator = iter(candidates)
+        pending = {}
+        while accepting and len(pending) < workers:
+            try:
+                item = next(iterator)
+            except StopIteration:
+                accepting = False
                 break
-            batch = candidates[start:start + workers]
-            futures = [
-                (item, pool.submit(inspect, download_dir, item["id"], thumbnail_width))
-                for item in batch
-            ]
-            for item, future in futures:
+            pending[pool.submit(
+                inspect, download_dir, item["id"], thumbnail_width,
+            )] = item
+
+        while pending:
+            completed_futures, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed_futures:
+                item = pending.pop(future)
                 record(item, future.result)
+                if not accepting:
+                    continue
+                if should_continue and not should_continue():
+                    accepting = False
+                    continue
+                try:
+                    next_item = next(iterator)
+                except StopIteration:
+                    accepting = False
+                    continue
+                pending[pool.submit(
+                    inspect, download_dir, next_item["id"], thumbnail_width,
+                )] = next_item
     return result
 
 
-def index_pending_items(conn, download_dir, inspect=media_index.index_media, thumbnail_width=480, progress=None, should_continue=None, workers=None):
+def index_pending_items(conn, download_dir, inspect=media_index.index_media, thumbnail_width=480, progress=None, should_continue=None, workers=None, item_ids=None):
     """Index finished Archive items without a durable thumbnail yet."""
+    candidates = store.items_needing_index(conn)
+    if item_ids is not None:
+        wanted = {int(value) for value in item_ids}
+        candidates = [item for item in candidates if item["id"] in wanted]
     return _index_items(
         conn,
         download_dir,
-        store.items_needing_index(conn),
+        candidates,
         inspect,
         thumbnail_width,
         progress,

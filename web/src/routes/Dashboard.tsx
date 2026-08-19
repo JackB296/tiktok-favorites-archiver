@@ -16,13 +16,14 @@ import type { RunStatus, ProgressEvent, Status, LibrarySettings, LibraryStatisti
 import { Button, Stat, StatusBadge, cx } from "../components/ui";
 import { LegacyBootstrapPanel } from "../components/LegacyBootstrapPanel";
 import { OffloadPanel } from "../components/OffloadPanel";
+import { AdditionalImportsPanel } from "../components/AdditionalImportsPanel";
 import { formatRuntime, formatSize } from "../lib/format";
 import { progressLabel } from "../lib/progressPresentation.js";
 import { nextScheduleLabel, scheduleRule } from "../lib/schedulePresentation";
 
 const COUNT_ORDER: Status[] = ["done", "downloading", "pending", "failed", "skipped", "ignored", "expired"];
 
-type RunAction = "start" | "backfill" | "reindex" | "sidecars" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop";
+type RunAction = "start" | "backfill" | "reindex" | "sidecars" | "repair-audio" | "enrich" | "identify" | "analyze" | "pause" | "continue" | "stop";
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -32,11 +33,13 @@ export function Dashboard() {
   const [howto, setHowto] = useState<string | null>(null);
   const [howtoOpen, setHowtoOpen] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [exportSelection, setExportSelection] = useState<"favorites" | "likes" | "both">("favorites");
   const [lastImportId, setLastImportId] = useState<number | null>(null);
   const [library, setLibrary] = useState<LibrarySettings | null>(null);
   const [statistics, setStatistics] = useState<LibraryStatistics | null>(null);
   const [indexProgress, setIndexProgress] = useState<ProgressEvent | null>(null);
   const [sidecarsProgress, setSidecarsProgress] = useState<ProgressEvent | null>(null);
+  const [audioRepairProgress, setAudioRepairProgress] = useState<ProgressEvent | null>(null);
   const [enrichmentProgress, setEnrichmentProgress] = useState<ProgressEvent | null>(null);
   const [identificationProgress, setIdentificationProgress] = useState<ProgressEvent | null>(null);
   const [backfillProgress, setBackfillProgress] = useState<ProgressEvent | null>(null);
@@ -147,6 +150,7 @@ export function Dashboard() {
       setEvents((prev) => [e, ...prev].slice(0, 200));
       if (e.event === "indexing") setIndexProgress(e);
       if (e.event === "sidecars") setSidecarsProgress(e);
+      if (e.event === "audio-repair") setAudioRepairProgress(e);
       if (e.event === "enrichment") setEnrichmentProgress(e);
       if (e.event === "identification") setIdentificationProgress(e);
       if (e.event === "backfill") setBackfillProgress(e);
@@ -179,9 +183,10 @@ export function Dashboard() {
     setImportMsg("Importing…");
     setLastImportId(null);
     try {
-      const r = await api.importExport(file);
+      const r = await api.importExport(file, exportSelection);
       const counts = r.import_record.comparison.counts;
-      setImportMsg(`Imported ${r.favorites} favorites · ${counts.new} new · ${counts.removed} missing · ${counts.protected} safely archived.`);
+      const label = exportSelection === "favorites" ? "favorites" : exportSelection === "likes" ? "likes" : "saved videos";
+      setImportMsg(`Imported ${r.favorites} ${label} · ${counts.new} new · ${counts.removed} missing · ${counts.protected} safely archived.`);
       setLastImportId(r.import_record.id);
       refresh();
     } catch (err) {
@@ -189,7 +194,7 @@ export function Dashboard() {
     }
   }
 
-  async function updateLibrary(settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480; song_id_enabled?: boolean }) {
+  async function updateLibrary(settings: { index_enabled?: boolean; thumbnail_width?: 320 | 480; song_id_enabled?: boolean; portable_metadata_enabled?: boolean }) {
     const next = await api.updateLibrarySettings(settings).catch(() => null);
     if (next) setLibrary(next);
   }
@@ -234,6 +239,7 @@ export function Dashboard() {
     if (a === "enrich") setEnrichmentProgress(null);
     if (a === "identify") setIdentificationProgress(null);
     if (a === "backfill") setBackfillProgress(null);
+    if (a === "repair-audio") setAudioRepairProgress(null);
     try {
       const result = await api.syncAction(a, opts);
       if ("started" in result && result.started === false) setRunActionError({ action: a, message: "Another Archive run is already active." });
@@ -302,9 +308,14 @@ export function Dashboard() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-ink">Your TikTok export</h2>
-              <p className="mt-0.5 text-sm text-ink-dim">Upload `user_data_tiktok.json` to load your favorites.</p>
+              <p className="mt-0.5 text-sm text-ink-dim">Upload `user_data_tiktok.json` to load your favorites. Likes are optional.</p>
             </div>
             <div className="flex items-center gap-2">
+              <select aria-label="Saved-video list" value={exportSelection} onChange={(event) => setExportSelection(event.target.value as "favorites" | "likes" | "both")} className="h-10 rounded-[var(--radius-control)] border border-line bg-elevated px-3 text-sm text-ink">
+                <option value="favorites">Favorites (default)</option>
+                <option value="likes">Likes</option>
+                <option value="both">Favorites + likes</option>
+              </select>
               <Button variant="ghost" onClick={toggleHowto}>
                 <Question size={16} /> How to get it
               </Button>
@@ -326,6 +337,11 @@ export function Dashboard() {
             </div>
           )}
         </section>
+
+        <AdditionalImportsPanel
+          running={running}
+          onChanged={() => { refresh(); refreshLibrary(); refreshStatistics(); }}
+        />
 
         <LegacyBootstrapPanel
           running={running}
@@ -421,6 +437,24 @@ export function Dashboard() {
         </section>
 
         <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Silent-video repair</h2>
+              <p className="mt-1 text-sm text-ink-dim">Retries finished videos whose local index found no usable sound. yt-dlp checks alternate renditions and, when timestamps match, can preserve a higher-resolution video while muxing in working audio. Archive numbers and metadata stay unchanged; the previous MP4 is kept in <code>downloads/.archive/replaced/</code>.</p>
+            </div>
+            <Button variant="ghost" disabled={running || !statistics?.audio_repairs} onClick={() => act("repair-audio")}>
+              <ArrowClockwise size={16} /> Repair sound
+            </Button>
+          </div>
+          <p className="mt-3 text-sm text-ink-dim">
+            {audioRepairProgress?.event === "audio-repair"
+              ? `Checking ${audioRepairProgress.completed ?? 0} of ${audioRepairProgress.total ?? 0}: ${audioRepairProgress.repaired ?? 0} repaired${audioRepairProgress.failed ? `, ${audioRepairProgress.failed} failed` : ""}`
+              : `${statistics?.audio_repairs ?? 0} indexed local video${statistics?.audio_repairs === 1 ? "" : "s"} currently ${statistics?.audio_repairs === 1 ? "needs" : "need"} sound repair.`}
+          </p>
+          {actionError("repair-audio") && <p className="mt-3 text-sm text-bad" role="alert">{actionError("repair-audio")}</p>}
+        </section>
+
+        <section className="mb-4 rounded-[var(--radius-media)] border border-line bg-surface p-5">
           <h2 className="text-sm font-semibold text-ink">Slideshow fallback audio</h2>
           <p className="mt-1 text-sm text-ink-dim">Photo posts are rebuilt with their original sound. When TikTok has already deleted that audio, this track fills in instead. A change applies to slideshows built from now on; existing videos keep the audio they were made with.</p>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
@@ -460,12 +494,17 @@ export function Dashboard() {
             <div>
               <h2 className="text-sm font-semibold text-ink">Media server metadata</h2>
               <p className="mt-1 text-sm text-ink-dim">
-                Writes an <code>.nfo</code> title file and a <code>.jpg</code> poster next to each video so Plex, Jellyfin, or Kodi show real titles and artwork instead of numbers. Your media files are never modified.
+                Writes an <code>.nfo</code> title file and a <code>.jpg</code> poster next to each video so Plex, Jellyfin, or Kodi show real titles and artwork instead of numbers. Media files remain unmodified unless you enable portable embedding below.
               </p>
             </div>
-            <Button variant="ghost" disabled={running} onClick={() => act("sidecars")}>
-              <ArrowClockwise size={16} /> Write metadata
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="ghost" disabled={running} onClick={() => act("sidecars")}>
+                <ArrowClockwise size={16} /> Write metadata
+              </Button>
+              <Button variant="ghost" disabled={running} onClick={() => act("sidecars", { recheck: true })} title="Re-fetch source metadata and public comments for every archived post, keeping earlier comment snapshots locally.">
+                <ArrowClockwise size={16} /> Refresh comments
+              </Button>
+            </div>
           </div>
           {sidecarsProgress?.event === "sidecars" && (
             <p className="mt-3 text-sm text-ink-dim">
@@ -473,6 +512,10 @@ export function Dashboard() {
             </p>
           )}
           {actionError("sidecars") && <p className="mt-3 text-sm text-bad" role="alert">{actionError("sidecars")}</p>}
+          <label className="mt-4 flex cursor-pointer items-start gap-3 border-t border-line pt-4 text-sm text-ink">
+            <input type="checkbox" checked={library?.portable_metadata_enabled === 1} onChange={(event) => updateLibrary({ portable_metadata_enabled: event.target.checked })} />
+            <span><span className="font-medium">Embed portable metadata in MP4 files</span><span className="mt-0.5 block text-ink-dim">Off by default. The next Media sidecars run atomically adds the caption, creator, description, date, source link, poster, and available subtitles to each local video. Video and audio streams are copied without re-encoding; separate sidecars remain available.</span></span>
+          </label>
         </section>
 
         <OffloadPanel

@@ -76,6 +76,100 @@ def test_video_download_failure_is_retryable():
         assert store.get_item(conn, 1)["status"] == "failed"
 
 
+def test_silent_cobalt_video_is_replaced_by_an_audible_ytdlp_candidate():
+    result = cobalt.Result(
+        kind="video", url="http://x/cobalt.mp4", images=None, audio=None,
+        error=None, status="tunnel",
+    )
+    calls = []
+
+    def cobalt_download(_url, path):
+        with open(path, "wb") as output:
+            output.write(b"cobalt-silent")
+        return True
+
+    def ytdlp_download(_link, path):
+        calls.append("yt-dlp")
+        with open(path, "wb") as output:
+            output.write(b"ytdlp-audible")
+        return True
+
+    def inspect(path):
+        audible = open(path, "rb").read().startswith(b"ytdlp")
+        return {
+            "width": 720, "height": 1280, "has_audio": audible,
+            "audio_silent": not audible, "file_size": os.path.getsize(path),
+        }
+
+    deps = sync.Deps(
+        lambda _link: result, cobalt_download,
+        lambda *_args: True, lambda *_args: None, "/default.mp3",
+        ytdlp_download=ytdlp_download, inspect_media=inspect,
+    )
+    with tempfile.TemporaryDirectory() as downloads:
+        outcome = sync.process_item(deps, downloads, {"id": 1, "link": "https://tiktok/1"})
+        assert open(os.path.join(downloads, "1.mp4"), "rb").read() == b"ytdlp-audible"
+
+    assert calls == ["yt-dlp"]
+    assert outcome["status"] == "done" and outcome["download_source"] == "yt-dlp"
+
+
+def test_ytdlp_replaces_cobalt_only_when_it_offers_more_source_pixels():
+    result = cobalt.Result("video", "cobalt-url", None, None, None, "tunnel")
+
+    def write(value):
+        def download(_url, path):
+            with open(path, "wb") as output:
+                output.write(value)
+            return True
+        return download
+
+    def inspect(path):
+        high = open(path, "rb").read() == b"1080p"
+        return {
+            "width": 1080 if high else 720,
+            "height": 1920 if high else 1280,
+            "has_audio": True, "audio_silent": False,
+        }
+
+    deps = sync.Deps(
+        lambda _link: result, write(b"720p"), lambda *_args: True,
+        lambda *_args: None, "/default.mp3",
+        ytdlp_download=write(b"1080p"), inspect_media=inspect,
+        source_probe=lambda _link, include_comments=False: {"width": 1080, "height": 1920},
+    )
+    with tempfile.TemporaryDirectory() as downloads:
+        outcome = sync.process_item(deps, downloads, {"id": 1, "link": "https://tiktok/1"})
+        assert open(os.path.join(downloads, "1.mp4"), "rb").read() == b"1080p"
+    assert outcome["download_source"] == "yt-dlp"
+
+
+def test_ytdlp_recovers_when_cobalt_cannot_resolve_the_post():
+    result = cobalt.Result("transient", None, None, None, "HTTP 500", "500")
+
+    def fallback(_link, path):
+        with open(path, "wb") as output:
+            output.write(b"recovered")
+        return True
+
+    deps = sync.Deps(
+        lambda _link: result, lambda *_args: False,
+        lambda *_args: True, lambda *_args: None, "/default.mp3",
+        ytdlp_download=fallback,
+        inspect_media=lambda _path: {
+            "width": 720, "height": 1280, "has_audio": True,
+            "audio_silent": False,
+        },
+    )
+    with tempfile.TemporaryDirectory() as downloads:
+        outcome = sync.process_item(deps, downloads, {"id": 1, "link": "https://tiktok/1"})
+        assert os.path.isfile(os.path.join(downloads, "1.mp4"))
+    assert outcome == {
+        "status": "done", "kind": "video", "has_assets": 0,
+        "download_source": "yt-dlp",
+    }
+
+
 def test_items_stranded_downloading_by_a_crash_are_retried_on_the_next_run():
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 1, "v", status="downloading")  # orphaned by a hard kill

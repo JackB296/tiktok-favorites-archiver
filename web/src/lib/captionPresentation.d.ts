@@ -6,3 +6,4 @@ export interface CaptionPart {
 export function captionParts(caption: string): CaptionPart[];
 export function hashtagGalleryUrl(hashtag: string): string;
 export function cleanMetadataText(value: string | null | undefined): string;
+export function postBlurb(caption: string | null | undefined, description: string | null | undefined): string;

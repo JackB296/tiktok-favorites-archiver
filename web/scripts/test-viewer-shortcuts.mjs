@@ -11,10 +11,22 @@ const shortcuts = await import(`data:text/javascript;base64,${Buffer.from(compil
 assert.equal(shortcuts.viewerShortcut({ key: "f", code: "KeyF", repeat: false, editing: false }), "fullscreen");
 assert.equal(shortcuts.viewerShortcut({ key: "F", code: "KeyF", repeat: true, editing: false }), null);
 assert.equal(shortcuts.viewerShortcut({ key: " ", code: "Space", repeat: false, editing: false }), "pause");
+assert.equal(shortcuts.viewerShortcut({ key: "c", code: "KeyC", repeat: false, editing: false }), "details");
+assert.equal(shortcuts.viewerShortcut({ key: "C", code: "KeyC", repeat: true, editing: false }), null);
+assert.equal(shortcuts.viewerShortcut({ key: "c", code: "KeyC", repeat: false, editing: true }), null);
 assert.equal(shortcuts.viewerShortcut({ key: "m", code: "KeyM", repeat: false, editing: true }), null);
 assert.equal(shortcuts.viewerShortcut({ key: "ArrowDown", code: "ArrowDown", repeat: false, editing: false }), "next");
 assert.equal(shortcuts.viewerShortcut({ key: "ArrowUp", code: "ArrowUp", repeat: false, editing: false }), "previous");
 assert.equal(shortcuts.viewerShortcut({ key: "ArrowRight", code: "ArrowRight", repeat: false, editing: false }), "nextImage");
 assert.equal(shortcuts.viewerShortcut({ key: "ArrowLeft", code: "ArrowLeft", repeat: false, editing: false }), "prevImage");
+
+// Focus lands on a button every time the details toggle is clicked. Only
+// Space defers to the control; navigation and the rest keep working.
+assert.equal(shortcuts.viewerShortcut({ key: " ", code: "Space", repeat: false, editing: false, onControl: true }), null);
+assert.equal(shortcuts.viewerShortcut({ key: "c", code: "KeyC", repeat: false, editing: false, onControl: true }), "details");
+assert.equal(shortcuts.viewerShortcut({ key: "ArrowDown", code: "ArrowDown", repeat: false, editing: false, onControl: true }), "next");
+assert.equal(shortcuts.viewerShortcut({ key: "m", code: "KeyM", repeat: false, editing: false, onControl: true }), "mute");
+// A text field still swallows everything.
+assert.equal(shortcuts.viewerShortcut({ key: "ArrowDown", code: "ArrowDown", repeat: false, editing: true }), null);
 
 console.log("PASS viewer keyboard shortcut mapping");

@@ -35,3 +35,9 @@ export function playbackItemId(activeId, transitionTargetId) {
 export function shouldPreloadItem(index, activeIndex, itemId, transitionTargetId, ahead = 8) {
   return itemId === transitionTargetId || (index > activeIndex && index <= activeIndex + ahead);
 }
+
+/** Choose the next loaded post for opt-in end-of-media Feed advancement. */
+export function nextAutoAdvanceItem(items, activeId) {
+  const index = items.findIndex((item) => item.id === activeId);
+  return index >= 0 && index + 1 < items.length ? items[index + 1].id : null;
+}

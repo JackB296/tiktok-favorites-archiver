@@ -9,21 +9,25 @@ const compiled = ts.transpileModule(source, {
 const lib = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 
 const full = {
-  search: "cat videos", kind: "video", status: "failed", order: "duration_desc",
+  search: "cat videos", searchScope: "all", kind: "video", status: "failed", order: "duration_desc",
   minDuration: "5", maxDuration: "90", minSize: "1", maxSize: "250",
   minWidth: "480", maxWidth: "1920", minHeight: "600", maxHeight: "2400",
   minAttempts: "1", maxAttempts: "9", recovery: true, codec: "h264, hevc",
   dateFrom: "2024-01-01", dateTo: "2024-12-31", orientation: "portrait",
+  postedFrom: "2023-01-01", postedTo: "2023-12-31",
+  minViews: "100000", minLikes: "5000", minComments: "250",
+  sourceInfo: "saved", commentsState: "with_comments", downloadSource: "yt-dlp",
+  portableMetadata: "embedded",
   assets: "with", audio: "without", offloaded: "with", indexState: "indexed",
   include: "@creator, #games", exclude: "#fyp",
-  creator: "exactcreator", hashtag: "exacttag",
+  creator: "exactcreator", hashtag: "exacttag", song: "42",
   starred: true, privateTag: "recipes",
 };
 const empty = lib.emptyFilters();
 
 // The table covers every filter exactly once.
-assert.equal(lib.GALLERY_FILTER_FIELDS.length, 29);
-assert.equal(new Set(lib.GALLERY_FILTER_FIELDS.map((f) => f.key)).size, 29);
+assert.equal(lib.GALLERY_FILTER_FIELDS.length, 40);
+assert.equal(new Set(lib.GALLERY_FILTER_FIELDS.map((f) => f.key)).size, 40);
 
 // URL round-trips: fully populated and empty states survive unchanged.
 assert.deepEqual(lib.filtersFromUrl(lib.filtersToSearchParams(full)), full);
@@ -35,18 +39,20 @@ assert.equal(lib.filtersToSearchParams(empty).toString(), "");
 // sort omitted when "latest"; recovery serialized as "1"; empties omitted).
 assert.equal(
   lib.filtersToSearchParams(full).toString(),
-  "q=cat+videos&kind=video&status=failed&sort=duration_desc&min_duration=5&max_duration=90&min_size=1&max_size=250&min_width=480&max_width=1920&min_height=600&max_height=2400&codec=h264%2C+hevc&min_attempts=1&max_attempts=9&recovery=1&from=2024-01-01&to=2024-12-31&orientation=portrait&assets=with&audio=without&offloaded=with&index=indexed&include=%40creator%2C+%23games&exclude=%23fyp&creator=exactcreator&hashtag=exacttag&starred=1&private_tag=recipes",
+  "q=cat+videos&in=all&kind=video&status=failed&sort=duration_desc&min_duration=5&max_duration=90&min_size=1&max_size=250&min_width=480&max_width=1920&min_height=600&max_height=2400&codec=h264%2C+hevc&min_attempts=1&max_attempts=9&recovery=1&from=2024-01-01&to=2024-12-31&posted_from=2023-01-01&posted_to=2023-12-31&min_views=100000&min_likes=5000&min_comments=250&source_info=saved&comments=with_comments&downloader=yt-dlp&portable_metadata=embedded&orientation=portrait&assets=with&audio=without&offloaded=with&index=indexed&include=%40creator%2C+%23games&exclude=%23fyp&creator=exactcreator&hashtag=exacttag&song=42&starred=1&private_tag=recipes",
 );
 assert.equal(lib.filtersToSearchParams({ ...empty, order: "latest" }).toString(), "");
 assert.equal(lib.filtersToSearchParams({ ...empty, order: "random" }).toString(), "sort=random");
 assert.equal(lib.filtersFromUrl(new URLSearchParams("recovery=1")).recovery, true);
 assert.equal(lib.filtersFromUrl(new URLSearchParams("recovery=0")).recovery, false);
 assert.equal(lib.filtersFromUrl(new URLSearchParams("")).order, "latest");
+assert.equal(lib.filtersFromUrl(new URLSearchParams("")).searchScope, "posts");
+assert.equal(lib.filtersToSearchParams({ ...empty, searchScope: "posts" }).toString(), "");
 
 // The page query emits exactly the params api.itemPage sent before: snake_case
 // names, MB -> bytes, end-of-day date_to, allowlisted enums, page size 50.
 assert.deepEqual(lib.filtersToPageQuery(full, 12345), {
-  search: "cat videos", kind: "video", status: "failed", limit: 50, order: "duration_desc",
+  search: "cat videos", search_scope: "all", kind: "video", status: "failed", limit: 50, order: "duration_desc",
   seed: undefined,
   min_duration: 5, max_duration: 90,
   min_size: 1048576, max_size: 262144000,
@@ -54,19 +60,27 @@ assert.deepEqual(lib.filtersToPageQuery(full, 12345), {
   min_attempts: 1, max_attempts: 9,
   recovery: true, codec: "h264, hevc",
   date_from: "2024-01-01", date_to: "2024-12-31T23:59:59",
+  posted_from: "2023-01-01", posted_to: "2023-12-31T23:59:59",
+  min_views: 100000, min_likes: 5000, min_comments: 250,
+  source_info: "saved", comments_state: "with_comments", download_source: "yt-dlp",
+  portable_metadata: "embedded",
   orientation: "portrait", assets: "with", audio: "without", offloaded: "with",
   index_state: "indexed", include: "@creator, #games", exclude: "#fyp",
-  creator: "exactcreator", hashtag: "exacttag",
+  creator: "exactcreator", hashtag: "exacttag", song: 42,
   starred: true, private_tag: "recipes",
 });
 assert.deepEqual(lib.filtersToPageQuery(empty, 1), {
-  search: "", kind: "", status: "", limit: 50, order: "latest", seed: undefined,
+  search: "", search_scope: "posts", kind: "", status: "", limit: 50, order: "latest", seed: undefined,
   min_duration: undefined, max_duration: undefined, min_size: undefined, max_size: undefined,
   min_width: undefined, max_width: undefined, min_height: undefined, max_height: undefined,
   min_attempts: undefined, max_attempts: undefined, recovery: undefined, codec: undefined,
   date_from: undefined, date_to: undefined, orientation: undefined,
+  posted_from: undefined, posted_to: undefined,
+  min_views: undefined, min_likes: undefined, min_comments: undefined,
+  source_info: undefined, comments_state: undefined, download_source: undefined,
+  portable_metadata: undefined,
   assets: undefined, audio: undefined, offloaded: undefined, index_state: undefined,
-  include: "", exclude: "", creator: undefined, hashtag: undefined,
+  include: "", exclude: "", creator: undefined, hashtag: undefined, song: undefined,
   starred: undefined, private_tag: undefined,
 });
 // The seed rides along only for Random order; 0-valued numbers still count.
@@ -87,14 +101,18 @@ assert.equal(lib.filtersToPageQuery({ ...empty, maxSize: "1.5" }, 1).max_size, 1
 // exactly the paging/sort params the server rejects inside a filter
 // (order/seed/limit/cursor — mirroring server/archive_items.py), empties dropped.
 assert.deepEqual(lib.filtersToMarkSelector(full), {
-  search: "cat videos", kind: "video", status: "failed",
+  search: "cat videos", search_scope: "all", kind: "video", status: "failed",
   min_duration: "5", max_duration: "90", min_size: "1048576", max_size: "262144000",
   min_width: "480", max_width: "1920", min_height: "600", max_height: "2400",
   min_attempts: "1", max_attempts: "9", recovery: "true", codec: "h264, hevc",
   date_from: "2024-01-01", date_to: "2024-12-31T23:59:59",
+  posted_from: "2023-01-01", posted_to: "2023-12-31T23:59:59",
+  min_views: "100000", min_likes: "5000", min_comments: "250",
+  source_info: "saved", comments_state: "with_comments", download_source: "yt-dlp",
+  portable_metadata: "embedded",
   orientation: "portrait", assets: "with", audio: "without", offloaded: "with",
   index_state: "indexed", include: "@creator, #games", exclude: "#fyp",
-  creator: "exactcreator", hashtag: "exacttag",
+  creator: "exactcreator", hashtag: "exacttag", song: "42",
   starred: "true", private_tag: "recipes",
 });
 for (const key of ["order", "seed", "limit", "cursor"]) {
@@ -107,10 +125,12 @@ assert.equal(lib.filtersToMarkSelector({ ...empty, minAttempts: "0" }).min_attem
 // Presets carry every GalleryPresetFilters key (the server validates presets
 // by key set — order has no wire meaning), and apply round-trips.
 assert.deepEqual(Object.keys(lib.filtersToPreset(empty)).sort(), [
-  "search", "kind", "status", "order", "minDuration", "maxDuration", "minSize", "maxSize",
+  "search", "searchScope", "kind", "status", "order", "minDuration", "maxDuration", "minSize", "maxSize",
   "minWidth", "maxWidth", "minHeight", "maxHeight", "minAttempts", "maxAttempts", "recovery",
-  "codec", "dateFrom", "dateTo", "orientation", "assets", "audio", "offloaded", "indexState",
-  "include", "exclude", "creator", "hashtag", "starred", "privateTag",
+  "codec", "dateFrom", "dateTo", "postedFrom", "postedTo", "minViews", "minLikes", "minComments",
+  "sourceInfo", "commentsState", "downloadSource", "portableMetadata",
+  "orientation", "assets", "audio", "offloaded", "indexState",
+  "include", "exclude", "creator", "hashtag", "song", "starred", "privateTag",
 ].sort());
 assert.deepEqual(lib.filtersToPreset(full), full);
 assert.deepEqual(lib.applyPreset(lib.filtersToPreset(full)), full);
@@ -122,13 +142,15 @@ assert.equal(lib.applyPreset({ search: "kept" }).search, "kept");
 
 // Active-filter chips match the old addFilter() texts and order exactly.
 assert.deepEqual(lib.activeChips(full).map((chip) => chip.label), [
-  "Search: cat videos", "Videos", "Status: failed", "Sort: duration desc",
+  "Search: cat videos", "Search in: everything", "Videos", "Status: failed", "Sort: duration desc",
   "≥ 5s", "≤ 90s", "≥ 1 MB", "≤ 250 MB",
   "width ≥ 480", "width ≤ 1920", "height ≥ 600", "height ≤ 2400",
   "≥ 1 attempts", "≤ 9 attempts", "Recovery inbox", "Codec: h264, hevc",
-  "After: 2024-01-01", "Before: 2024-12-31", "portrait", "Has raw assets",
+  "After: 2024-01-01", "Before: 2024-12-31", "Posted after: 2023-01-01", "Posted before: 2023-12-31",
+  "≥ 100000 views", "≥ 5000 likes", "≥ 250 comments", "Source details: saved",
+  "Comments: with comments", "Downloader: yt-dlp", "Portable metadata: embedded", "portrait", "Has raw assets",
   "No audio", "Offloaded", "Index: indexed", "Include: @creator, #games", "Exclude: #fyp",
-  "Creator: exactcreator", "Hashtag: #exacttag", "Starred", "Private tag: recipes",
+  "Creator: exactcreator", "Hashtag: #exacttag", "Song #42", "Starred", "Private tag: recipes",
 ]);
 assert.deepEqual(lib.activeChips(empty), []);
 assert.deepEqual(lib.activeChips({ ...empty, include: "a,b" }), [{ key: "include", label: "Include: a,b" }]);

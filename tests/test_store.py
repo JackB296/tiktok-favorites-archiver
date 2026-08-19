@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import store
+from core import lens, store
 
 
 def _db():
@@ -437,14 +437,16 @@ def test_library_index_settings_default_to_high_enabled():
 
     assert settings["index_enabled"] == 1
     assert settings["thumbnail_width"] == 480
+    assert settings["portable_metadata_enabled"] == 0
 
 
 def test_library_index_status_reports_indexed_pending_and_failed_items():
     conn = _db()
-    for item_id in range(1, 4):
+    for item_id in range(1, 5):
         store.insert_item(conn, item_id, f"link{item_id}", status="done")
     store.record_media_index(conn, 1, {"thumbnail_path": "x", "duration_s": 1, "width": 1, "height": 1, "codec": "h264", "file_size": 1}, "x")
     store.record_media_index_error(conn, 3, "ffmpeg failed")
+    store.set_offloaded(conn, [4])
 
     assert store.library_index_status(conn) == {"total": 3, "indexed": 1, "pending": 2, "failed": 1}
 
@@ -485,6 +487,19 @@ def test_page_items_searches_metadata_with_relevance_and_updates_index():
     assert [row["id"] for row in store.page_items(conn, query="games", limit=10)] == [1, 3]
 
 
+def test_page_items_supports_fielded_phrases_exclusions_counts_dates_and_has():
+    conn = _db()
+    for item_id in (1, 2):
+        store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
+    store.set_metadata(conn, 1, "beautiful framing tutorial", "Alice")
+    store.set_metadata(conn, 2, "beautiful framing dance", "Bob")
+    conn.execute("UPDATE item SET creator_username='alice', view_count=2500, source_posted_at='2025-02-01', comments_status='ok' WHERE id=1")
+    conn.execute("UPDATE item SET creator_username='bob', view_count=10, source_posted_at='2024-02-01' WHERE id=2")
+    store.record_comment_snapshot(conn, 1, [{"id": "c", "text": "camera settings", "author_username": "fan"}])
+    rows = store.page_items(conn, query='"beautiful framing" -dance creator:alice comment:camera views:>1000 posted:2025 has:comments')
+    assert [row["id"] for row in rows] == [1]
+
+
 def test_page_items_filters_media_codec_and_resolution_bounds():
     conn = _db()
     for item_id, codec, width, height in ((1, "h264", 1080, 1920), (2, "vp9", 1920, 1080), (3, "h264", 720, 1280)):
@@ -516,10 +531,13 @@ def test_library_statistics_summarize_indexed_archive_media():
     store.insert_item(conn, 3, "three", kind="video", status="pending")
     store.record_media_index(conn, 1, {"thumbnail_path": "one", "duration_s": 60, "width": 1, "height": 1, "codec": "h264", "file_size": 100}, "one")
     store.record_media_index(conn, 2, {"thumbnail_path": "two", "duration_s": 90, "width": 1, "height": 1, "codec": "h264", "file_size": 200}, "two")
+    conn.execute("UPDATE item SET audio_silent = 1 WHERE id = 1")
+    conn.commit()
 
     assert store.library_statistics(conn) == {
         "favorites": 3, "ready": 2, "videos": 2, "slideshows": 1,
         "indexed": 2, "duration_s": 150.0, "media_size": 300,
+        "audio_repairs": 1,
     }
 
 
@@ -646,6 +664,20 @@ def test_page_items_filters_by_offloaded_flag():
     assert [row["id"] for row in store.page_items(conn, offloaded=False)] == [2]
 
 
+def test_page_items_filters_exactly_by_identified_song():
+    conn = _db()
+    for item_id in (1, 2, 3):
+        store.insert_item(conn, item_id, f"link-{item_id}", status="done")
+    first_song = store.upsert_song(conn, "shazam:first", "Same title", artist="Artist")
+    second_song = store.upsert_song(conn, "shazam:second", "Same title", artist="Other")
+    store.set_item_song(conn, 1, first_song)
+    store.set_item_song(conn, 2, first_song)
+    store.set_item_song(conn, 3, second_song)
+
+    assert [row["id"] for row in store.page_items(conn, song_id=first_song)] == [2, 1]
+    assert [row["id"] for row in store.page_items(conn, song_id=second_song)] == [3]
+
+
 def test_items_needing_index_skips_offloaded_items():
     conn = _db()
     store.insert_item(conn, 1, "a", status="done")
@@ -683,8 +715,147 @@ def test_default_audio_column_migrates_onto_a_legacy_settings_table():
     conn.commit()
     store.init_db(conn)
     assert store.get_library_settings(conn)["default_audio_name"] is None
+    assert store.get_library_settings(conn)["portable_metadata_enabled"] == 0
     store.set_default_audio(conn, "kept.mp3")
     assert store.get_library_settings(conn)["default_audio_name"] == "kept.mp3"
+
+
+def test_comment_snapshots_preserve_versions_and_summarize_changes():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/one")
+    first = [
+        {"id": "a", "text": "first", "like_count": 1},
+        {"id": "b", "text": "removed later", "like_count": 0},
+    ]
+    second = [
+        {"id": "a", "text": "first", "like_count": 3},
+        {"id": "c", "text": "new", "like_count": 0},
+    ]
+
+    store.record_comment_snapshot(
+        conn, 1, first, reported_count=2, captured_at="2026-08-01T10:00:00",
+    )
+    store.record_comment_snapshot(
+        conn, 1, second, reported_count=3, captured_at="2026-08-02T10:00:00",
+    )
+
+    snapshots = store.list_comment_snapshots(conn, 1)
+    assert [snapshot["captured_at"] for snapshot in snapshots] == [
+        "2026-08-02T10:00:00", "2026-08-01T10:00:00",
+    ]
+    assert snapshots[0]["comments"] == second
+    assert snapshots[0]["saved_count"] == 2
+    assert snapshots[0]["reported_count"] == 3
+    assert snapshots[0]["changes"] == {"added": 1, "removed": 1, "changed": 1}
+    assert snapshots[1]["changes"] == {"added": 2, "removed": 0, "changed": 0}
+
+
+def test_gallery_search_can_target_only_the_latest_saved_comments():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/one", status="done")
+    store.insert_item(conn, 2, "https://tiktok.com/two", status="done")
+    store.set_metadata(conn, 1, "A caption about pottery", "alice")
+    store.set_metadata(conn, 2, "A caption containing moonstone", "bob")
+    store.record_comment_snapshot(conn, 1, [
+        {"id": "old", "author_username": "viewer_one", "text": "moonstone vanished"},
+    ])
+    store.record_comment_snapshot(conn, 1, [
+        {"id": "new", "author_username": "localcritic", "text": "celadon glaze wins"},
+    ])
+
+    assert [row["id"] for row in store.page_items(
+        conn, query="celadon", search_scope="comments",
+    )] == [1]
+    assert store.page_items(conn, query="moonstone", search_scope="comments") == []
+    assert [row["id"] for row in store.page_items(conn, query="localcritic", search_scope="comments")] == [1]
+    # The unchanged default remains post metadata, not comments.
+    assert [row["id"] for row in store.page_items(conn, query="moonstone")] == [2]
+
+
+def test_gallery_search_scopes_cover_rich_post_song_analysis_and_everything():
+    conn = _db()
+    for item_id in range(1, 5):
+        store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
+    conn.execute("UPDATE item SET description = 'hand-thrown celadon bowl' WHERE id = 1")
+    song_id = store.upsert_song(conn, "qa:aurora", "Aurora Waltz", artist="Night Glass")
+    store.set_item_song(conn, 2, song_id)
+    lens.import_document(conn, {"items": [{"item_id": 3, "segments": [
+        {"source": "transcript", "text": "A murmuration crosses the sunset", "start_s": 1},
+    ]}]})
+    store.record_comment_snapshot(conn, 4, [
+        {"id": "c", "text": "the vermilion framing is perfect"},
+    ])
+
+    assert [row["id"] for row in store.page_items(conn, query="celadon")] == [1]
+    assert [row["id"] for row in store.page_items(conn, query="aurora", search_scope="songs")] == [2]
+    assert [row["id"] for row in store.page_items(conn, query="murmuration", search_scope="analysis")] == [3]
+    assert [row["id"] for row in store.page_items(conn, query="vermilion", search_scope="all")] == [4]
+    assert [row["id"] for row in store.page_items(conn, query="aurora", search_scope="all")] == [2]
+    assert store.page_items(conn, query="murmuration", search_scope="posts") == []
+
+
+def test_everything_search_paginates_mixed_post_and_comment_matches_once():
+    conn = _db()
+    for item_id in range(1, 56):
+        store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
+        if item_id % 2:
+            store.set_metadata(conn, item_id, "cinnabar match", f"creator{item_id}")
+        else:
+            store.record_comment_snapshot(conn, item_id, [
+                {"id": str(item_id), "text": "cinnabar match"},
+            ])
+
+    found = []
+    cursor = None
+    while True:
+        page = store.page_items(
+            conn, query="cinnabar", search_scope="all", limit=13, cursor=cursor,
+        )
+        found.extend(row["id"] for row in page)
+        if len(page) < 13:
+            break
+        cursor = page[-1]["id"]
+
+    assert sorted(found) == list(range(1, 56))
+    assert len(found) == len(set(found))
+
+
+def test_gallery_filters_rich_source_comment_download_and_portable_metadata():
+    conn = _db()
+    for item_id in range(1, 5):
+        store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", status="done")
+    conn.execute(
+        "UPDATE item SET source_posted_at = ?, view_count = ?, like_count = ?, "
+        "comment_count = ?, source_info_status = ?, comments_status = ?, "
+        "download_source = ?, portable_metadata_status = ? WHERE id = 1",
+        ("2025-06-15T12:00:00", 1_000_000, 45_000, 900, "ok", "ok", "yt-dlp", "ok"),
+    )
+    conn.execute(
+        "UPDATE item SET source_posted_at = ?, view_count = ?, like_count = ?, "
+        "comment_count = ?, source_info_status = ?, comments_status = ?, "
+        "download_source = ?, portable_metadata_status = ? WHERE id = 2",
+        ("2024-03-10T12:00:00", 10_000, 500, 20, "unavailable", "pending", "cobalt", "error"),
+    )
+    store.record_comment_snapshot(conn, 1, [{"id": "a", "text": "saved locally"}])
+    conn.commit()
+
+    def ids(**query):
+        return [row["id"] for row in store.page_items(conn, limit=100, **query)]
+
+    assert ids(posted_from="2025-01-01", posted_to="2025-12-31T23:59:59") == [1]
+    assert ids(min_views=100_000, min_likes=10_000, min_comments=100) == [1]
+    assert ids(source_info="saved") == [1]
+    assert ids(source_info="unavailable") == [2]
+    assert ids(source_info="missing") == [4, 3]
+    assert ids(comments_state="saved") == [1]
+    assert ids(comments_state="with_comments") == [1]
+    assert ids(comments_state="missing") == [4, 3, 2]
+    assert ids(download_source="yt-dlp") == [1]
+    assert ids(download_source="cobalt") == [2]
+    assert ids(download_source="legacy") == [4, 3]
+    assert ids(portable_metadata="embedded") == [1]
+    assert ids(portable_metadata="failed") == [2]
+    assert ids(portable_metadata="missing") == [4, 3]
 
 
 def test_get_items_and_get_songs_batch_lookups():

@@ -155,15 +155,17 @@ def _row_record(row):
     return {
         "id": row["id"],
         "source_name": row["source_name"],
+        "selection": row["selection"],
         "digest": row["digest"],
         "favorite_count": row["favorite_count"],
         "imported_at": row["imported_at"],
     }
 
 
-def record_import(conn, favorites, source_name=None):
+def record_import(conn, favorites, source_name=None, selection="favorites"):
     previous = conn.execute(
-        "SELECT id FROM import_history ORDER BY id DESC LIMIT 1"
+        "SELECT id FROM import_history WHERE selection = ? ORDER BY id DESC LIMIT 1",
+        (selection,),
     ).fetchone()
     previous_id = previous["id"] if previous is not None else None
     imported_at = _now()
@@ -171,8 +173,8 @@ def record_import(conn, favorites, source_name=None):
     try:
         cursor = conn.execute(
             "INSERT INTO import_history "
-            "(source_name, digest, favorite_count, imported_at) VALUES (?, ?, ?, ?)",
-            (_source_name(source_name), _digest(favorites), len(favorites), imported_at),
+            "(source_name, selection, digest, favorite_count, imported_at) VALUES (?, ?, ?, ?, ?)",
+            (_source_name(source_name), selection, _digest(favorites), len(favorites), imported_at),
         )
         import_id = cursor.lastrowid
         memberships = {}
@@ -214,8 +216,8 @@ def list_imports(conn, limit=50, change_limit=200):
     records = []
     for index, row in enumerate(rows):
         previous = conn.execute(
-            "SELECT id FROM import_history WHERE id < ? ORDER BY id DESC LIMIT 1",
-            (row["id"],),
+            "SELECT id FROM import_history WHERE id < ? AND selection = ? ORDER BY id DESC LIMIT 1",
+            (row["id"], row["selection"]),
         ).fetchone()
         previous_id = previous["id"] if previous is not None else None
         records.append({
@@ -239,8 +241,8 @@ def get_import(conn, import_id, change_limit=200):
     if row is None:
         return None
     previous = conn.execute(
-        "SELECT id FROM import_history WHERE id < ? ORDER BY id DESC LIMIT 1",
-        (row["id"],),
+        "SELECT id FROM import_history WHERE id < ? AND selection = ? ORDER BY id DESC LIMIT 1",
+        (row["id"], row["selection"]),
     ).fetchone()
     previous_id = previous["id"] if previous is not None else None
     return {

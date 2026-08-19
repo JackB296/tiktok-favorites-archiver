@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { Item } from "./types";
+import { ownsWheel } from "./panelLayout.js";
 import {
   beginLoadAbove,
   beginLoadBelow,
@@ -172,8 +173,21 @@ export function useFeedWindow(source: FeedSource<Item>, containerRef: RefObject<
   useEffect(() => {
     const root = containerRef.current;
     if (!root || !items?.length) return;
+    // Ancestors of the wheel target, up to (but excluding) the feed itself.
+    const wheelChain = (target: EventTarget | null) => {
+      const chain = [];
+      let node = target instanceof Element ? target : null;
+      while (node && node !== root) {
+        chain.push({ ownsWheel: node.hasAttribute("data-comment-scroll") });
+        node = node.parentElement;
+      }
+      return chain;
+    };
     const onWheel = (event: WheelEvent) => {
       if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || Math.abs(event.deltaY) < 2) return;
+      // The comment list scrolls itself and never hands the gesture back, so
+      // reading to the end of a conversation cannot jump to the next post.
+      if (ownsWheel(wheelChain(event.target))) return;
       event.preventDefault();
       if (wheelIdleTimer.current != null) window.clearTimeout(wheelIdleTimer.current);
       wheelIdleTimer.current = window.setTimeout(() => { wheelGestureReady.current = true; }, 100);

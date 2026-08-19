@@ -10,18 +10,18 @@ from core import run_catalog, store
 
 def test_catalog_contains_every_existing_user_run_and_action_name():
     assert set(run_catalog.kinds()) == {
-        "sync", "backfill", "index", "sidecars", "enrich", "identify", "analyze",
+        "sync", "creator-monitor", "backfill", "index", "sidecars", "audio-repair", "enrich", "identify", "analyze",
         "storage-copy", "storage-move", "storage-restore",
         "snapshot",
         "snapshot-restore",
         "discovery-backfill",
-        "verify",
+        "verify", "coverage-repair", "creator-followups",
     }
     assert {
         action: run_catalog.kind_for_action(action)
         for action in (
             "start", "backfill", "reindex", "sidecars", "enrich", "identify",
-            "analyze", "discovery",
+            "analyze", "repair-audio", "discovery",
         )
     } == {
         "start": "sync",
@@ -31,14 +31,16 @@ def test_catalog_contains_every_existing_user_run_and_action_name():
         "enrich": "enrich",
         "identify": "identify",
         "analyze": "analyze",
+        "repair-audio": "audio-repair",
         "discovery": "discovery-backfill",
     }
 
 
 def test_sync_pipeline_and_default_workers_live_in_the_catalog():
     assert run_catalog.pipeline_for("sync") == (
-        "sync", "enrich", "identify", "analyze",
+        "sync", "enrich", "sidecars", "identify", "analyze",
     )
+    assert run_catalog.pipeline_for("creator-monitor") == ("creator-monitor", "sync", "creator-followups")
     assert run_catalog.pipeline_for("backfill") == ("backfill",)
     assert set(run_catalog.default_runners()) == set(run_catalog.kinds())
 
@@ -60,6 +62,17 @@ def test_analysis_followup_requires_unprocessed_readable_local_media():
         assert run_catalog.has_work(conn, "analyze", downloads) is False
         open(os.path.join(downloads, "1.mp4"), "wb").close()
         assert run_catalog.has_work(conn, "analyze", downloads) is True
+
+
+def test_audio_repair_work_requires_an_indexed_silent_local_video():
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://x/1", status="done")
+    conn.execute("UPDATE item SET has_audio = 1, audio_silent = 1 WHERE id = 1")
+    conn.commit()
+    with tempfile.TemporaryDirectory() as downloads:
+        assert run_catalog.has_work(conn, "audio-repair", downloads) is False
+        open(os.path.join(downloads, "1.mp4"), "wb").close()
+        assert run_catalog.has_work(conn, "audio-repair", downloads) is True
 
 
 def test_unknown_names_are_rejected_consistently():

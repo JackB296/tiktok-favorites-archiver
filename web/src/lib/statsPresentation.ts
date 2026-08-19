@@ -75,7 +75,15 @@ export function formatCount(n: number): string {
 export function compactCount(n: number): string {
   if (n < 10000) return n.toLocaleString("en-US");
   if (n < 1000000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}K`;
-  return `${(n / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n < 1000000000) return `${(n / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
+  return `${(n / 1000000000).toFixed(1).replace(/\.0$/, "")}B`;
+}
+
+/** Coverage bars are always a valid CSS percentage, including partial or
+ * stale payloads where the numerator happens to exceed the denominator. */
+export function coveragePercent(count: number, total: number): number {
+  if (total <= 0 || count <= 0) return 0;
+  return Math.min(100, (count / total) * 100);
 }
 
 /** Hero watch-length: days/hours for big libraries, minutes for small ones. */

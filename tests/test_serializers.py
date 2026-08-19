@@ -188,6 +188,7 @@ def test_parse_page_query_maps_and_transforms_a_full_param_set():
         "min_attempts": "0", "max_attempts": "5",
         "codec": "h264,hevc", "orientation": "portrait, square",
         "include": "games, retro", "exclude": "fyp",
+        "song": "42",
         "date_from": "2025-01-01", "date_to": "2025-02-01",
         "assets": "with", "index_state": "indexed", "recovery": "true",
     })
@@ -200,6 +201,7 @@ def test_parse_page_query_maps_and_transforms_a_full_param_set():
         "min_attempts": 0, "max_attempts": 5,
         "codecs": ["h264", "hevc"], "orientations": ["portrait", "square"],
         "include": ["games", "retro"], "exclude": ["fyp"],
+        "song_id": 42,
         "date_from": "2025-01-01", "date_to": "2025-02-01",
         "has_assets": True, "index_state": "indexed", "recovery": True,
     }
@@ -398,6 +400,7 @@ def test_public_projection_embeds_the_identified_song():
     with tempfile.TemporaryDirectory() as dl:
         items = ArchiveItems(conn, dl)
         one = items.get(1)
+        assert one["song"]["id"] == song_id
         assert one["song"]["title"] == "Blinding Lights"
         assert one["song"]["artist"] == "The Weeknd"
         assert one["song"]["spotify_url"].endswith("/x")

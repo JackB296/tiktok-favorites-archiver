@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   MagnifyingGlass,
   Play,
@@ -36,6 +36,7 @@ import type { GalleryOrder } from "../lib/galleryFilters";
 import { useGalleryFilters } from "../lib/useGalleryFilters";
 import { useSavedList } from "../lib/useSavedList";
 import { smartCollectionConfirmation } from "../lib/smartCollectionPresentation";
+import { CommentHistory } from "../components/CommentsDialog";
 
 const FILTERS = [
   { key: "", label: "All", help: "Show every favorite that matches the search and advanced filters." },
@@ -66,7 +67,7 @@ export function Gallery() {
   );
   const filters = useGalleryFilters(searchParams);
   const { state: filterState, randomSeed, set: setFilter, clearField: clearFilter } = filters;
-  const { search, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, orientation, assets, audio, offloaded, indexState, include, exclude, starred, privateTag } = filterState;
+  const { search, searchScope, kind, status, order, minDuration, maxDuration, minSize, maxSize, minWidth, maxWidth, minHeight, maxHeight, minAttempts, maxAttempts, recovery, codec, dateFrom, dateTo, postedFrom, postedTo, minViews, minLikes, minComments, sourceInfo, commentsState, downloadSource, portableMetadata, orientation, assets, audio, offloaded, indexState, include, exclude, starred, privateTag } = filterState;
   const [suggestions, setSuggestions] = useState<SearchSuggestions | null>(null);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [suggestActive, setSuggestActive] = useState(-1);
@@ -265,13 +266,13 @@ export function Gallery() {
   // Typeahead: debounce keystrokes, then ask the archive what it actually has.
   useEffect(() => {
     const q = search.trim();
-    if (!q) { setSuggestions(null); return; }
+    if (!q || searchScope !== "posts") { setSuggestions(null); return; }
     let alive = true;
     const t = window.setTimeout(() => {
       api.suggest(q).then((next) => { if (alive) setSuggestions(next); }).catch(() => { if (alive) setSuggestions(null); });
     }, 150);
     return () => { alive = false; window.clearTimeout(t); };
-  }, [search]);
+  }, [search, searchScope]);
 
   useEffect(() => { setSuggestActive(-1); }, [suggestions]);
 
@@ -548,7 +549,11 @@ export function Gallery() {
   const allSelectedOffloaded = selectedItems.length > 0 && selectedItems.every((it) => it.offloaded);
   const allSelectedIgnored = selectedItems.length > 0 && selectedItems.every((it) => it.status === "ignored");
 
-  const activeFilters = activeChips(filterState);
+  const activeFilters = activeChips(filterState).map((chip) => (
+    chip.key === "song" && items?.[0]?.song
+      ? { ...chip, label: `Song: ${songLabel(items[0].song)}` }
+      : chip
+  ));
 
   const suggestItems = suggestions
     ? [
@@ -557,7 +562,7 @@ export function Gallery() {
         ...suggestions.terms.map((t) => ({ value: t.value, kind: "Keyword" })),
       ]
     : [];
-  const showSuggest = suggestOpen && suggestItems.length > 0;
+  const showSuggest = searchScope === "posts" && suggestOpen && suggestItems.length > 0;
   function pickSuggestion(value: string) {
     setFilter("search", value);
     setSuggestOpen(false);
@@ -568,10 +573,11 @@ export function Gallery() {
     <div ref={scrollRef} className="h-full overflow-y-auto">
     <div className="w-full px-[clamp(1rem,1.5vw,2.5rem)] py-6">
       <div style={{ fontSize: "clamp(14px, 8.8px + 0.34vw, 22px)" }} className="mb-6 flex flex-col gap-[0.75em] lg:flex-row lg:items-start lg:gap-[1em]">
-        <div className="relative w-full lg:w-[34em] lg:shrink-0">
-          <label htmlFor="gallery-search" className="sr-only">Search favorites</label>
-          <MagnifyingGlass size="1.2em" className="pointer-events-none absolute left-[0.9em] top-[1.35em] -translate-y-1/2 text-ink-faint" />
-          <input
+        <div className="w-full lg:w-[40em] lg:shrink-0">
+          <div className="relative">
+            <label htmlFor="gallery-search" className="sr-only">Search favorites</label>
+            <MagnifyingGlass size="1.2em" className="pointer-events-none absolute left-[0.9em] top-[1.35em] -translate-y-1/2 text-ink-faint" />
+            <input
             id="gallery-search"
             value={search}
             onChange={(e) => setFilter("search", e.target.value)}
@@ -588,12 +594,11 @@ export function Gallery() {
             aria-controls="gallery-search-suggestions"
             aria-activedescendant={showSuggest && suggestActive >= 0 ? `gallery-suggestion-${suggestActive}` : undefined}
             aria-autocomplete="list"
-            placeholder="Search caption, hashtag, author"
-            title="Searches indexed captions, hashtags, creator names, and source links. Best text matches appear first unless an advanced sort is selected."
+            placeholder={{ posts: "Search captions, descriptions, creators", comments: "Search saved comments or usernames", songs: "Search identified songs or artists", analysis: "Search transcripts and on-screen text", all: "Search everything saved locally" }[searchScope] || "Search favorites"}
+            title={'Local search supports exact phrases, -exclusions, and fields such as creator:, comment:, song:, transcript:, ocr:, views:>1000, posted:2025, and has:comments.'}
             className="h-[2.7em] w-full rounded-[var(--radius-control)] border border-line bg-surface pl-[2.7em] pr-[1em] text-[1em] text-ink placeholder:text-ink-faint focus:border-accent"
-          />
-          {search.trim() && !showSuggest && <p className="mt-[0.4em] text-[0.75em] text-ink-faint">Best matches first. Choose an advanced sort to override relevance.</p>}
-          {showSuggest && (
+            />
+            {showSuggest && (
             <ul id="gallery-search-suggestions" role="listbox" aria-label="Search suggestions" className="absolute left-0 right-0 top-full z-20 mt-[0.35em] max-h-[60vh] overflow-auto rounded-[var(--radius-control)] border border-line bg-elevated py-[0.3em] text-[0.9em] shadow-xl">
               {suggestItems.map((opt, i) => {
                 const firstOfKind = i === 0 || suggestItems[i - 1].kind !== opt.kind;
@@ -614,7 +619,20 @@ export function Gallery() {
                 );
               })}
             </ul>
-          )}
+            )}
+          </div>
+          <div className="mt-[0.4em] flex flex-wrap items-center gap-[0.55em] text-[0.75em] text-ink-faint">
+            <label htmlFor="gallery-search-scope">Search in</label>
+            <select id="gallery-search-scope" value={searchScope} onChange={(e) => setFilter("searchScope", e.target.value)} className="rounded-[var(--radius-control)] border border-line bg-surface px-[0.55em] py-[0.25em] text-ink">
+              <option value="posts">Post details</option>
+              <option value="comments">Saved comments</option>
+              <option value="songs">Identified songs</option>
+              <option value="analysis">Transcript + on-screen text</option>
+              <option value="all">Everything saved locally</option>
+            </select>
+            {search.trim() && <span>Best matches first. Advanced sort overrides relevance.</span>}
+            <Link to={`/coverage?filter=${encodeURIComponent(JSON.stringify(filtersToMarkSelector(filterState)))}`} className="ml-auto font-medium text-accent hover:underline">Repair these results</Link>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-[0.4em] lg:flex-1 lg:justify-end">
           {FILTERS.map((f) => (
@@ -824,6 +842,38 @@ export function Gallery() {
           </div>
         </div>
         <div className="border-t border-line pt-3">
+          <p className="text-xs font-semibold text-ink">Saved source data</p>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="text-xs text-ink-dim"><HelpLabel help="Uses the original TikTok upload date captured in saved source metadata, which is separate from when you favorited it.">Posted on or after</HelpLabel>
+              <input value={postedFrom} onChange={(e) => setFilter("postedFrom", e.target.value)} type="date" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Excludes posts uploaded after this date. Posts without saved upload dates do not match a date range.">Posted on or before</HelpLabel>
+              <input value={postedTo} onChange={(e) => setFilter("postedTo", e.target.value)} type="date" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Uses the engagement snapshot saved locally when source details were last collected.">Minimum views</HelpLabel>
+              <input value={minViews} onChange={(e) => setFilter("minViews", e.target.value)} type="number" min="0" step="1" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Uses the locally saved like count; it does not contact TikTok while filtering.">Minimum likes</HelpLabel>
+              <input value={minLikes} onChange={(e) => setFilter("minLikes", e.target.value)} type="number" min="0" step="1" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Uses TikTok's reported comment count from the saved source snapshot, not just the number of comment bodies successfully saved.">Minimum reported comments</HelpLabel>
+              <input value={minComments} onChange={(e) => setFilter("minComments", e.target.value)} type="number" min="0" step="1" className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink" />
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Saved means captions, creator details, dates, engagement, and other source fields were captured. Missing has not been attempted; unavailable means the live source could not provide them.">Source details</HelpLabel>
+              <select value={sourceInfo} onChange={(e) => setFilter("sourceInfo", e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any source state</option><option value="saved">Saved</option><option value="missing">Not collected</option><option value="unavailable">Source unavailable</option></select>
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Saved includes a completed local comment snapshot, even when the post had zero comments. With comments requires at least one searchable saved comment body.">Saved comments</HelpLabel>
+              <select value={commentsState} onChange={(e) => setFilter("commentsState", e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any comment state</option><option value="saved">Snapshot saved</option><option value="with_comments">Has saved comment text</option><option value="missing">Not collected</option></select>
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Shows which download path produced the archived media. Legacy covers files adopted from older app versions or imports without a recorded downloader.">Downloader</HelpLabel>
+              <select value={downloadSource} onChange={(e) => setFilter("downloadSource", e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any downloader</option><option value="cobalt">Cobalt</option><option value="yt-dlp">yt-dlp</option><option value="legacy">Legacy / imported</option></select>
+            </label>
+            <label className="text-xs text-ink-dim"><HelpLabel help="Portable metadata embeds useful archive fields into the media file so they travel with it outside this app.">Portable metadata</HelpLabel>
+              <select value={portableMetadata} onChange={(e) => setFilter("portableMetadata", e.target.value)} className="mt-1 h-9 w-full rounded-[var(--radius-control)] border border-line bg-elevated px-2 text-sm text-ink"><option value="">Any portable metadata</option><option value="embedded">Embedded</option><option value="missing">Not embedded</option><option value="failed">Embedding failed</option></select>
+            </label>
+          </div>
+        </div>
+        <div className="border-t border-line pt-3">
           <p className="text-xs font-semibold text-ink">Dates &amp; terms</p>
           <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <label className="text-xs text-ink-dim"><HelpLabel help="Uses the date recorded in your TikTok export and excludes favorites saved before this day.">Favorited on or after</HelpLabel>
@@ -911,11 +961,22 @@ function Grid({ children, size }: { children: ReactNode; size: GallerySize }) {
 
 function DetailsDialog({ item, onClose, onPlay, onRetry, onIgnore }: { item: Item; onClose: () => void; onPlay: () => void; onRetry: () => void; onIgnore: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const [sourceDetails, setSourceDetails] = useState<Awaited<ReturnType<typeof api.itemSourceMetadata>> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    if (item.source_info_status === "ok") api.itemSourceMetadata(item.id).then((value) => { if (alive) setSourceDetails(value); }).catch(() => {});
+    return () => { alive = false; };
+  }, [item.id, item.source_info_status]);
   const resolution = item.media_width && item.media_height ? `${item.media_width} × ${item.media_height}` : "Not indexed";
   const rows = [
     ["Status", item.status], ["Type", item.kind], ["Favorited", item.favorited_at ?? "Unknown"],
+    ["Posted", item.source_posted_at ? new Date(item.source_posted_at).toLocaleString() : "Unknown"],
     ["Duration", formatDuration(item.duration_s) ?? "Not indexed"], ["Resolution", resolution],
     ["Codec", item.media_codec ?? "Not indexed"], ["File size", formatSize(item.media_size) ?? "Not indexed"],
+    ["Source duration", formatDuration(item.source_duration_s) ?? "Unknown"], ["Source resolution", item.source_width && item.source_height ? `${item.source_width} x ${item.source_height}` : "Unknown"],
+    ["Views", item.view_count?.toLocaleString() ?? "Unknown"], ["Likes", item.like_count?.toLocaleString() ?? "Unknown"],
+    ["Comments", item.comment_count?.toLocaleString() ?? "Unknown"], ["Saves", item.save_count?.toLocaleString() ?? "Unknown"],
+    ["Reposts", item.repost_count?.toLocaleString() ?? "Unknown"], ["Downloaded with", item.download_source ?? "Unknown"],
     ["Download attempts", String(item.attempt_count)], ["Last attempt", item.last_attempt_at ?? "Never"],
     ["Archive file", item.offloaded ? "Offloaded to external storage" : item.archive_missing ? "Missing (integrity scan)" : item.video_url ? "Ready" : "Not available"], ["Audio", audioStatus(item.has_audio, item.audio_silent)], ["Raw slideshow assets", item.has_assets ? "Available" : "None"],
   ];
@@ -924,14 +985,16 @@ function DetailsDialog({ item, onClose, onPlay, onRetry, onIgnore }: { item: Ite
     <div className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-[var(--radius-media)] border border-line bg-surface p-5 shadow-2xl">
       <div className="flex items-start justify-between gap-4"><div><p className="tabular text-xs text-ink-faint">Favorite #{item.id}</p><h2 id="favorite-details-title" className="mt-1 text-lg font-semibold text-ink">Archive details</h2></div><button ref={closeRef} type="button" onClick={onClose} aria-label="Close details" className="rounded-[var(--radius-control)] p-2 text-ink-dim hover:bg-elevated hover:text-ink"><X size={18} /></button></div>
       {item.caption && <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-ink">{item.caption}</p>}
-      {item.author && <p className="mt-2 text-sm text-ink-dim">Creator: {item.author}</p>}
+      {item.author && <p className="mt-2 text-sm text-ink-dim">Creator: {item.creator ? <Link to={`/gallery?creator=${encodeURIComponent(item.creator.key)}`} className="font-medium text-ink underline underline-offset-2 hover:text-accent">{item.author}</Link> : item.author}</p>}
+      {item.description && item.description !== item.caption && <div className="mt-3"><p className="text-xs font-semibold uppercase tracking-wide text-ink-faint">Full description</p><p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink">{item.description}</p></div>}
       {item.song
-        ? <p className="mt-2 text-sm text-ink-dim">Song: <a href={primarySongUrl(item.song)} target="_blank" rel="noreferrer" className="text-ink underline underline-offset-2 hover:text-active">{songLabel(item.song)}</a></p>
+        ? <p className="mt-2 text-sm text-ink-dim">Song: {item.song.id != null ? <Link to={`/gallery?song=${item.song.id}`} title="Show every archived video using this song" className="font-medium text-ink underline underline-offset-2 hover:text-accent">{songLabel(item.song)}</Link> : <span className="text-ink">{songLabel(item.song)}</span>} <a href={primarySongUrl(item.song)} target="_blank" rel="noreferrer" className="ml-1 text-xs text-ink-dim underline underline-offset-2 hover:text-active">Find online</a></p>
         : item.song_status === "no_match" ? <p className="mt-2 text-sm text-ink-faint">Song: not recognized</p>
         : item.song_status === "error" ? <p className="mt-2 text-sm text-ink-faint">Song: identification failed</p>
         : null}
       {item.error && <p className="mt-3 rounded-[var(--radius-control)] border border-bad/40 bg-bad/10 p-3 text-sm text-bad">Last error: {item.error}</p>}
       <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 border-t border-line pt-4 sm:grid-cols-2">{rows.map(([label, value]) => <div key={label}><dt className="text-xs text-ink-faint">{label}</dt><dd className="mt-0.5 break-words text-sm text-ink">{value}</dd></div>)}</dl>
+      {sourceDetails && <div className="mt-4 border-t border-line pt-4"><h3 className="mb-2 text-sm font-semibold text-ink">Saved comments</h3>{sourceDetails.comments.length > 0 || sourceDetails.comment_snapshots?.length > 0 || item.comments_status === "ok" ? <CommentHistory details={sourceDetails} reported={item.comment_count} /> : <p className="text-sm text-ink-dim">Comment collection is pending. Run the Media sidecars phase from Sync to fetch public comments that TikTok makes available.</p>}</div>}
       <div className="mt-5 flex flex-wrap gap-2 border-t border-line pt-4">
         {isFeedItem(item) && <button type="button" onClick={onPlay} className="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-accent px-3 py-2 text-sm font-medium text-on-accent"><Play size={15} weight="fill" /> Play this favorite</button>}
         {safeLink && <a href={item.link} target="_blank" rel="noreferrer" className="inline-flex items-center rounded-[var(--radius-control)] border border-line px-3 py-2 text-sm text-ink-dim hover:text-ink"><LinkSimple size={15} className="mr-1.5" /> Open on TikTok</a>}

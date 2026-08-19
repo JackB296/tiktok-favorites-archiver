@@ -21,7 +21,7 @@
   <sub>All screenshots show a synthetic demo archive — generated gradients and made-up creators, no real TikTok content.</sub>
 </p>
 
-Videos download as-is. Photo slideshows are rebuilt into MP4s with their original sound. A local web app runs the downloads and browses the results, and Plex handles the TV. Everything runs on your own machine through a self-hosted [Cobalt](https://github.com/imputnet/cobalt) instance, so your favorites never pass through anyone else's server.
+Videos download as-is. Photo slideshows are rebuilt into MP4s with their original sound. A local web app runs the downloads and browses the results, and Plex handles the TV. Cobalt remains the default resolver, while a bundled `yt-dlp` path can recover failed or silent videos and source metadata. Both run inside your own app stack; only TikTok's public endpoints are contacted for media and source details.
 
 ## Architecture
 
@@ -29,9 +29,11 @@ Videos download as-is. Photo slideshows are rebuilt into MP4s with their origina
   <img src="screenshots/architecture.svg" alt="System architecture: a TikTok data export flows through a Python download engine and a self-hosted Cobalt resolver into a local SQLite-indexed archive, served by FastAPI to a React web app and to Plex." width="100%">
 </p>
 
-The app reads your export, records every favorite in a SQLite database, and works through them with a bounded pool of workers that stays under Cobalt's rate limit. Cobalt resolves each link to real media. Videos download directly. A photo post has its images and audio downloaded, rebuilt into a slideshow MP4 (each image centered on a black canvas sized to the largest image, with no downscaling), and its raw images kept so the web viewer can render them as a carousel.
+The app reads your export, records every favorite in a SQLite database, and works through them with a bounded pool of workers that stays under Cobalt's rate limit. Cobalt resolves each link to real media. For video posts the archive validates the result and uses `yt-dlp` when Cobalt fails, the file is silent, or a better usable rendition is available. When TikTok exposes a silent high-resolution rendition and a synchronized lower-resolution rendition with sound, the archive stream-copies the higher-resolution video and muxes in the verified audio; if that repair is unsafe, the audible rendition remains the fallback. A photo post has its images and audio downloaded, rebuilt into a slideshow MP4 (each image centered on a black canvas sized to the largest image, with no downscaling), and its raw images kept so the web viewer can render them as a carousel.
 
 File numbering is stable: `147.mp4` stays archive item 147 in the database. Favorite chronology is stored separately, so a legacy migration can preserve old filenames without making Feed order wrong. A rerun never renumbers or overwrites what you already have, and Plex keeps its place.
+
+For the proposed next-generation queue, resource limits, quiet hours, cancellation, and crash-recovery model, see [Background job controls](BACKGROUND_JOBS.md).
 
 ## Highlights
 
@@ -76,7 +78,7 @@ Running **Unraid, CasaOS, or Umbrel**? Ready-made install templates with per-pla
 
 ### Feed
 
-A vertical scroll of your favorites, one at a time. Videos autoplay as they come into view and expose play/pause and seeking controls on hover. Photo posts use a manual image carousel while their original audio keeps playing; slides never advance on their own. An identified song shows as a chip you can open in a music service, and a per-post button lets you search for and set the song by hand.
+A vertical scroll of your favorites, one at a time. Videos autoplay as they come into view and expose play/pause and seeking controls on hover. Photo posts use a manual image carousel while their original audio keeps playing; slides never advance on their own. An identified song links to an exact Gallery of every archived post using it, with a separate shortcut to open the track online. A comments button opens saved public comments and replies without leaving playback, and a per-post button lets you search for and set the song by hand.
 
 It opens at your newest favorite, remembers where you left off ("go to last watched"), and has a no-repeat shuffle. Desktop controls are built in: arrow keys change favorites, Space pauses, M toggles sound, F enters or exits fullscreen. The next eight posts preload and the previous video stops the moment navigation begins, so the Feed stays smooth at 11,000+ favorites. Optional loudness leveling is capped at 2.5× to avoid distorted amplification.
 
@@ -88,7 +90,7 @@ It opens at your newest favorite, remembers where you left off ("go to last watc
 
 A searchable thumbnail grid of everything, ranked best-match first.
 
-- **Search and filter.** Search by caption, hashtag, or author (from TikTok's public oEmbed data). Beyond the All / Videos / Slideshows filter, an advanced panel covers date range, duration, file size, resolution, orientation, codec, download status, and attempt count, plus include/exclude author and tag lists, eleven repeatable sort orders, and a fresh random shuffle.
+- **Search and filter.** Post search still defaults to captions, descriptions, creators, hashtags, and source links. The **Search in** control can instead target locally saved comments and usernames, identified songs and artists, Local Lens transcripts/OCR, or every local index together. Beyond All / Videos / Slideshows, the advanced panel covers favorite and original upload dates, engagement counts, source/comment availability, downloader, portable metadata, duration, file size, resolution, orientation, codec, download status, and attempt count, plus include/exclude creator and tag lists, eleven repeatable sort orders, and a fresh random shuffle.
 - **Smart collections and lists.** Save any filter combination as a named Smart collection or share it as a copyable link. Membership is resolved live whenever you open, play, export, or bulk-mark it. Save reusable author/hashtag allow or deny lists (for example "No FYP" or "Gaming") and apply them without clearing terms already entered. Playback queues remain fixed snapshots of the IDs you selected.
 - **Recovery and repair.** The one-click Recovery inbox refreshes archive integrity, then surfaces failed downloads, scan-confirmed missing files, and untouched pending favorites. Confirmed-silent videos are flagged on their cards and in Feed. Each post can have its local MP4, thumbnail, or both replaced without changing its archive number, caption, creator, or source link; the previous file is kept in `downloads/.archive/replaced/` so a mistaken upload can be undone.
 - **Queues and inspect.** Select up to 100 favorites to start a temporary custom Feed queue, save it as a named queue, or target recovery. Inspect mode opens a favorite's full archive metadata, including retry count and last attempt time, without leaving the grid. Failed favorites show their last error.
@@ -100,7 +102,7 @@ A searchable thumbnail grid of everything, ranked best-match first.
   <img src="screenshots/music.png" alt="The Music tab: songs identified across favorites, each opening in Spotify, YouTube, or Apple Music" width="880">
 </p>
 
-Every identified song collects here, most-used first. Each track shows how many favorites use it, opens in Spotify, YouTube, or Apple Music, and can start a Feed of exactly the favorites that share it. Tick songs to save a named playlist. The tab is empty until you enable song identification in Sync and run it.
+Every identified song collects here, most-used first. Each track shows how many favorites use it, opens in Spotify, YouTube, or Apple Music, can start a Feed of exactly the favorites that share it, and can open the same set as a browseable Gallery. Tick songs to save a named playlist. The tab is empty until you enable song identification in Sync and run it.
 
 Connect your own Spotify account (a free developer app's Client ID, one-time) and each saved playlist gains a push button that creates it as a private Spotify playlist, matching each song by its stored link or a search. Pushing again updates the same playlist instead of duplicating, and the app reports exactly which songs it could not confidently match. Nothing reaches Spotify until you connect and press push.
 
@@ -110,7 +112,7 @@ Connect your own Spotify account (a free developer app's Client ID, one-time) an
   <img src="screenshots/stats.png" alt="The Stats tab: growth charts, a favoriting heatmap, and archive health, all computed locally" width="880">
 </p>
 
-A read-only dashboard over data the archive already has. A summary strip (total favorites, video/slideshow mix, total watch-length, disk usage, percent archived) leads into four sections: **Growth** (cumulative favorites and per-month saves), **You as a watcher** (a day-of-week × hour favoriting heatmap, a duration histogram with your median, and the confirmed-silent share), **Top of your archive** (most-favorited creators, most-used songs, and top hashtags, each linking into a filtered Gallery or the Music tab), and **Archive health** (a lifecycle donut and the most common failure reasons). Favorites without a saved date sit out of the time charts and are disclosed, never guessed.
+A read-only dashboard over data the archive already has. A summary strip (total favorites, video/slideshow mix, total watch-length, disk usage, percent archived) leads into four sections: **Growth** (cumulative favorites and per-month saves), **You as a watcher** (a day-of-week × hour favoriting heatmap, a duration histogram with your median, and the confirmed-silent share), **Top of your archive** (most-favorited creators, most-used songs, and top hashtags, each linking into a filtered Gallery), and **Archive health** (a lifecycle donut and the most common failure reasons). Favorites without a saved date sit out of the time charts and are disclosed, never guessed.
 
 ### Discover
 
@@ -234,15 +236,18 @@ up at most one missed occurrence after restart.
 
 ## Details worth knowing
 
+- **More ways to add videos (opt-in).** Favorites/bookmarks remain the export-upload default. The same control can instead import Likes or both lists. The collapsed **More ways to add videos** panel can discover every public post from a username, monitor selected creators for new posts, and bulk-adopt an existing myfaveTT folder without re-downloading files it already contains.
+- **Rich source records and sidecars.** Creator imports and the resumable metadata backlog capture the original description, creator identity, post date, duration, source resolution, thumbnail, and public engagement counts. The Media sidecars phase saves a privacy-safe `.info.json`, `.description`, source thumbnail, available subtitle/automatic-caption tracks, and best-effort public `.comments.json` beside the media. Each explicit comment refresh keeps a dated local SQLite snapshot and records new, unavailable, and updated comments; Feed and Gallery can browse every saved version offline. Signed CDN URLs and cookies are deliberately excluded.
 - **Dead links stay meaningful.** When TikTok reports that an original post is gone, the favorite becomes an unavailable archive marker instead of a recurring failure. Its number and position remain visible in Feed and Gallery, and automatic Sync runs do not retry it.
 - **Original slideshow audio.** Photo posts request the full original sound. If TikTok has already deleted it, a bundled default track fills in instead of failing the encode — replaceable with your own MP3 from the Sync tab's media settings.
 - **Push playlists to Spotify.** In the Music tab, connect your own free Spotify app once, then push any saved playlist to a private Spotify playlist. Matches come from each song's stored link or a search; unmatched songs are reported rather than guessed, and re-pushing updates the same playlist.
 - **Asset backfill.** Already had downloads before this existed? The Sync tab's Backfill re-fetches the raw slideshow images for your existing files so they render in the viewer. Local Lens has its own **Analyze missing** backfill for speech and OCR.
+- **Silent-video repair.** Existing indexed videos with no audio stream or a confirmed-silent stream appear under **Maintenance & settings â†’ Silent-video repair**. **Repair sound** retries that backlog through the same quality-aware yt-dlp path, preserves archive numbers and metadata, refreshes media facts, and keeps the previous MP4 in `downloads/.archive/replaced/`.
 - **Provenance.** `downloads/manifest.csv` maps each file to its source link, type, and status alongside the database.
 - **Gallery index.** Sync records duration, dimensions, codec, file size, and whether an audio stream exists, then renders a WebP thumbnail per favorite (480px or 320px), so the Gallery pages instantly instead of decoding video. Indexing runs on a small worker pool and can be rebuilt, paused, or turned off.
 - **Search metadata.** Sync can fetch missing captions and creator names from TikTok's public oEmbed endpoint at the configured rate limit, skipping entries already enriched. This powers author, hashtag, and caption search.
 - **Song identification (opt-in).** Off by default. When you turn it on, a rate-limited Sync run uploads a short audio clip per video to Shazam and records the match. It remembers the ones Shazam cannot place so a rerun skips them, and a per-post search lets you set or correct a song by hand. Enabling it is the only time the app sends your audio to an outside service.
-- **Media-server metadata.** One click writes a `.nfo` title file and `.jpg` poster next to every video, so Plex, Jellyfin, and Kodi show real titles and artwork instead of bare numbers. Your media files are never modified.
+- **Media-server and portable metadata.** One click writes a `.nfo` title file and `.jpg` poster next to every video, so Plex, Jellyfin, and Kodi show real titles and artwork instead of bare numbers. Existing behavior remains non-destructive by default. An off-by-default setting can additionally embed the caption, creator, description, date, source link, poster, and available subtitles into each MP4. Embedding copies the original video/audio streams, validates a temporary output, publishes atomically, and keeps all separate sidecars.
 - **Integrity check.** Sync can verify the whole archive: finished favorites missing their video (one click re-queues them), stray files no favorite claims, and leftover temp files from interrupted runs.
 - **Local by default.** The app has no login, so Docker binds it to `127.0.0.1` out of the box; nothing else on your network can reach it. Plex reads `./downloads` from disk and is unaffected. Want to reach it from your phone or another machine? See [Access from other devices](#access-from-other-devices-lan-tailscale-reverse-proxy).
 - **Backups.** The Backups tab produces validated portable snapshots. A stopped-app copy of `./downloads` plus `./appdata/archive.db` remains a valid manual fallback.
@@ -293,9 +298,16 @@ With Docker, set these on the `app` service in `docker-compose.yml`:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `COBALT_API_URL` | `http://cobalt:9000/` | Address of the Cobalt service |
+| `COBALT_API_URL` | `http://cobalt:9000/` | Address of the default Cobalt service |
+| `SOURCE_COMMENT_LIMIT` | `500` | Maximum public comments/replies saved per post (`0` disables; hard maximum `5000`) |
 | `DOWNLOAD_DIR` | `/app/downloads` | Where media is saved |
 | `CONCURRENCY` | `4` | Simultaneous downloads |
+| `SOURCE_METADATA_WORKERS` | `20` in Compose | Concurrent yt-dlp metadata/comment posts; keep below TikTok's observed 24-request burst ceiling |
+| `INDEX_WORKERS` | `20` in Compose | Concurrent ffprobe/FFmpeg Gallery thumbnail jobs |
+| `SIDECAR_WORKERS` | `20` in Compose | Concurrent NFO/poster jobs |
+| `PORTABLE_METADATA_WORKERS` | `20` in Compose | Concurrent atomic MP4 metadata stream copies |
+| `ANALYSIS_TRANSCRIPT_WORKERS` | `5` in Compose | Concurrent Whisper jobs (the bundled CLI uses four CPU threads each) |
+| `ANALYSIS_OCR_WORKERS` | `8` in Compose | Concurrent OCR video jobs |
 | `RATE_MAX_CALLS` / `RATE_PERIOD` | `4` / `1.0` | Requests allowed per window, in seconds |
 | `DB_FILE` | `/app/data/archive.db` | Path of the SQLite archive database |
 | `APP_PORT` | `8080` | Port the web app listens on |
@@ -384,7 +396,74 @@ complete snapshot in **Backups** before disconnecting the old installation.
 3. When TikTok has prepared it, download and unzip the archive.
 4. Upload `user_data_tiktok.json` in the Sync tab.
 
+The upload selector defaults to **Favorites**, which is TikTok's bookmark list.
+Choose **Likes** or **Favorites + likes** only when you want those additional
+saved-video sources. Import History compares each mode only with earlier
+uploads made in the same mode.
+
 Exports expire. If links stop resolving partway through a run, request a fresh one.
+
+</details>
+
+<details>
+<summary>Archive every public video from a username</summary>
+
+Open **Sync → More ways to add videos**, enter `@username` (or paste the profile
+URL), and choose **Add creator**. The app discovers the complete public backlog,
+stores its rich source metadata, orders new archive items oldest-first, and adds
+only stable video IDs it does not already know. **Start Sync after discovery**
+is enabled by default. Cobalt remains the first download path and `yt-dlp` is
+the quality/silent-file fallback. Repeating the import is safe.
+
+**Keep checking this creator automatically** is also enabled in this form by
+default. Choose an interval from hourly to weekly. The first check handles the
+full backlog; later checks safely rescan the public feed and archive only newly
+published IDs. Monitors can be paused, checked immediately, or removed from the
+same panel. Clicking a creator anywhere in Feed, Gallery, or post details opens
+an exact creator-filtered Gallery, just like a hashtag filter.
+
+The normal Media sidecars follow-up is resumable across the existing archive,
+not just new profile imports. It writes `<number>.info.json`,
+`<number>.description`, `<number>.source.jpg`, available subtitle files, and
+`<number>.comments.json` when public comments can be read. **Refresh comments**
+rechecks the full archive and keeps every dated result in local SQLite; the
+snapshot selector in Feed and Gallery shows what was new, unavailable, or
+updated since the prior capture. Comment access is best effort because TikTok
+may withhold it by region or change its public API; the default saves up to 500
+top-level comments and replies per post.
+
+Under **Maintenance & settings â†’ Media server metadata**, **Embed portable
+metadata in MP4 files** is off by default. Enable it, then run Media sidecars
+to backfill existing videos safely. Unchanged files are skipped on later runs,
+and replacing a video or thumbnail marks that item for re-embedding.
+
+For videos already archived without usable sound, open **Maintenance & settings
+â†’ Silent-video repair** and press **Repair sound**. This is a resumable backlog
+run; it only targets indexed local videos known to be silent, never renumbers
+them, and retains the previous MP4 as the most recent replacement backup.
+
+Private, region-blocked, or login-gated profiles cannot be discovered. TikTok
+can change its public profile interface; keep the app current so its bundled
+`yt-dlp` extractor receives compatibility updates.
+
+</details>
+
+<details>
+<summary>Bulk import an existing myfaveTT archive</summary>
+
+Open **Sync → More ways to add videos → Import a myfaveTT archive** and choose
+the myfaveTT root folder. The browser first sends filenames only and previews
+how many MP4s will fill existing archive slots, become new local-only items, or
+be skipped because their media is already present. Press **Import** to upload
+the ready files one at a time.
+
+Current myfaveTT layouts under `data/Likes/videos`, `data/Favorites/videos`,
+and `data/Following/<author id>/videos` are recognized, along with older
+numeric `videos/<TikTok id>.mp4` folders. Matching uses the stable TikTok video
+ID, so an MP4 can fill a placeholder even when the original post is no longer
+available. Existing captions, creator metadata, archive numbers, and source
+links are preserved. The source folder is read only; files are copied into this
+archive and validated as MP4s before installation.
 
 </details>
 

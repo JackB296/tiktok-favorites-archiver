@@ -53,8 +53,20 @@ services:
       # 4 calls/second = 240/minute < Cobalt's 600/minute resolve budget, and
       # the matching tunnel budget (TUNNEL_RATELIMIT_MAX) covers the downloads.
       CONCURRENCY: "4"
+      # Coverage workers are independently benchmarked: network extraction
+      # saturates at 20 without TikTok's 24-request 403 cliff; the local pools
+      # match this 20-CPU host and each tool's own threading behavior.
+      SOURCE_METADATA_WORKERS: "20"
+      INDEX_WORKERS: "20"
+      ANALYSIS_TRANSCRIPT_WORKERS: "5"
+      ANALYSIS_OCR_WORKERS: "8"
+      PORTABLE_METADATA_WORKERS: "20"
+      SIDECAR_WORKERS: "20"
       RATE_MAX_CALLS: "4"
       RATE_PERIOD: "1.0"
+      # Best-effort public source comments/replies stored beside each post.
+      # Set to 0 to disable, or raise up to the hard maximum of 5000.
+      SOURCE_COMMENT_LIMIT: "500"
       # Shazam pace: 1 recognition per N seconds. Shazam has no official API and
       # throttles sustained traffic — at 1/2s it began rejecting after ~150
       # requests, so pace bulk identification over a large library gently.
@@ -74,7 +86,7 @@ services:
       #   ALLOWED_HOSTS: "nas.local"                      # LAN hostname
       #   ALLOWED_HOSTS: "machine.tailnet-name.ts.net"    # Tailscale MagicDNS
       #   ALLOWED_HOSTS: "192.168.1.20,archive.home.lan"  # IP + reverse proxy
-      # ALLOWED_HOSTS: ""
+      ALLOWED_HOSTS: "192.168.4.49"
     ports:
       # Bound to localhost: the app has no authentication, so out of the box it
       # is not reachable from the rest of the network. (Plex reads ./downloads
@@ -85,7 +97,7 @@ services:
       #   - "8080:8080"
       # and set ALLOWED_HOSTS above — everyone on the network can then reach
       # your archive, so only do that on a network you trust.
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     volumes:
       # Media lands here on the host — point Plex at ./downloads.
       - ./downloads:/app/downloads

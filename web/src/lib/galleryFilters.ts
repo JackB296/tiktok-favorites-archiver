@@ -6,6 +6,7 @@ export type GalleryOrder = "latest" | "archive" | "size_desc" | "duration_desc" 
     `recovery` and `starred` are booleans. `order` always holds a sort. */
 export interface GalleryFiltersState {
   search: string;
+  searchScope: string;
   kind: string;
   status: string;
   order: GalleryOrder;
@@ -23,6 +24,15 @@ export interface GalleryFiltersState {
   codec: string;
   dateFrom: string;
   dateTo: string;
+  postedFrom: string;
+  postedTo: string;
+  minViews: string;
+  minLikes: string;
+  minComments: string;
+  sourceInfo: string;
+  commentsState: string;
+  downloadSource: string;
+  portableMetadata: string;
   orientation: string;
   assets: string;
   audio: string;
@@ -32,6 +42,7 @@ export interface GalleryFiltersState {
   exclude: string;
   creator: string;
   hashtag: string;
+  song: string;
   starred: boolean;
   privateTag: string;
 }
@@ -72,6 +83,15 @@ function text(key: GalleryFilterKey, urlParam: string, queryParam: string, chip:
     currentFilters() key order and addFilter() chip order byte for byte). */
 export const GALLERY_FILTER_FIELDS: GalleryFilterField[] = [
   text("search", "q", "search", (v) => `Search: ${v}`),
+  {
+    key: "searchScope", urlParam: "in", queryParam: "search_scope", default: "posts",
+    toUrl: (value) => (value && value !== "posts" ? String(value) : undefined),
+    fromUrl: (raw) => raw || "posts",
+    fromPreset: (value) => (value as string | undefined) || "posts",
+    chipLabel: (value) => value !== "posts"
+      ? `Search in: ${{ comments: "comments", songs: "songs", analysis: "transcript + on-screen text", all: "everything" }[String(value)] || value}`
+      : null,
+  },
   text("kind", "kind", "kind", (v) => (v === "video" ? "Videos" : "Slideshows")),
   text("status", "status", "status", (v) => `Status: ${v}`),
   {
@@ -101,6 +121,15 @@ export const GALLERY_FILTER_FIELDS: GalleryFilterField[] = [
   text("codec", "codec", "codec", (v) => `Codec: ${v}`),
   text("dateFrom", "from", "date_from", (v) => `After: ${v}`),
   text("dateTo", "to", "date_to", (v) => `Before: ${v}`),
+  text("postedFrom", "posted_from", "posted_from", (v) => `Posted after: ${v}`),
+  text("postedTo", "posted_to", "posted_to", (v) => `Posted before: ${v}`),
+  text("minViews", "min_views", "min_views", (v) => `≥ ${v} views`),
+  text("minLikes", "min_likes", "min_likes", (v) => `≥ ${v} likes`),
+  text("minComments", "min_comments", "min_comments", (v) => `≥ ${v} comments`),
+  text("sourceInfo", "source_info", "source_info", (v) => `Source details: ${v}`),
+  text("commentsState", "comments", "comments_state", (v) => `Comments: ${v.replace(/_/g, " ")}`),
+  text("downloadSource", "downloader", "download_source", (v) => `Downloader: ${v}`),
+  text("portableMetadata", "portable_metadata", "portable_metadata", (v) => `Portable metadata: ${v}`),
   text("orientation", "orientation", "orientation", (v) => v),
   text("assets", "assets", "assets", (v) => (v === "with" ? "Has raw assets" : "No raw assets")),
   text("audio", "audio", "audio", (v) => (v === "with" ? "Has audio" : "No audio")),
@@ -110,6 +139,7 @@ export const GALLERY_FILTER_FIELDS: GalleryFilterField[] = [
   text("exclude", "exclude", "exclude", (v) => `Exclude: ${v}`),
   text("creator", "creator", "creator", (v) => `Creator: ${v}`),
   text("hashtag", "hashtag", "hashtag", (v) => `Hashtag: #${v.replace(/^#/, "")}`),
+  text("song", "song", "song", (v) => `Song #${v}`),
   {
     key: "starred", urlParam: "starred", queryParam: "starred", default: false,
     toUrl: (value) => (value ? "1" : undefined),
@@ -126,10 +156,12 @@ const FIELD_BY_KEY = Object.fromEntries(GALLERY_FILTER_FIELDS.map((field) => [fi
     (codec sat between max_height and min_attempts), so filter URLs — and the
     Feed Back-button restore keys built from them — stay byte-identical. */
 const URL_FIELD_ORDER: GalleryFilterKey[] = [
-  "search", "kind", "status", "order", "minDuration", "maxDuration", "minSize", "maxSize",
+  "search", "searchScope", "kind", "status", "order", "minDuration", "maxDuration", "minSize", "maxSize",
   "minWidth", "maxWidth", "minHeight", "maxHeight", "codec", "minAttempts", "maxAttempts",
-  "recovery", "dateFrom", "dateTo", "orientation", "assets", "audio", "offloaded",
-  "indexState", "include", "exclude", "creator", "hashtag", "starred", "privateTag",
+  "recovery", "dateFrom", "dateTo", "postedFrom", "postedTo", "minViews", "minLikes", "minComments",
+  "sourceInfo", "commentsState", "downloadSource", "portableMetadata",
+  "orientation", "assets", "audio", "offloaded",
+  "indexState", "include", "exclude", "creator", "hashtag", "song", "starred", "privateTag",
 ];
 
 export function emptyFilters(): GalleryFiltersState {
@@ -191,7 +223,7 @@ export function filtersKey(state: GalleryFiltersState): string {
 export function filtersToPageQuery(state: GalleryFiltersState, randomSeed: number) {
   const num = (s: string) => (s.trim() === "" ? undefined : Number(s));
   return {
-    search: state.search, kind: state.kind, status: state.status, limit: 50, order: state.order,
+    search: state.search, search_scope: state.searchScope as "posts" | "comments" | "songs" | "analysis" | "all", kind: state.kind, status: state.status, limit: 50, order: state.order,
     seed: state.order === "random" ? randomSeed : undefined,
     min_duration: num(state.minDuration),
     max_duration: num(state.maxDuration),
@@ -209,6 +241,15 @@ export function filtersToPageQuery(state: GalleryFiltersState, randomSeed: numbe
     codec: state.codec || undefined,
     date_from: state.dateFrom || undefined,
     date_to: state.dateTo ? `${state.dateTo}T23:59:59` : undefined,
+    posted_from: state.postedFrom || undefined,
+    posted_to: state.postedTo ? `${state.postedTo}T23:59:59` : undefined,
+    min_views: num(state.minViews),
+    min_likes: num(state.minLikes),
+    min_comments: num(state.minComments),
+    source_info: (state.sourceInfo || undefined) as "saved" | "unavailable" | "missing" | undefined,
+    comments_state: (state.commentsState || undefined) as "saved" | "with_comments" | "missing" | undefined,
+    download_source: (state.downloadSource || undefined) as "cobalt" | "yt-dlp" | "legacy" | undefined,
+    portable_metadata: (state.portableMetadata || undefined) as "embedded" | "failed" | "missing" | undefined,
     orientation: state.orientation || undefined,
     assets: (state.assets === "with" || state.assets === "without" ? state.assets : undefined) as "with" | "without" | undefined,
     audio: (state.audio === "with" || state.audio === "without" ? state.audio : undefined) as "with" | "without" | undefined,
@@ -217,6 +258,7 @@ export function filtersToPageQuery(state: GalleryFiltersState, randomSeed: numbe
     include: state.include, exclude: state.exclude,
     creator: state.creator || undefined,
     hashtag: state.hashtag || undefined,
+    song: state.song ? Number(state.song) : undefined,
     starred: state.starred || undefined,
     private_tag: state.privateTag || undefined,
   };
@@ -229,7 +271,7 @@ export function filtersToMarkSelector(state: GalleryFiltersState): Record<string
   const excluded = new Set(["order", "seed", "limit", "cursor"]);
   const filter: Record<string, string> = {};
   Object.entries(filtersToPageQuery(state, 0)).forEach(([key, value]) => {
-    if (excluded.has(key) || value == null || value === "") return;
+    if (excluded.has(key) || value == null || value === "" || (key === "search_scope" && !state.search.trim())) return;
     filter[key] = String(value);
   });
   return filter;

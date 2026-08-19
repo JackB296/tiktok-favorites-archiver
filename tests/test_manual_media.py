@@ -22,6 +22,7 @@ def test_replacement_video_uses_item_path_refreshes_facts_and_preserves_metadata
     conn = store.init_db(store.connect(":memory:"))
     store.insert_item(conn, 7, "https://tiktok.com/original", kind="video", status="failed")
     store.set_metadata(conn, 7, "keep this caption", "keep this creator")
+    store.record_portable_metadata(conn, 7, "old-embedded-version")
 
     with tempfile.TemporaryDirectory() as download_dir:
         target = os.path.join(download_dir, "7.mp4")
@@ -46,6 +47,7 @@ def test_replacement_video_uses_item_path_refreshes_facts_and_preserves_metadata
     assert row["status"] == "done" and row["error"] is None
     assert row["caption"] == "keep this caption" and row["author"] == "keep this creator"
     assert row["has_audio"] == 0 and row["duration_s"] == 12.5
+    assert row["portable_metadata_status"] is None and row["portable_metadata_hash"] is None
 
 
 def test_invalid_video_never_replaces_existing_media():

@@ -56,11 +56,12 @@ def _upsert(conn, table, key, display):
     ).fetchone()["id"]
 
 
-def upsert_item_identities(conn, item_id, author, caption):
-    creator_key = normalize_creator(author)
+def upsert_item_identities(conn, item_id, author, caption, creator_key=None, creator_display=None):
+    creator_key = normalize_creator(creator_key or author)
     creator_id = None
     if creator_key:
-        creator_id = _upsert(conn, "creator", creator_key, unicodedata.normalize("NFKC", author).strip())
+        display = creator_display or author or creator_key
+        creator_id = _upsert(conn, "creator", creator_key, unicodedata.normalize("NFKC", display).strip())
     conn.execute("UPDATE item SET creator_id = ? WHERE id = ?", (creator_id, item_id))
     conn.execute("DELETE FROM item_hashtag WHERE item_id = ?", (item_id,))
     for key, display in extract_hashtags(caption):

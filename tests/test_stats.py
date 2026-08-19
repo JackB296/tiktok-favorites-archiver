@@ -1,6 +1,7 @@
 """Tests for core.stats — archive analytics aggregates (stdlib sqlite3)."""
 import os
 import sys
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -146,6 +147,130 @@ def test_health_statuses_flags_and_top_errors():
     assert health["statuses"] == {"done": 1, "failed": 2, "ignored": 1}
     assert health["missing"] == 1
     assert health["errors"][0] == {"error": "HTTP 429", "count": 2}
+
+
+def test_source_reach_save_lag_and_peak_posts_are_aggregated_and_bounded():
+    conn = _db()
+    for item_id in range(1, 9):
+        store.insert_item(
+            conn, item_id, f"https://tiktok.com/{item_id}",
+            favorited_at="2026-07-08 12:00:00", kind="video", status="done",
+        )
+        conn.execute(
+            "UPDATE item SET description = ?, creator_username = ?, "
+            "source_posted_at = ?, view_count = ?, like_count = ?, "
+            "comment_count = ?, repost_count = ?, save_count = ? WHERE id = ?",
+            (
+                (f"Post {item_id} " + "x" * 400), f"creator{item_id}",
+                "2026-07-01T12:00:00+00:00" if item_id == 1
+                else "2026-07-08T06:00:00+00:00",
+                item_id * 1000, item_id * 100, item_id * 10,
+                item_id * 5, item_id * 2, item_id,
+            ),
+        )
+    conn.commit()
+
+    result = stats.compute_stats(conn)
+    assert result["reach"] == {
+        "covered": 8,
+        "views": 36000,
+        "likes": 3600,
+        "comments": 360,
+        "reposts": 180,
+        "saves": 72,
+        "peak_posts": result["reach"]["peak_posts"],
+    }
+    peaks = result["reach"]["peak_posts"]
+    assert len(peaks) == 5
+    assert peaks[0]["id"] == 8 and peaks[0]["views"] == 8000
+    assert peaks[0]["creator"] == "creator8"
+    assert len(peaks[0]["caption"]) <= 160
+    assert result["discovery_lag"] == {
+        "covered": 8,
+        "buckets": [
+            {"label": "Same day", "count": 7},
+            {"label": "Within a week", "count": 0},
+            {"label": "Within a month", "count": 1},
+            {"label": "Later", "count": 0},
+        ],
+    }
+
+
+def test_offline_depth_video_quality_comments_and_creator_radar():
+    conn = _db()
+    for item_id, width, height in (
+        (1, 2160, 3840), (2, 1080, 1920), (3, 720, 1280), (4, 576, 1024),
+    ):
+        store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}",
+                          kind="video", status="done")
+        _index(conn, item_id, width=width, height=height)
+    conn.execute(
+        "UPDATE item SET source_info_status = 'ok', comments_status = 'ok', "
+        "source_thumbnail_path = 'source/1.webp', portable_metadata_status = 'ok', "
+        "download_source = 'yt-dlp' WHERE id = 1"
+    )
+    conn.execute("UPDATE item SET download_source = 'cobalt' WHERE id IN (2, 3)")
+    conn.execute("UPDATE item SET comments_status = 'ok' WHERE id = 2")
+    conn.commit()
+
+    store.record_comment_snapshot(
+        conn, 1, [{"id": "a", "text": "first"}, {"id": "b", "text": "second"}],
+        captured_at="2026-07-01T12:00:00+00:00",
+    )
+    store.record_comment_snapshot(
+        conn, 1, [{"id": "a", "text": "edited"}, {"id": "c", "text": "new"}],
+        captured_at="2026-07-02T12:00:00+00:00",
+    )
+    store.record_comment_snapshot(
+        conn, 2, [{"id": "d", "text": "other post"}],
+        captured_at="2026-07-02T13:00:00+00:00",
+    )
+    active = store.save_creator_monitor(
+        conn, "alice", interval_hours=6,
+        now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+    store.mark_creator_monitor_checked(
+        conn, active["id"], added=3, error=None,
+        now=datetime(2026, 7, 2, tzinfo=timezone.utc),
+    )
+    store.save_creator_monitor(
+        conn, "bob", interval_hours=12, enabled=False,
+        now=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+
+    result = stats.compute_stats(conn)
+    assert result["quality"]["resolution"] == [
+        {"label": "4K", "count": 1},
+        {"label": "1080p", "count": 1},
+        {"label": "720p", "count": 1},
+        {"label": "Lower", "count": 1},
+    ]
+    assert result["quality"]["downloads"] == [
+        {"label": "Cobalt", "count": 2},
+        {"label": "yt-dlp", "count": 1},
+        {"label": "Legacy / unknown", "count": 1},
+    ]
+    assert result["quality"]["offline"] == {
+        "total": 4,
+        "source_metadata": 1,
+        "comments": 2,
+        "thumbnails": 4,
+        "portable_metadata": 1,
+        "songs": 0,
+    }
+    assert result["conversation"] == {
+        "posts": 2,
+        "snapshots": 3,
+        "saved_comments": 3,
+        "changes": {"added": 1, "removed": 1, "changed": 1},
+    }
+    assert result["monitoring"] == {
+        "profiles": 2,
+        "active": 1,
+        "checked": 1,
+        "found_last_check": 3,
+        "errors": 0,
+    }
 
 
 if __name__ == "__main__":

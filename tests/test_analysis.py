@@ -3,6 +3,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -315,6 +317,47 @@ def test_analysis_run_skips_a_candidate_that_disappears_without_aborting():
     }
     assert events[-1]["completed"] == events[-1]["total"] == 2
     assert events[-1]["skipped"] == 1
+
+
+def test_analysis_run_uses_the_measured_worker_count_for_each_local_tool():
+    conn = store.init_db(store.connect(":memory:"))
+    for item_id in range(1, 21):
+        _item(conn, item_id)
+    lock = threading.Lock()
+    active = {"transcript": 0, "ocr": 0}
+    peak = {"transcript": 0, "ocr": 0}
+
+    def generate(source):
+        def run(_path):
+            with lock:
+                active[source] += 1
+                peak[source] = max(peak[source], active[source])
+            try:
+                time.sleep(0.05)
+                return []
+            finally:
+                with lock:
+                    active[source] -= 1
+        return run
+
+    with tempfile.TemporaryDirectory() as downloads:
+        for item_id in range(1, 21):
+            open(os.path.join(downloads, f"{item_id}.mp4"), "wb").close()
+        started = time.perf_counter()
+        result = analysis.run_analysis(
+            conn,
+            downloads,
+            transcribe=generate("transcript"),
+            recognize=generate("ocr"),
+            transcript_workers=5,
+            ocr_workers=8,
+        )
+        elapsed = time.perf_counter() - started
+
+    assert result["completed"] == result["total"] == 20
+    assert result["completed_sources"] == 40
+    assert peak == {"transcript": 5, "ocr": 8}
+    assert elapsed < 0.60
 
 
 def test_coverage_distinguishes_manual_generated_pending_and_failed_sources():

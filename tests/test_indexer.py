@@ -2,6 +2,7 @@
 import os
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -135,6 +136,28 @@ def test_parallel_indexing_records_failures_without_stopping():
 
     assert result == {"indexed": 3, "failed": 1}
     assert store.get_item(conn, 2)["index_error"] == "ffprobe exploded"
+
+
+def test_parallel_indexing_keeps_workers_busy_behind_a_slow_item():
+    conn = store.init_db(store.connect(":memory:"))
+    for n in range(1, 9):
+        store.insert_item(conn, n, f"link-{n}", status="done")
+
+    with tempfile.TemporaryDirectory() as d:
+        for n in range(1, 9):
+            with open(os.path.join(d, f"{n}.mp4"), "wb") as f:
+                f.write(b"movie")
+
+        def inspect(_download_dir, item_id, _width):
+            time.sleep(0.20 if item_id == 1 else (0.10 if item_id >= 5 else 0.01))
+            return media_index.MediaIndex(1.0, 100, 200, "h264", 5, f".archive/thumbnails/{item_id}.webp")
+
+        started = time.perf_counter()
+        result = indexer.index_pending_items(conn, d, inspect=inspect, workers=4)
+        elapsed = time.perf_counter() - started
+
+    assert result == {"indexed": 8, "failed": 0}
+    assert elapsed < 0.26
 
 
 if __name__ == "__main__":

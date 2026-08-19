@@ -36,6 +36,45 @@ def test_import_export_orders_and_dates():
         assert store.get_item(conn, 3)["link"] == "Lc"
 
 
+def test_likes_and_combined_saved_video_modes_are_explicit_and_deduplicated():
+    conn = store.init_db(store.connect(":memory:"))
+    with tempfile.TemporaryDirectory() as d:
+        exp = os.path.join(d, "e.json")
+        with open(exp, "w", encoding="utf-8") as target:
+            json.dump({"Likes and Favorites": {
+                "Favorite Videos": {"FavoriteVideoList": [
+                    {"Link": "shared", "Date": "2024-02-01"},
+                    {"Link": "favorite", "Date": "2024-01-01"},
+                ]},
+                "Like List": {"ItemFavoriteList": [
+                    {"Link": "liked", "Date": "2024-03-01"},
+                    {"Link": "shared", "Date": "2024-02-01"},
+                ]},
+            }}, target)
+
+        assert importer.import_export(conn, exp, selection="likes") == 2
+        assert [row["link"] for row in store.all_items(conn)] == ["shared", "liked"]
+
+        combined = store.init_db(store.connect(":memory:"))
+        assert importer.import_export(combined, exp, selection="both") == 3
+        assert [row["link"] for row in store.all_items(combined)] == [
+            "favorite", "shared", "liked",
+        ]
+
+
+def test_favorites_remain_the_import_default_when_likes_are_present():
+    conn = store.init_db(store.connect(":memory:"))
+    with tempfile.TemporaryDirectory() as d:
+        exp = os.path.join(d, "e.json")
+        with open(exp, "w", encoding="utf-8") as target:
+            json.dump({"Activity": {
+                "Favorite Videos": {"FavoriteVideoList": [{"Link": "favorite"}]},
+                "Like List": {"ItemFavoriteList": [{"Link": "liked"}]},
+            }}, target)
+        importer.import_export(conn, exp)
+    assert [row["link"] for row in store.all_items(conn)] == ["favorite"]
+
+
 def test_import_ignores_crashed_encode_temp_files():
     conn = store.init_db(store.connect(":memory:"))
     with tempfile.TemporaryDirectory() as dl:

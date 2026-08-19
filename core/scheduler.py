@@ -143,6 +143,9 @@ class Scheduler:
             if state is not None and state["status"] != "completed":
                 if self.jobs.start("discovery-backfill"):
                     return True
+            if store.due_creator_monitors(conn, now):
+                if self.jobs.start("creator-monitor"):
+                    return True
             for schedule in store.list_run_schedules(conn):
                 occurrence = due_occurrence(schedule, now)
                 if occurrence is None:

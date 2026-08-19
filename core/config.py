@@ -30,6 +30,18 @@ RETRY_DELAY = float(os.environ.get("RETRY_DELAY", "2.0"))  # seconds between dow
 
 # Sync engine: worker concurrency + client-side Cobalt rate limit (env-overridable).
 CONCURRENCY = int(os.environ.get("CONCURRENCY", "4"))          # simultaneous item workers
+SOURCE_METADATA_WORKERS = int(
+    os.environ.get("SOURCE_METADATA_WORKERS", str(CONCURRENCY))
+)  # simultaneous yt-dlp metadata/comment workers
+INDEX_WORKERS = int(
+    os.environ.get("INDEX_WORKERS", str(min(20, os.cpu_count() or 1)))
+)  # simultaneous ffprobe/FFmpeg thumbnail workers
+PORTABLE_METADATA_WORKERS = int(os.environ.get(
+    "PORTABLE_METADATA_WORKERS", str(min(20, os.cpu_count() or 1)),
+))  # simultaneous stream-copy/validation workers
+SIDECAR_WORKERS = int(os.environ.get(
+    "SIDECAR_WORKERS", str(min(20, os.cpu_count() or 1)),
+))  # simultaneous NFO/poster workers
 RATE_MAX_CALLS = int(os.environ.get("RATE_MAX_CALLS", "8"))    # at most this many Cobalt calls...
 RATE_PERIOD = float(os.environ.get("RATE_PERIOD", "1.0"))      # ...per this many seconds
 APP_PORT = int(os.environ.get("APP_PORT", "8080"))             # web server port
@@ -57,6 +69,12 @@ ANALYSIS_MAX_OUTPUT_BYTES = int(
 )
 OCR_INTERVAL_SECONDS = float(os.environ.get("OCR_INTERVAL_SECONDS", "2.0"))
 OCR_MAX_FRAMES = int(os.environ.get("OCR_MAX_FRAMES", "600"))
+ANALYSIS_TRANSCRIPT_WORKERS = int(os.environ.get(
+    "ANALYSIS_TRANSCRIPT_WORKERS", str(min(5, max(1, (os.cpu_count() or 1) // 4))),
+))
+ANALYSIS_OCR_WORKERS = int(os.environ.get(
+    "ANALYSIS_OCR_WORKERS", str(min(8, os.cpu_count() or 1)),
+))
 
 
 def setup_logging():

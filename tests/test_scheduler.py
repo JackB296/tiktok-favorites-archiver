@@ -82,6 +82,35 @@ def test_busy_defers_and_startup_catches_up_only_latest_occurrence():
         conn.close()
 
 
+def test_due_creator_monitor_starts_its_import_and_sync_pipeline():
+    with tempfile.TemporaryDirectory() as directory:
+        db_path = os.path.join(directory, "archive.db")
+        now = datetime(2026, 8, 8, 12, tzinfo=timezone.utc)
+        conn = store.init_db(store.connect(db_path))
+        store.save_creator_monitor(
+            conn, "cook", interval_hours=6,
+            now=datetime(2026, 8, 8, 6, tzinfo=timezone.utc),
+        )
+        conn.execute(
+            "UPDATE backfill_state SET status = 'completed', completed_at = updated_at "
+            "WHERE name = 'discovery-identities-v1'"
+        )
+        conn.commit()
+        conn.close()
+
+        class Jobs:
+            starts = []
+            def is_running(self): return False
+            def start(self, kind):
+                self.starts.append(kind)
+                return True
+
+        jobs = Jobs()
+        service = scheduler.Scheduler(db_path, jobs, clock=lambda: now)
+        assert service.tick() is True
+        assert jobs.starts == ["creator-monitor"]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().copy().items()):
         if name.startswith("test_"):

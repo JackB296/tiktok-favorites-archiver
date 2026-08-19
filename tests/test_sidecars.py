@@ -2,10 +2,12 @@
 import os
 import sys
 import tempfile
+import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import sidecars, store
+from core import sidecars, source_metadata, store
 
 
 def _seed_done_item(conn, item_id, caption=None, author=None, favorited_at=None):
@@ -27,6 +29,25 @@ def test_nfo_escapes_metadata_and_falls_back_to_a_numbered_title():
     assert "<premiered>2024-05-01</premiered>" in titled
     assert "https://tiktok.com/v/1" in titled
     assert "<title>Favorite 2</title>" in untitled
+
+
+def test_nfo_prefers_source_date_and_full_description():
+    conn = store.init_db(store.connect(":memory:"))
+    _seed_done_item(conn, 1, caption="short", favorited_at="2026-08-01 12:00:00")
+    store.set_source_metadata(conn, 1, source_metadata.from_info({
+        "id": "1", "title": "short",
+        "description": "The full source description",
+        "timestamp": 1_751_766_523,
+        "uploader": "cook", "channel": "Cook",
+        "duration": 12, "width": 1080, "height": 1920,
+        "view_count": 1, "like_count": 2, "comment_count": 3,
+        "repost_count": 4, "save_count": 5, "comments": [],
+    }))
+
+    value = sidecars.nfo_xml(store.get_item(conn, 1))
+
+    assert "<premiered>2025-07-06</premiered>" in value
+    assert "The full source description" in value
 
 
 def test_write_sidecars_creates_nfo_and_poster_for_finished_media_only():
@@ -120,7 +141,95 @@ def test_stop_is_honored_between_items():
             make_poster=lambda source, target: open(target, "w").close(),
         )
 
-    assert result == {"written": 1, "failed": 0}
+        assert result == {"written": 1, "failed": 0}
+
+
+def test_sidecar_posters_keep_the_measured_worker_pool_busy():
+    conn = store.init_db(store.connect(":memory:"))
+    for item_id in range(1, 21):
+        _seed_done_item(conn, item_id)
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def make_poster(_source, target):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.05)
+            open(target, "w").close()
+        finally:
+            with lock:
+                active -= 1
+
+    with tempfile.TemporaryDirectory() as downloads:
+        for item_id in range(1, 21):
+            open(os.path.join(downloads, f"{item_id}.mp4"), "w").close()
+        started = time.perf_counter()
+        result = sidecars.write_sidecars(
+            conn, downloads, make_poster=make_poster, workers=4,
+        )
+        elapsed = time.perf_counter() - started
+
+    assert result == {"written": 20, "failed": 0}
+    assert peak == 4
+    assert elapsed < 0.40
+
+
+def test_sidecar_run_backfills_rich_source_data_for_existing_media():
+    conn = store.init_db(store.connect(":memory:"))
+    _seed_done_item(conn, 1, caption="old caption", author="old author")
+    info = {
+        "id": "1", "webpage_url": "https://tiktok.com/v/1",
+        "title": "source title", "description": "complete description",
+        "uploader": "handle", "channel": "Display", "duration": 9,
+        "width": 720, "height": 1280, "comment_count": 4,
+    }
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "1.mp4"), "w").close()
+        result = sidecars.run_sidecars(
+            conn, dl,
+            extractor=lambda _link, include_comments=True: info,
+            fetch=lambda _url, _target: False,
+            make_poster=lambda _source, target: open(target, "w").close(),
+        )
+
+        assert result["source_metadata"]["saved"] == 1
+        assert result["media_server"] == {"written": 1, "failed": 0}
+        assert os.path.isfile(os.path.join(dl, "1.info.json"))
+        assert store.get_item(conn, 1)["creator_username"] == "handle"
+
+
+def test_portable_embedding_is_opt_in_and_runs_inside_the_sidecar_phase():
+    conn = store.init_db(store.connect(":memory:"))
+    _seed_done_item(conn, 1, caption="portable")
+    calls = []
+
+    def embed(conn, download_dir, progress=None, should_continue=None):
+        calls.append(download_dir)
+        return {"embedded": 1, "skipped": 0, "failed": 0}
+
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "1.mp4"), "w").close()
+        common = {
+            "extractor": lambda _link, include_comments=True: {
+                "id": "1", "title": "portable", "comments": [],
+            },
+            "fetch": lambda _url, _target: False,
+            "make_poster": lambda _source, target: open(target, "w").close(),
+            "embed": embed,
+        }
+        disabled = sidecars.run_sidecars(conn, dl, **common)
+        store.set_library_settings(conn, portable_metadata_enabled=True)
+        enabled = sidecars.run_sidecars(conn, dl, **common)
+
+    assert disabled["portable_media"]["enabled"] is False
+    assert enabled["portable_media"] == {
+        "enabled": True, "embedded": 1, "skipped": 0, "failed": 0,
+    }
+    assert calls == [dl]
 
 
 if __name__ == "__main__":

@@ -42,7 +42,8 @@ def _identify_one(download_dir, item_id, identifier, source, extractor):
 
 
 def identify_items(conn, download_dir, identifier=None, source=None, extractor=None,
-                   limiter=None, progress=None, should_continue=None, retry_no_match=False):
+                   limiter=None, progress=None, should_continue=None, retry_no_match=False,
+                   item_ids=None):
     """Identify songs for items that need it. Returns the count newly identified."""
     identifier = identifier or songid.recognize
     source = source or layout.source_audio
@@ -51,6 +52,9 @@ def identify_items(conn, download_dir, identifier=None, source=None, extractor=N
         limiter = RateLimiter(config.SONG_ID_RATE_MAX_CALLS, config.SONG_ID_RATE_PERIOD)
 
     items = store.items_needing_identification(conn, retry_no_match=retry_no_match)
+    if item_ids is not None:
+        wanted = {int(value) for value in item_ids}
+        items = [item for item in items if item["id"] in wanted]
     identified = no_match = errors = consecutive_errors = 0
     total = len(items)
     if progress:
@@ -101,11 +105,13 @@ def identify_items(conn, download_dir, identifier=None, source=None, extractor=N
 
 
 def run_identification(conn, download_dir, progress=None, wait=None, identifier=None,
-                       source=None, extractor=None, limiter=None, control=None):
+                       source=None, extractor=None, limiter=None, control=None,
+                       item_ids=None):
     """Identify songs as a pausable Archive run (mirrors ``run_enrichment``)."""
     if control is None:
         control = runs.RunControl(conn, progress=progress, wait=wait)
     return identify_items(
         conn, download_dir, identifier=identifier, source=source, extractor=extractor,
         limiter=limiter, progress=control.progress, should_continue=control.should_continue,
+        item_ids=item_ids,
     )

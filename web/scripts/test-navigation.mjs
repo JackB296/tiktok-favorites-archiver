@@ -12,7 +12,9 @@ const { navigationGroups, primaryNavigation } = await import(
 
 assert.deepEqual(primaryNavigation.map((item) => item.label), ["Feed", "Gallery", "Sync"]);
 assert.deepEqual(navigationGroups.map((group) => group.label), ["Watch", "Browse", "Organize", "Manage"]);
-assert.equal(navigationGroups.flatMap((group) => group.items).length, 15);
+assert.equal(navigationGroups.flatMap((group) => group.items).length, 17);
+assert.ok(navigationGroups.flatMap((group) => group.items).some((item) => item.to === "/comments"));
+assert.ok(navigationGroups.flatMap((group) => group.items).some((item) => item.to === "/coverage"));
 assert.equal(
   navigationGroups.flatMap((group) => group.items).filter((item) => item.to === "/stories").length,
   0,

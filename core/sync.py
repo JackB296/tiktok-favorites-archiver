@@ -17,11 +17,84 @@ from collections import namedtuple
 from core import config, indexer as archive_indexer, layout, media, runs, store
 
 # Injectable work backends (real ones wired in build_default_deps).
-Deps = namedtuple("Deps", "resolve download_file build_slideshow save_assets default_audio")
+Deps = namedtuple(
+    "Deps",
+    "resolve download_file build_slideshow save_assets default_audio "
+    "ytdlp_download inspect_media source_probe",
+    defaults=(None, None, None),
+)
 
 
 def _errstr(error):
     return None if error is None else str(error)
+
+
+def _fact(facts, name, default=None):
+    if facts is None:
+        return default
+    if isinstance(facts, dict):
+        return facts.get(name, default)
+    return getattr(facts, name, default)
+
+
+def _audible(facts):
+    return bool(_fact(facts, "has_audio", True)) and not bool(
+        _fact(facts, "audio_silent", False)
+    )
+
+
+def _pixels(facts):
+    return int(_fact(facts, "width", 0) or 0) * int(_fact(facts, "height", 0) or 0)
+
+
+def _candidate_is_better(candidate, current):
+    if current is None:
+        return True
+    if _audible(candidate) != _audible(current):
+        return _audible(candidate)
+    return _pixels(candidate) > _pixels(current)
+
+
+def _inspect(deps, path):
+    if deps.inspect_media is None:
+        return None
+    try:
+        return deps.inspect_media(path)
+    except Exception:
+        return None
+
+
+def _try_ytdlp_candidate(deps, link, out, current_facts=None):
+    if deps.ytdlp_download is None:
+        return False
+    candidate = out + ".ytdlp-candidate.mp4"
+    try:
+        if not deps.ytdlp_download(link, candidate):
+            return False
+        candidate_facts = _inspect(deps, candidate)
+        if deps.inspect_media is not None and candidate_facts is None:
+            return False
+        if _candidate_is_better(candidate_facts, current_facts):
+            os.replace(candidate, out)
+            return True
+        return False
+    finally:
+        if os.path.exists(candidate):
+            try:
+                os.remove(candidate)
+            except OSError:
+                pass
+
+
+def _source_offers_more_pixels(deps, link, current_facts):
+    if deps.source_probe is None or current_facts is None:
+        return False
+    try:
+        info = deps.source_probe(link, include_comments=False)
+    except Exception:
+        return False
+    advertised = int(info.get("width") or 0) * int(info.get("height") or 0)
+    return advertised > _pixels(current_facts)
 
 
 def process_item(deps, download_dir, item):
@@ -37,7 +110,25 @@ def process_item(deps, download_dir, item):
     if kind == "video":
         out = layout.movie(download_dir, n)
         if deps.download_file(result.url, out):
-            return {"status": "done", "kind": "video", "has_assets": 0}
+            current_facts = _inspect(deps, out)
+            needs_audio_recovery = (
+                current_facts is not None and not _audible(current_facts)
+            )
+            needs_quality_upgrade = _source_offers_more_pixels(
+                deps, item["link"], current_facts,
+            )
+            used_ytdlp = (needs_audio_recovery or needs_quality_upgrade) and _try_ytdlp_candidate(
+                deps, item["link"], out, current_facts,
+            )
+            return {
+                "status": "done", "kind": "video", "has_assets": 0,
+                "download_source": "yt-dlp" if used_ytdlp else "cobalt",
+            }
+        if _try_ytdlp_candidate(deps, item["link"], out):
+            return {
+                "status": "done", "kind": "video", "has_assets": 0,
+                "download_source": "yt-dlp",
+            }
         return {"status": "failed", "kind": "video", "error": "video download failed"}
 
     if kind == "slideshow":
@@ -55,6 +146,16 @@ def process_item(deps, download_dir, item):
             return {"status": "failed", "kind": "slideshow", "error": "all images failed"}
         return outcome
 
+    # A failed Cobalt resolve is not definitive. yt-dlp's selector requires a
+    # real video+audio rendition, so a photo post's soundtrack cannot be
+    # mistaken for a video here.
+    out = layout.movie(download_dir, n)
+    if _try_ytdlp_candidate(deps, item["link"], out):
+        return {
+            "status": "done", "kind": "video", "has_assets": 0,
+            "download_source": "yt-dlp",
+        }
+
     if kind == "error":       # Cobalt says the post is gone → don't retry
         return {"status": "expired", "kind": "unresolved", "error": _errstr(result.error)}
     if kind == "unsupported":  # picker without photos → not for us
@@ -65,7 +166,7 @@ def process_item(deps, download_dir, item):
 
 def build_default_deps(limiter=None, default_audio=None):
     """Wire the real backends (lazy-imports the heavy deps)."""
-    from core import cobalt, download, slideshow, assets
+    from core import cobalt, download, slideshow, assets, media_index, ytdlp_adapter
     if limiter is None:
         limiter = cobalt.RateLimiter(config.RATE_MAX_CALLS, config.RATE_PERIOD)
     return Deps(
@@ -74,6 +175,9 @@ def build_default_deps(limiter=None, default_audio=None):
         build_slideshow=slideshow.create_slideshow,
         save_assets=assets.save_assets,
         default_audio=default_audio or config.DEFAULT_AUDIO,
+        ytdlp_download=ytdlp_adapter.download_best_video,
+        inspect_media=media_index.inspect_media,
+        source_probe=ytdlp_adapter.extract_post,
     )
 
 

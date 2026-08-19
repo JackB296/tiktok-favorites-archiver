@@ -138,7 +138,7 @@ export function History() {
                     )}
                   >
                     <span className="block truncate text-sm font-medium">{record.source_name}</span>
-                    <span className="mt-1 block text-xs text-ink-faint">{importDisplayDate(record.imported_at)}</span>
+                    <span className="mt-1 block text-xs text-ink-faint">{importDisplayDate(record.imported_at)} · {record.selection}</span>
                     <span className="mt-1 block text-xs">{importSummary(record.comparison.counts)}</span>
                   </button>
                 </li>
@@ -156,7 +156,7 @@ export function History() {
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div>
                       <h2 className="text-lg font-semibold text-ink">{detail.source_name}</h2>
-                      <p className="mt-1 text-sm text-ink-dim">{importDisplayDate(detail.imported_at)} · {detail.favorite_count} favorites</p>
+                      <p className="mt-1 text-sm text-ink-dim">{importDisplayDate(detail.imported_at)} · {detail.favorite_count} {detail.selection === "favorites" ? "favorites" : detail.selection === "likes" ? "likes" : "saved videos"}</p>
                     </div>
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-ok/10 px-3 py-1.5 text-xs font-medium text-ok">
                       <Archive size={14} /> Non-destructive
