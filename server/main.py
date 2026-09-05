@@ -11,18 +11,36 @@ exactly one worker: the in-process JobManager is the single-run guard, so
 """
 import mimetypes
 import os
-from email.utils import formatdate
+from email.utils import formatdate, parsedate_to_datetime
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.gzip import GZipMiddleware
 
 from core import archive_filesystem, config, scheduler, store
 from server import media_range, request_security, spa
 from server.api import router
 from server.feature_api import router as feature_router
 from server.jobs import JobManager
+
+
+class SelectiveGZipMiddleware:
+    """GZip JSON/static responses but never media streams: compressing video
+    bytes wastes CPU and breaks Content-Length/Content-Range semantics for
+    the range-capable ``/media`` endpoint."""
+
+    def __init__(self, app, exclude_prefix="/media", minimum_size=1024):
+        self.plain_app = app
+        self.gzip_app = GZipMiddleware(app, minimum_size=minimum_size)
+        self.exclude_prefix = exclude_prefix
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith(self.exclude_prefix):
+            await self.plain_app(scope, receive, send)
+        else:
+            await self.gzip_app(scope, receive, send)
 
 
 class SPAStaticFiles(StaticFiles):
@@ -72,12 +90,18 @@ def create_app(db_path=None, download_dir=None, jobs=None, allowed_hosts=None):
     app = FastAPI(title="TikTok Favorites Archive")
     store.init_db(store.connect(db_path)).close()  # ensure schema exists at startup
     app.state.db_path = db_path
+    # Shared by read-only handlers so the page cache survives across requests
+    # (per-request connections start cold on every call). Writers still open
+    # their own connection per request.
+    app.state.read_conn = store.connect_readonly(db_path)
     app.state.download_dir = download_dir
     app.state.jobs = jobs if jobs is not None else JobManager(db_path, download_dir)
     app.state.scheduler = scheduler.Scheduler(db_path, app.state.jobs)
     request_policy = request_security.LocalRequestPolicy(
         request_security.DEFAULT_ALLOWED_HOSTS if allowed_hosts is None else allowed_hosts,
     )
+
+    app.add_middleware(SelectiveGZipMiddleware)
 
     @app.middleware("http")
     async def protect_local_app(request, call_next):
@@ -98,6 +122,7 @@ def create_app(db_path=None, download_dir=None, jobs=None, allowed_hosts=None):
     @app.on_event("shutdown")
     def stop_scheduler():
         app.state.scheduler.stop()
+        app.state.read_conn.close()
 
     app.include_router(router)
     app.include_router(feature_router)
@@ -112,6 +137,26 @@ def create_app(db_path=None, download_dir=None, jobs=None, allowed_hosts=None):
             raise HTTPException(status_code=404, detail="not found")
 
         file_stat = os.fstat(opened.fileno())
+        last_modified = formatdate(file_stat.st_mtime, usegmt=True)
+        # Conditional GET: gallery scrolling re-requests hundreds of
+        # thumbnails; a 304 costs ~200 bytes instead of the full image.
+        # Range requests are excluded — clients validate those with If-Range.
+        if_modified_since = request.headers.get("if-modified-since")
+        if if_modified_since and "range" not in request.headers:
+            try:
+                cached_at = parsedate_to_datetime(if_modified_since).timestamp()
+            except (TypeError, ValueError):
+                cached_at = None
+            if cached_at is not None and int(file_stat.st_mtime) <= cached_at:
+                opened.close()
+                return Response(
+                    status_code=304,
+                    headers={
+                        "Accept-Ranges": "bytes",
+                        "Last-Modified": last_modified,
+                        "Cache-Control": "public, max-age=3600",
+                    },
+                )
         try:
             selected = media_range.parse_byte_range(
                 request.headers.get("range"), file_stat.st_size,
@@ -127,7 +172,10 @@ def create_app(db_path=None, download_dir=None, jobs=None, allowed_hosts=None):
         headers = {
             "Accept-Ranges": "bytes",
             "Content-Length": str(length),
-            "Last-Modified": formatdate(file_stat.st_mtime, usegmt=True),
+            "Last-Modified": last_modified,
+            # Repairs can replace media in place, so cap reuse at an hour and
+            # let conditional requests revalidate cheaply after that.
+            "Cache-Control": "public, max-age=3600",
         }
         status_code = 200
         if selected is not None:

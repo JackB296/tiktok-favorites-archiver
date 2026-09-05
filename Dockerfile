@@ -77,7 +77,8 @@ ENV DOWNLOAD_DIR=/app/downloads \
     APP_PORT=8080 \
     WHISPER_CPP_BIN=/usr/local/bin/whisper-cli \
     WHISPER_MODEL=/opt/whisper/models/ggml-base.bin \
-    TESSERACT_BIN=/usr/bin/tesseract
+    TESSERACT_BIN=/usr/bin/tesseract \
+    MALLOC_ARENA_MAX=2
 
 EXPOSE 8080
 CMD ["sh", "-c", "uvicorn --factory server.main:create_app --host 0.0.0.0 --port ${APP_PORT:-8080}"]

@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse, PlainTextResponse, RedirectResp
 from starlette.background import BackgroundTask
 
 from core import analysis, comment_search, config, coverage, store, storage, snapshots, selection, run_catalog, scheduler, importer, import_history as archive_history, cobalt, curation, export, layout, verify, inventory, legacy_bootstrap, manual_media, media_index, myfavett, profile_import, songid, source_metadata, spotify, stats, lens
-from server import archive_items
+from server import archive_items, feature_api_common
 from server.archive_items import ArchiveItems
 from server.jobs import JobBusyError
 
@@ -38,6 +38,11 @@ HOWTO = """How to get your TikTok data export:
 
 def _open(request: Request):
     return store.connect(request.app.state.db_path)
+
+
+# The shared warm-cache connection for strictly read-only handlers; never
+# hand it to code that writes (PRAGMA query_only makes writes raise).
+_open_read = feature_api_common.open_db_read
 
 
 def _download_dir(request: Request):
@@ -93,7 +98,7 @@ def howto():
 
 @router.get("/suggest")
 def suggest(request: Request, q: str = ""):
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         return store.suggest(conn, q)
     finally:
@@ -240,7 +245,7 @@ async def smart_collection_mark(request: Request, preset_id: int):
 @router.get("/songs")
 def list_songs(request: Request):
     """Every identified song with its favorite count and ids, for the Music view."""
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         return {"songs": store.distinct_songs(conn)}
     finally:
@@ -253,7 +258,7 @@ def page_items(request: Request):
         query = archive_items.parse_page_query(request.query_params)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         try:
             return _archive_items(request, conn).page(**query)
@@ -265,7 +270,7 @@ def page_items(request: Request):
 
 @router.get("/items/ids")
 def item_ids(request: Request):
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         return store.playable_item_ids(conn)
     finally:
@@ -298,7 +303,7 @@ def feed_ids(request: Request):
                 raise ValueError(f"{key} is not a filter")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         return selection.ArchiveSelection.gallery(query, scope="feed").ids(conn)
     finally:
@@ -376,7 +381,7 @@ async def mark_items(request: Request):
 @router.get("/stats")
 def archive_stats(request: Request):
     """Archive analytics for the Stats tab — computed on demand, read-only."""
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         return stats.compute_stats(conn)
     finally:
@@ -394,7 +399,7 @@ def items_offload_suggestion(request: Request):
 
 @router.get("/items/{n}/window")
 def item_window(request: Request, n: int, limit: int = 50):
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         return _archive_items(request, conn).window(n, limit)
     finally:
@@ -766,7 +771,7 @@ def search_comments(
 ):
     if not 1 <= limit <= 100:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         return comment_search.search(
             conn, q, include_history=history, limit=limit, cursor=cursor,
@@ -779,7 +784,7 @@ def search_comments(
 
 @router.get("/coverage")
 def archive_coverage(request: Request):
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         return coverage.report(conn)
     finally:
@@ -1011,7 +1016,7 @@ async def import_myfavett_video(
 
 @router.get("/imports")
 def list_imports(request: Request, limit: int = 50):
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         return archive_history.list_imports(conn, limit=limit)
     finally:
@@ -1020,7 +1025,7 @@ def list_imports(request: Request, limit: int = 50):
 
 @router.get("/imports/{import_id}")
 def get_import(request: Request, import_id: int):
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         result = archive_history.get_import(conn, import_id)
         if result is None:
@@ -1714,7 +1719,7 @@ def library_settings(request: Request):
 
 @router.get("/library-stats")
 def library_stats(request: Request):
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         return store.library_statistics(conn)
     finally:

@@ -3,7 +3,7 @@ import anyio
 from fastapi import APIRouter, HTTPException, Request
 
 from core import duplicates
-from server.feature_api_common import items, open_db
+from server.feature_api_common import items, open_db, open_db_read
 from server.jobs import JobBusyError
 
 
@@ -33,7 +33,7 @@ def _duplicate_report(request, conn, value):
 
 @router.get("/duplicates")
 def duplicate_report(request: Request):
-    conn = open_db(request)
+    conn = open_db_read(request)
     try:
         return _duplicate_report(request, conn, duplicates.report(conn))
     finally:

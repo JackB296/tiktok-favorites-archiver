@@ -11,6 +11,7 @@ import os
 import json
 import re
 import sqlite3
+import zlib
 from datetime import datetime
 
 from core import migrations, search_query as structured_search
@@ -149,6 +150,10 @@ CREATE INDEX IF NOT EXISTS idx_item_comments      ON item(comment_count, id)    
 CREATE INDEX IF NOT EXISTS idx_item_attempts      ON item(attempt_count, id);
 CREATE INDEX IF NOT EXISTS idx_item_last_attempt  ON item(last_attempt_at, id) WHERE last_attempt_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_item_author        ON item(author, id)          WHERE author IS NOT NULL;
+-- Covering (rowid, dates) probe target: joins that only need an item's dates
+-- must not read the wide item rows (captions/descriptions) through the rowid
+-- tree — discovery's per-entity subqueries name this index explicitly.
+CREATE INDEX IF NOT EXISTS idx_item_id_dates      ON item(id, favorited_at, favorite_order);
 
 CREATE TABLE IF NOT EXISTS comment_snapshot (
     id             INTEGER PRIMARY KEY,
@@ -163,6 +168,11 @@ CREATE TABLE IF NOT EXISTS comment_snapshot (
 );
 CREATE INDEX IF NOT EXISTS idx_comment_snapshot_item
     ON comment_snapshot(item_id, id DESC);
+-- Covering index for stats aggregation: the count columns live after the
+-- large comments_json blob in each record, so without this index reading
+-- them means walking every snapshot's overflow pages (whole-table I/O).
+CREATE INDEX IF NOT EXISTS idx_comment_snapshot_stats
+    ON comment_snapshot(item_id, id, saved_count, added_count, removed_count, changed_count);
 
 -- One row per distinct identified track. Many favorites share one sound, so
 -- songs are stored once (deduped by dedup_key) and referenced by item.song_id.
@@ -679,8 +689,33 @@ def connect(path=":memory:"):
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # NORMAL is the recommended WAL pairing: fsync at checkpoint, not per
+    # commit (2.9 ms -> ~0.02 ms per commit measured). Crash-safe against
+    # corruption; only an OS crash/power cut can lose the very last commits,
+    # which for this archive means re-syncing a handful of items.
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")  # wait, don't error, under concurrent writers
+    # 32 MB page cache (default is 2 MB): the archive lives on a Docker bind
+    # mount where every cache miss is a cross-VM read, and the hot working set
+    # (item table + indexes) thrashes the default cache. The memory is per
+    # open connection, filled only by pages actually read, and released on
+    # close — request handlers close their connection with the response.
+    conn.execute("PRAGMA cache_size=-32000")
+    return conn
+
+
+def connect_readonly(path):
+    """App-lifetime shared connection for read-only request handlers.
+
+    Its page cache stays warm across requests — on a bind-mounted archive
+    that is the difference between ~0.1 s and ~0.7 s for the dashboard
+    aggregates. sqlite3.threadsafety is 3 (serialized), so sharing across
+    request threads is safe; ``query_only`` turns any accidental write into
+    a loud error instead of a cross-thread transaction hazard.
+    """
+    conn = connect(path)
+    conn.execute("PRAGMA query_only=ON")
     return conn
 
 
@@ -808,52 +843,101 @@ def init_db(conn):
         " || ' ' || COALESCE(song.album, '')) FROM song WHERE song.id = item.song_id"
         ") WHERE song_id IS NOT NULL AND (search_song_text IS NULL OR search_song_text = '')"
     )
+    # FTS5 row counts come from the *_docsize shadow tables (one row per
+    # document, kept because columnsize is on): COUNT(*) on the virtual table
+    # itself walks the full-text index — tens of seconds on big archives.
     item_count = conn.execute("SELECT COUNT(*) FROM item").fetchone()[0]
-    search_count = conn.execute("SELECT COUNT(*) FROM item_search").fetchone()[0]
+    search_count = conn.execute("SELECT COUNT(*) FROM item_search_docsize").fetchone()[0]
     if item_count and search_count != item_count:
         conn.execute("INSERT INTO item_search(item_search) VALUES ('rebuild')")
     # Adopt comment snapshots created before local comment search existed.
-    # Only missing/stale documents are parsed; normal startups do no JSON work,
-    # and Gallery searches always hit FTS rather than snapshot blobs.
-    latest_comments = conn.execute(
-        "SELECT latest.id, latest.item_id, latest.comments_json "
-        "FROM comment_snapshot latest "
-        "LEFT JOIN item_comment_search AS indexed_comment "
-        "ON indexed_comment.item_id = latest.item_id "
-        "WHERE latest.id = (SELECT MAX(candidate.id) FROM comment_snapshot candidate "
-        " WHERE candidate.item_id = latest.item_id) "
-        "AND (indexed_comment.snapshot_id IS NULL "
-        "OR indexed_comment.snapshot_id != latest.id)"
-    ).fetchall()
-    for snapshot in latest_comments:
-        comments = json.loads(snapshot["comments_json"])
-        conn.execute(
-            "INSERT INTO item_comment_search(item_id, snapshot_id, text) VALUES (?, ?, ?) "
-            "ON CONFLICT(item_id) DO UPDATE SET snapshot_id = excluded.snapshot_id, "
-            "text = excluded.text",
-            (snapshot["item_id"], snapshot["id"], _comment_search_text(comments)),
-        )
-    comment_content_count = conn.execute(
-        "SELECT COUNT(*) FROM item_comment_search"
-    ).fetchone()[0]
-    comment_index_count = conn.execute("SELECT COUNT(*) FROM comment_search").fetchone()[0]
-    if comment_content_count != comment_index_count:
-        conn.execute("INSERT INTO comment_search(comment_search) VALUES ('rebuild')")
-    # Normalize durable snapshot JSON once so global/current/history comment
-    # searches never parse blobs at request time.
-    missing_entry_snapshots = conn.execute(
-        "SELECT cs.id, cs.item_id, cs.comments_json FROM comment_snapshot cs "
-        "LEFT JOIN comment_entry ce ON ce.snapshot_id = cs.id "
-        "GROUP BY cs.id HAVING COUNT(ce.id) = 0 AND cs.saved_count > 0"
-    ).fetchall()
-    for snapshot in missing_entry_snapshots:
-        _replace_comment_entries(
-            conn, snapshot["id"], snapshot["item_id"], json.loads(snapshot["comments_json"]),
-        )
-    entry_count = conn.execute("SELECT COUNT(*) FROM comment_entry").fetchone()[0]
-    entry_search_count = conn.execute("SELECT COUNT(*) FROM comment_entry_search").fetchone()[0]
-    if entry_count != entry_search_count:
-        conn.execute("INSERT INTO comment_entry_search(comment_entry_search) VALUES ('rebuild')")
+    # Snapshot writes index themselves (save_comment_snapshot), so this whole
+    # reconciliation only has work on databases from before the feature — it
+    # runs once per database and records completion; rescanning the comment
+    # tables every boot cost ~6.6 s on a large archive.
+    conn.executescript(migrations.REGISTRY_SCHEMA)
+    # Skip only when this exact schema generation has already reconciled:
+    # a version bump (or repair that rewound schema_metadata) re-runs the
+    # checks once, then the fast path resumes.
+    comment_search_adopted = (
+        migrations.get_backfill(conn, "comment-search-adoption-v1") is not None
+        and migrations.schema_version(conn) >= migrations.CURRENT_SCHEMA_VERSION
+    )
+    if not comment_search_adopted:
+        # Candidates are found without touching comments_json (the blob column
+        # forces a whole-table read); JSON is fetched per adopted row only.
+        latest_comments = conn.execute(
+            "SELECT latest.id, latest.item_id FROM "
+            "(SELECT item_id, MAX(id) AS id FROM comment_snapshot GROUP BY item_id) latest "
+            "LEFT JOIN item_comment_search AS indexed_comment "
+            "ON indexed_comment.item_id = latest.item_id "
+            "WHERE indexed_comment.snapshot_id IS NULL "
+            "OR indexed_comment.snapshot_id != latest.id"
+        ).fetchall()
+        for snapshot in latest_comments:
+            comments = _unpack_comments(conn.execute(
+                "SELECT comments_json FROM comment_snapshot WHERE id = ?", (snapshot["id"],)
+            ).fetchone()[0])
+            conn.execute(
+                "INSERT INTO item_comment_search(item_id, snapshot_id, text) VALUES (?, ?, ?) "
+                "ON CONFLICT(item_id) DO UPDATE SET snapshot_id = excluded.snapshot_id, "
+                "text = excluded.text",
+                (snapshot["item_id"], snapshot["id"], _comment_search_text(comments)),
+            )
+        comment_content_count = conn.execute(
+            "SELECT COUNT(*) FROM item_comment_search"
+        ).fetchone()[0]
+        comment_index_count = conn.execute(
+            "SELECT COUNT(*) FROM comment_search_docsize"
+        ).fetchone()[0]
+        if comment_content_count != comment_index_count:
+            conn.execute("INSERT INTO comment_search(comment_search) VALUES ('rebuild')")
+        # Normalize durable snapshot JSON once so global/current/history comment
+        # searches never parse blobs at request time. Anti-join over the covering
+        # stats index; JSON only for the (normally zero) unnormalized snapshots.
+        missing_entry_snapshots = conn.execute(
+            "SELECT cs.id, cs.item_id FROM comment_snapshot cs "
+            "WHERE cs.saved_count > 0 AND NOT EXISTS "
+            "(SELECT 1 FROM comment_entry ce WHERE ce.snapshot_id = cs.id)"
+        ).fetchall()
+        for snapshot in missing_entry_snapshots:
+            comments_json = conn.execute(
+                "SELECT comments_json FROM comment_snapshot WHERE id = ?", (snapshot["id"],)
+            ).fetchone()[0]
+            _replace_comment_entries(
+                conn, snapshot["id"], snapshot["item_id"], _unpack_comments(comments_json),
+            )
+        entry_count = conn.execute("SELECT COUNT(*) FROM comment_entry").fetchone()[0]
+        entry_search_count = conn.execute(
+            "SELECT COUNT(*) FROM comment_entry_search_docsize"
+        ).fetchone()[0]
+        if entry_count != entry_search_count:
+            conn.execute("INSERT INTO comment_entry_search(comment_entry_search) VALUES ('rebuild')")
+        migrations.mark_completed(conn, "comment-search-adoption-v1")
+    # One-time compression of legacy uncompressed snapshot JSON (~80% smaller
+    # at rest). Idempotent and resumable: legacy rows are TEXT, converted rows
+    # are BLOB, so an interrupted run just continues; the marker only spares
+    # completed databases the typeof() scan. VACUUM reclaims the freed pages
+    # once, only when rows were actually converted.
+    if migrations.get_backfill(conn, "comment-json-compressed-v1") is None:
+        converted = 0
+        while True:
+            batch = conn.execute(
+                "SELECT id, comments_json FROM comment_snapshot "
+                "WHERE typeof(comments_json) = 'text' LIMIT 200"
+            ).fetchall()
+            if not batch:
+                break
+            for row in batch:
+                conn.execute(
+                    "UPDATE comment_snapshot SET comments_json = ? WHERE id = ?",
+                    (zlib.compress(row["comments_json"].encode("utf-8")), row["id"]),
+                )
+            conn.commit()
+            converted += len(batch)
+        if converted:
+            conn.execute("VACUUM")
+        migrations.mark_completed(conn, "comment-json-compressed-v1")
     if conn.execute("SELECT 1 FROM run_state WHERE id = 1").fetchone() is None:
         conn.execute(
             "INSERT INTO run_state (id, state, phase, concurrency, cobalt_url, updated_at) "
@@ -1226,6 +1310,22 @@ def _comment_identity(comment):
     )
 
 
+def _pack_comments(comments):
+    """Comment list -> zlib-deflated JSON (BLOB). Snapshot JSON dominated the
+    database (787 MB of 2 GB) and deflates ~80%; every read goes through
+    ``_unpack_comments`` so at-rest format is invisible to callers."""
+    return zlib.compress(
+        json.dumps(comments, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+    )
+
+
+def _unpack_comments(value):
+    """Read a snapshot payload: deflated BLOB or legacy uncompressed TEXT."""
+    if isinstance(value, bytes):
+        value = zlib.decompress(value).decode("utf-8")
+    return json.loads(value)
+
+
 def record_comment_snapshot(conn, item_id, comments, reported_count=None,
                             captured_at=None):
     """Append one local comment observation and summarize it against the prior one."""
@@ -1235,7 +1335,7 @@ def record_comment_snapshot(conn, item_id, comments, reported_count=None,
         "ORDER BY id DESC LIMIT 1",
         (item_id,),
     ).fetchone()
-    before_comments = json.loads(previous["comments_json"]) if previous else []
+    before_comments = _unpack_comments(previous["comments_json"]) if previous else []
     before = {_comment_identity(comment): comment for comment in before_comments}
     after = {_comment_identity(comment): comment for comment in comments}
     shared = before.keys() & after.keys()
@@ -1248,8 +1348,7 @@ def record_comment_snapshot(conn, item_id, comments, reported_count=None,
         "(item_id, captured_at, comments_json, saved_count, reported_count, "
         "added_count, removed_count, changed_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            item_id, captured_at,
-            json.dumps(comments, ensure_ascii=False, separators=(",", ":")),
+            item_id, captured_at, _pack_comments(comments),
             len(comments), reported_count, added, removed, changed,
         ),
     )
@@ -1273,7 +1372,7 @@ def list_comment_snapshots(conn, item_id):
     return [
         {
             "id": row["id"], "captured_at": row["captured_at"],
-            "comments": json.loads(row["comments_json"]),
+            "comments": _unpack_comments(row["comments_json"]),
             "saved_count": row["saved_count"],
             "reported_count": row["reported_count"],
             "changes": {

@@ -135,6 +135,19 @@ def fail_backfill(conn, name, error):
         raise MigrationError(f"backfill {name!r} is not running")
 
 
+def mark_completed(conn, name):
+    """Record a one-shot startup reconciliation as done without the
+    pending/running lifecycle — for checks that finish inside init_db."""
+    now = _now()
+    conn.execute(
+        "INSERT INTO backfill_state "
+        "(name, status, cursor, processed, total, error, created_at, updated_at, completed_at) "
+        "VALUES (?, 'completed', NULL, 0, 0, NULL, ?, ?, ?) "
+        "ON CONFLICT(name) DO NOTHING",
+        (name, now, now, now),
+    )
+
+
 def complete_backfill(conn, name):
     now = _now()
     result = conn.execute(

@@ -6,13 +6,13 @@ metadata into ways to find and revisit Favorites without touching media.
 from fastapi import APIRouter, HTTPException, Request
 
 from core import discovery, memory
-from server.api import _archive_items, _open
+from server.api import _archive_items, _open, _open_read
 
 router = APIRouter()
 
 
 def _discovery_list(request, kind, q, order, cursor, limit):
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         try:
             return discovery.list_entities(
@@ -31,7 +31,7 @@ def creators(request: Request, q: str = "", order: str = "frequency", cursor: in
 
 @router.get("/creators/{creator_id}")
 def creator(request: Request, creator_id: int):
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         value = discovery.get_entity(conn, "creator", creator_id)
         if value is None:
@@ -48,7 +48,7 @@ def hashtags(request: Request, q: str = "", order: str = "frequency", cursor: in
 
 @router.get("/hashtags/{hashtag_id}")
 def hashtag(request: Request, hashtag_id: int):
-    conn = _open(request)
+    conn = _open_read(request)
     try:
         value = discovery.get_entity(conn, "hashtag", hashtag_id)
         if value is None:

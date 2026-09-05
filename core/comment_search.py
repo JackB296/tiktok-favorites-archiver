@@ -35,6 +35,11 @@ def search(conn, query, *, include_history=False, limit=50, cursor=None):
     parsed = search_query.parse(query)
     text_tokens, clauses, params = _field_clauses(parsed)
     match = search_query.fts_query(text_tokens)
+    # ce.id equals ces.rowid, but only ordering by the FTS table's own rowid
+    # lets FTS5 stream matches newest-first and stop at LIMIT; ordering by
+    # ce.id materializes and sorts every match first (14.6 s vs 0.01 s for a
+    # common word over 3.4 M comments).
+    order_column = "ces.rowid" if match else "ce.id"
     if match:
         head = (
             "SELECT ce.*, cs.captured_at, item.caption, item.author AS item_author, "
@@ -64,7 +69,9 @@ def search(conn, query, *, include_history=False, limit=50, cursor=None):
         clauses.append("ce.id < ?")
         params.append(int(cursor))
     sql = head + (" WHERE " + " AND ".join(clauses) if clauses else "")
-    rows = conn.execute(sql + " ORDER BY ce.id DESC LIMIT ?", (*params, limit)).fetchall()
+    rows = conn.execute(
+        sql + f" ORDER BY {order_column} DESC LIMIT ?", (*params, limit),
+    ).fetchall()
     results = []
     for row in rows:
         entry = dict(row)

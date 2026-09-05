@@ -4,6 +4,11 @@ Every number is computed on demand from columns the archive already maintains
 — no schema, no caching, no background work. Items without a value for a
 dimension (undated favorites, unindexed media) are excluded from that chart
 and disclosed as counts, never guessed.
+
+All per-item aggregates are gathered in ONE pass over `item`
+(``_item_aggregates``): the table lives on a bind mount in Docker, where every
+extra scan is real I/O, so the sections share a single scan instead of issuing
+eight. Remaining queries either use covering indexes or return bounded rows.
 """
 import re
 
@@ -26,22 +31,31 @@ PEAK_POST_LIMIT = 5
 
 def compute_stats(conn):
     """The full `/api/stats` payload: one dict, JSON-ready."""
+    agg = _item_aggregates(conn)
     return {
-        "hero": _hero(conn),
+        "hero": _hero(agg),
         "growth": _growth(conn),
-        "watcher": _watcher(conn),
-        "reach": _reach(conn),
-        "discovery_lag": _discovery_lag(conn),
-        "quality": _quality(conn),
+        "watcher": _watcher(conn, agg),
+        "reach": _reach(conn, agg),
+        "discovery_lag": _discovery_lag(agg),
+        "quality": _quality(agg),
         "conversation": _conversation(conn),
         "monitoring": _monitoring(conn),
         "top": _top(conn),
-        "health": _health(conn),
+        "health": _health(conn, agg),
     }
 
 
-def _hero(conn):
-    row = conn.execute(
+def _item_aggregates(conn):
+    """Every SUM/COUNT the sections need from `item`, in a single table scan.
+
+    NULL operands make each predicate NULL, which SUM skips — so guards like
+    ``duration_s >= 0`` double as the old per-query ``WHERE ... IS NOT NULL``.
+    """
+    return conn.execute(
+        "WITH scan AS (SELECT *,"
+        " julianday(favorited_at) - julianday(source_posted_at) AS lag_days,"
+        " MIN(media_width, media_height) AS res_edge FROM item) "
         "SELECT COUNT(*) AS total,"
         " SUM(kind = 'video') AS videos,"
         " SUM(kind = 'slideshow') AS slideshows,"
@@ -49,21 +63,70 @@ def _hero(conn):
         " COALESCE(SUM(duration_s), 0) AS watch_seconds,"
         " COALESCE(SUM(media_size), 0) AS disk_bytes,"
         " SUM(favorited_at IS NULL) AS undated,"
-        " SUM(status = 'done' AND indexed_at IS NULL) AS unindexed "
-        "FROM item"
+        " SUM(status = 'done' AND indexed_at IS NULL) AS unindexed,"
+        # _watcher: duration histogram + silent-video share.
+        " SUM(duration_s IS NOT NULL) AS duration_count,"
+        " SUM(duration_s >= 0 AND duration_s < 15) AS b0,"
+        " SUM(duration_s >= 15 AND duration_s < 30) AS b1,"
+        " SUM(duration_s >= 30 AND duration_s < 60) AS b2,"
+        " SUM(duration_s >= 60 AND duration_s < 120) AS b3,"
+        " SUM(duration_s >= 120 AND duration_s < 300) AS b4,"
+        " SUM(duration_s >= 300) AS b5,"
+        " SUM(indexed_at IS NOT NULL AND kind = 'video') AS video_indexed,"
+        " SUM(audio_silent = 1 AND indexed_at IS NOT NULL AND kind = 'video') AS silent,"
+        # _reach: source engagement totals.
+        " COUNT(view_count) AS reach_covered,"
+        " COALESCE(SUM(view_count), 0) AS views,"
+        " COALESCE(SUM(like_count), 0) AS likes,"
+        " COALESCE(SUM(comment_count), 0) AS comments,"
+        " COALESCE(SUM(repost_count), 0) AS reposts,"
+        " COALESCE(SUM(save_count), 0) AS saves,"
+        # _discovery_lag: favorited-after-posting buckets (>= -1 tolerates
+        # small clock skew; NULL dates fall out of every bucket).
+        " SUM(lag_days >= -1) AS lag_covered,"
+        " SUM(lag_days >= -1 AND lag_days < 1) AS lag_same_day,"
+        " SUM(lag_days >= 1 AND lag_days < 7) AS lag_week,"
+        " SUM(lag_days >= 7 AND lag_days < 30) AS lag_month,"
+        " SUM(lag_days >= 30) AS lag_later,"
+        # _quality: offline completeness + downloader mix + resolution.
+        " SUM(source_info_status = 'ok') AS source_metadata,"
+        " SUM(comments_status = 'ok') AS comments_ok,"
+        " SUM(COALESCE(custom_thumbnail_path, thumbnail_path, source_thumbnail_path)"
+        "     IS NOT NULL) AS thumbnails,"
+        " SUM(portable_metadata_status = 'ok') AS portable_metadata,"
+        " SUM(song_id IS NOT NULL) AS songs,"
+        " SUM(download_source = 'cobalt') AS cobalt,"
+        " SUM(download_source = 'yt-dlp') AS ytdlp,"
+        " SUM(download_source IS NULL OR download_source NOT IN ('cobalt', 'yt-dlp')) AS legacy,"
+        " SUM(kind = 'video' AND media_width > 0 AND media_height > 0) AS res_total,"
+        " SUM(kind = 'video' AND media_width > 0 AND media_height > 0"
+        "     AND res_edge >= 2160) AS r4k,"
+        " SUM(kind = 'video' AND media_width > 0 AND media_height > 0"
+        "     AND res_edge >= 1080 AND res_edge < 2160) AS r1080,"
+        " SUM(kind = 'video' AND media_width > 0 AND media_height > 0"
+        "     AND res_edge >= 720 AND res_edge < 1080) AS r720,"
+        " SUM(kind = 'video' AND media_width > 0 AND media_height > 0"
+        "     AND res_edge < 720) AS res_lower,"
+        # _health: flag counts.
+        " SUM(archive_missing = 1) AS missing,"
+        " SUM(offloaded = 1) AS offloaded "
+        "FROM scan"
     ).fetchone()
-    total = row["total"]
-    archived = row["archived"] or 0
+
+
+def _hero(agg):
+    total = agg["total"]
+    archived = agg["archived"] or 0
     return {
         "total": total,
-        "videos": row["videos"] or 0,
-        "slideshows": row["slideshows"] or 0,
+        "videos": agg["videos"] or 0,
+        "slideshows": agg["slideshows"] or 0,
         "archived": archived,
         "archived_pct": round(archived * 100.0 / total, 1) if total else 0.0,
-        "watch_seconds": row["watch_seconds"],
-        "disk_bytes": row["disk_bytes"],
-        "undated": row["undated"] or 0,
-        "unindexed": row["unindexed"] or 0,
+        "watch_seconds": agg["watch_seconds"],
+        "disk_bytes": agg["disk_bytes"],
+        "undated": agg["undated"] or 0,
+        "unindexed": agg["unindexed"] or 0,
     }
 
 
@@ -78,7 +141,7 @@ def _growth(conn):
     return {"monthly": monthly}
 
 
-def _watcher(conn):
+def _watcher(conn, agg):
     heatmap = [
         {"dow": int(r["dow"]), "hour": int(r["hour"]), "count": r["c"]}
         for r in conn.execute(
@@ -90,27 +153,16 @@ def _watcher(conn):
         if r["dow"] is not None and r["hour"] is not None
     ]
 
-    # Bucket in SQLite instead of transferring every duration to Python. The
-    # partial duration index also makes the two-row median lookup inexpensive.
-    durations = conn.execute(
-        "SELECT COUNT(*) AS total,"
-        " SUM(duration_s >= 0 AND duration_s < 15) AS b0,"
-        " SUM(duration_s >= 15 AND duration_s < 30) AS b1,"
-        " SUM(duration_s >= 30 AND duration_s < 60) AS b2,"
-        " SUM(duration_s >= 60 AND duration_s < 120) AS b3,"
-        " SUM(duration_s >= 120 AND duration_s < 300) AS b4,"
-        " SUM(duration_s >= 300) AS b5 "
-        "FROM item WHERE duration_s IS NOT NULL"
-    ).fetchone()
-    duration_count = durations["total"]
+    duration_count = agg["duration_count"] or 0
     histogram = [
-        {"label": bucket[0], "count": durations[f"b{index}"] or 0}
+        {"label": bucket[0], "count": agg[f"b{index}"] or 0}
         for index, bucket in enumerate(DURATION_BUCKETS)
     ]
     if not duration_count:
         histogram = []
         median = None
     else:
+        # The partial duration index makes this two-row lookup inexpensive.
         middle = conn.execute(
             "SELECT AVG(duration_s) AS median FROM ("
             " SELECT duration_s FROM item WHERE duration_s IS NOT NULL"
@@ -123,28 +175,16 @@ def _watcher(conn):
     # Only videos carry a silence verdict — slideshows are rebuilt with audio
     # and leave audio_silent NULL, so counting them would dilute the share and
     # mislabel the "of N indexed videos" denominator.
-    silent = conn.execute(
-        "SELECT SUM(audio_silent = 1) AS silent, COUNT(*) AS indexed "
-        "FROM item WHERE indexed_at IS NOT NULL AND kind = 'video'"
-    ).fetchone()
     return {
         "heatmap": heatmap,
         "duration_histogram": histogram,
         "median_duration_s": median,
-        "silent": {"count": silent["silent"] or 0, "of_indexed": silent["indexed"]},
+        "silent": {"count": agg["silent"] or 0, "of_indexed": agg["video_indexed"] or 0},
     }
 
 
-def _reach(conn):
+def _reach(conn, agg):
     """Bounded source engagement summary plus five local playback links."""
-    row = conn.execute(
-        "SELECT COUNT(view_count) AS covered,"
-        " COALESCE(SUM(view_count), 0) AS views,"
-        " COALESCE(SUM(like_count), 0) AS likes,"
-        " COALESCE(SUM(comment_count), 0) AS comments,"
-        " COALESCE(SUM(repost_count), 0) AS reposts,"
-        " COALESCE(SUM(save_count), 0) AS saves FROM item"
-    ).fetchone()
     peaks = [
         {
             "id": result["id"], "caption": result["caption"],
@@ -166,87 +206,57 @@ def _reach(conn):
         ).fetchall()
     ]
     return {
-        "covered": row["covered"], "views": row["views"], "likes": row["likes"],
-        "comments": row["comments"], "reposts": row["reposts"], "saves": row["saves"],
+        "covered": agg["reach_covered"], "views": agg["views"], "likes": agg["likes"],
+        "comments": agg["comments"], "reposts": agg["reposts"], "saves": agg["saves"],
         "peak_posts": peaks,
     }
 
 
-def _discovery_lag(conn):
+def _discovery_lag(agg):
     """How soon after publication a post was favorited, in fixed buckets."""
-    row = conn.execute(
-        "WITH lagged AS ("
-        " SELECT julianday(favorited_at) - julianday(source_posted_at) AS days"
-        " FROM item WHERE favorited_at IS NOT NULL AND source_posted_at IS NOT NULL"
-        "), valid AS (SELECT days FROM lagged WHERE days IS NOT NULL AND days >= -1) "
-        "SELECT COUNT(*) AS covered,"
-        " SUM(days < 1) AS same_day,"
-        " SUM(days >= 1 AND days < 7) AS week,"
-        " SUM(days >= 7 AND days < 30) AS month,"
-        " SUM(days >= 30) AS later FROM valid"
-    ).fetchone()
-    covered = row["covered"]
+    covered = agg["lag_covered"] or 0
     return {
         "covered": covered,
         "buckets": [] if not covered else [
-            {"label": "Same day", "count": row["same_day"] or 0},
-            {"label": "Within a week", "count": row["week"] or 0},
-            {"label": "Within a month", "count": row["month"] or 0},
-            {"label": "Later", "count": row["later"] or 0},
+            {"label": "Same day", "count": agg["lag_same_day"] or 0},
+            {"label": "Within a week", "count": agg["lag_week"] or 0},
+            {"label": "Within a month", "count": agg["lag_month"] or 0},
+            {"label": "Later", "count": agg["lag_later"] or 0},
         ],
     }
 
 
-def _quality(conn):
+def _quality(agg):
     """Offline completeness, archived resolution, and bounded downloader mix."""
-    row = conn.execute(
-        "SELECT COUNT(*) AS total,"
-        " SUM(source_info_status = 'ok') AS source_metadata,"
-        " SUM(comments_status = 'ok') AS comments,"
-        " SUM(COALESCE(custom_thumbnail_path, thumbnail_path, source_thumbnail_path) IS NOT NULL)"
-        " AS thumbnails,"
-        " SUM(portable_metadata_status = 'ok') AS portable_metadata,"
-        " SUM(song_id IS NOT NULL) AS songs,"
-        " SUM(download_source = 'cobalt') AS cobalt,"
-        " SUM(download_source = 'yt-dlp') AS ytdlp,"
-        " SUM(download_source IS NULL OR download_source NOT IN ('cobalt', 'yt-dlp')) AS legacy "
-        "FROM item"
-    ).fetchone()
-    resolution = conn.execute(
-        "SELECT COUNT(*) AS total,"
-        " SUM(MIN(media_width, media_height) >= 2160) AS r4k,"
-        " SUM(MIN(media_width, media_height) >= 1080"
-        "     AND MIN(media_width, media_height) < 2160) AS r1080,"
-        " SUM(MIN(media_width, media_height) >= 720"
-        "     AND MIN(media_width, media_height) < 1080) AS r720,"
-        " SUM(MIN(media_width, media_height) < 720) AS lower "
-        "FROM item WHERE kind = 'video' AND media_width > 0 AND media_height > 0"
-    ).fetchone()
     return {
         "offline": {
-            "total": row["total"],
-            "source_metadata": row["source_metadata"] or 0,
-            "comments": row["comments"] or 0,
-            "thumbnails": row["thumbnails"] or 0,
-            "portable_metadata": row["portable_metadata"] or 0,
-            "songs": row["songs"] or 0,
+            "total": agg["total"],
+            "source_metadata": agg["source_metadata"] or 0,
+            "comments": agg["comments_ok"] or 0,
+            "thumbnails": agg["thumbnails"] or 0,
+            "portable_metadata": agg["portable_metadata"] or 0,
+            "songs": agg["songs"] or 0,
         },
-        "resolution": [] if not resolution["total"] else [
-            {"label": "4K", "count": resolution["r4k"] or 0},
-            {"label": "1080p", "count": resolution["r1080"] or 0},
-            {"label": "720p", "count": resolution["r720"] or 0},
-            {"label": "Lower", "count": resolution["lower"] or 0},
+        "resolution": [] if not agg["res_total"] else [
+            {"label": "4K", "count": agg["r4k"] or 0},
+            {"label": "1080p", "count": agg["r1080"] or 0},
+            {"label": "720p", "count": agg["r720"] or 0},
+            {"label": "Lower", "count": agg["res_lower"] or 0},
         ],
         "downloads": [
-            {"label": "Cobalt", "count": row["cobalt"] or 0},
-            {"label": "yt-dlp", "count": row["ytdlp"] or 0},
-            {"label": "Legacy / unknown", "count": row["legacy"] or 0},
+            {"label": "Cobalt", "count": agg["cobalt"] or 0},
+            {"label": "yt-dlp", "count": agg["ytdlp"] or 0},
+            {"label": "Legacy / unknown", "count": agg["legacy"] or 0},
         ],
     }
 
 
 def _conversation(conn):
-    """Comment history without loading or parsing any saved comment JSON."""
+    """Comment history without loading or parsing any saved comment JSON.
+
+    Reads only idx_comment_snapshot_stats — the snapshot rows themselves hold
+    multi-KB JSON blobs, so touching the table would page in the whole thing.
+    """
     row = conn.execute(
         "WITH bounds AS ("
         " SELECT item_id, MIN(id) AS first_id, MAX(id) AS latest_id"
@@ -343,14 +353,11 @@ def _top(conn):
     return {"authors": authors, "songs": songs, "hashtags": hashtags}
 
 
-def _health(conn):
+def _health(conn, agg):
     statuses = {
         r["status"]: r["c"]
         for r in conn.execute("SELECT status, COUNT(*) AS c FROM item GROUP BY status").fetchall()
     }
-    flags = conn.execute(
-        "SELECT SUM(archive_missing = 1) AS missing, SUM(offloaded = 1) AS offloaded FROM item"
-    ).fetchone()
     errors = [
         {"error": r["error"], "count": r["c"]}
         for r in conn.execute(
@@ -362,7 +369,7 @@ def _health(conn):
     ]
     return {
         "statuses": statuses,
-        "missing": flags["missing"] or 0,
-        "offloaded": flags["offloaded"] or 0,
+        "missing": agg["missing"] or 0,
+        "offloaded": agg["offloaded"] or 0,
         "errors": errors,
     }

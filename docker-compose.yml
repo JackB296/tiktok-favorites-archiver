@@ -49,6 +49,11 @@ services:
       DOWNLOAD_DIR: "/app/downloads"
       DB_FILE: "/app/data/archive.db"
       APP_PORT: "8080"
+      # glibc keeps one malloc arena per thread (up to 8 x cores) and rarely
+      # returns freed arena memory to the OS, so RSS stays at its high-water
+      # mark after analysis/download runs. Two arenas keep idle memory near
+      # the true working set; contention is irrelevant at this request rate.
+      MALLOC_ARENA_MAX: "2"
       # Keep this comfortably below Cobalt's RATELIMIT_MAX/WINDOW above:
       # 4 calls/second = 240/minute < Cobalt's 600/minute resolve budget, and
       # the matching tunnel budget (TUNNEL_RATELIMIT_MAX) covers the downloads.
@@ -101,8 +106,19 @@ services:
     volumes:
       # Media lands here on the host — point Plex at ./downloads.
       - ./downloads:/app/downloads
-      # SQLite state (kept off the media folder).
-      - ./appdata:/app/data
+      # SQLite state lives on a named volume: on Docker Desktop (Windows/macOS)
+      # a bind-mounted database pays the cross-VM file-sharing tax on every
+      # page read — measured 5-150x slower than the volume for cold queries
+      # on a 2 GB archive (docs/PERFORMANCE.md). The database is therefore not
+      # directly visible in the host filesystem; export a browsable copy with:
+      #   docker compose exec app python -c "import sqlite3; sqlite3.connect('/app/data/archive.db').backup(sqlite3.connect('/app/backups/archive-export.db'))"
+      - archive-data:/app/data
+      # Explorer-visible folder for database exports/backups (was the old
+      # database location; a pre-migration archive.db may still sit here).
+      - ./appdata:/app/backups
       # Optional managed Storage/NAS mount. Mount it on the host first, remove
       # the leading "#", then register /mnt/archive-storage in the Storage tab.
       # - /mnt/archive-storage:/mnt/archive-storage
+
+volumes:
+  archive-data:

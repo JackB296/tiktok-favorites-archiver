@@ -154,19 +154,39 @@ def _trend(conn, kind, entity_id, months=12):
     return [{"month": row["month"], "count": row["count"]} for row in reversed(rows)]
 
 
-def list_entities(conn, kind, *, search="", order="frequency", cursor=0, limit=50):
+def _entity_sql(kind):
+    """Per-kind correlated fragments shared by the list and detail queries.
+
+    The hashtag joins name idx_item_id_dates explicitly: SQLite otherwise
+    probes the item rows through the rowid tree, and on a large archive over
+    a Docker bind mount those ~80k row reads thrash the page cache (measured
+    7.5 s vs 0.13 s for the covering-index probe).
+    """
     if kind == "creator":
-        table = "creator"
-        count_sql = "(SELECT COUNT(*) FROM item i WHERE i.creator_id = e.id)"
-        latest_sql = "(SELECT MAX(favorited_at) FROM item i WHERE i.creator_id = e.id)"
-        first_sql = "(SELECT id FROM item i WHERE i.creator_id = e.id ORDER BY favorite_order DESC, id DESC LIMIT 1)"
-    elif kind == "hashtag":
-        table = "hashtag"
-        count_sql = "(SELECT COUNT(*) FROM item_hashtag ih WHERE ih.hashtag_id = e.id)"
-        latest_sql = "(SELECT MAX(i.favorited_at) FROM item_hashtag ih JOIN item i ON i.id = ih.item_id WHERE ih.hashtag_id = e.id)"
-        first_sql = "(SELECT i.id FROM item_hashtag ih JOIN item i ON i.id = ih.item_id WHERE ih.hashtag_id = e.id ORDER BY i.favorite_order DESC, i.id DESC LIMIT 1)"
-    else:
-        raise ValueError("unknown discovery resource")
+        return {
+            "table": "creator",
+            "count": "(SELECT COUNT(*) FROM item i WHERE i.creator_id = {e}.id)",
+            "latest": "(SELECT MAX(favorited_at) FROM item i WHERE i.creator_id = {e}.id)",
+            "first": "(SELECT id FROM item i WHERE i.creator_id = {e}.id "
+                     "ORDER BY favorite_order DESC, id DESC LIMIT 1)",
+        }
+    if kind == "hashtag":
+        return {
+            "table": "hashtag",
+            "count": "(SELECT COUNT(*) FROM item_hashtag ih WHERE ih.hashtag_id = {e}.id)",
+            "latest": "(SELECT MAX(i.favorited_at) FROM item_hashtag ih "
+                      "JOIN item i INDEXED BY idx_item_id_dates ON i.id = ih.item_id "
+                      "WHERE ih.hashtag_id = {e}.id)",
+            "first": "(SELECT i.id FROM item_hashtag ih "
+                     "JOIN item i INDEXED BY idx_item_id_dates ON i.id = ih.item_id "
+                     "WHERE ih.hashtag_id = {e}.id "
+                     "ORDER BY i.favorite_order DESC, i.id DESC LIMIT 1)",
+        }
+    raise ValueError("unknown discovery resource")
+
+
+def list_entities(conn, kind, *, search="", order="frequency", cursor=0, limit=50):
+    sql = _entity_sql(kind)
     if order not in ("frequency", "trend", "name"):
         raise ValueError("order must be frequency, trend, or name")
     cursor = max(0, int(cursor))
@@ -177,9 +197,14 @@ def list_entities(conn, kind, *, search="", order="frequency", cursor=0, limit=5
         "name": "e.display_name COLLATE NOCASE, e.id",
     }[order]
     needle = f"%{normalize(search, '@' if kind == 'creator' else '#')}%"
+    # first_item_id is resolved outside the inner query so it runs for the
+    # returned page only, not for every entity the ORDER BY has to rank.
     rows = conn.execute(
-        f"SELECT e.*, {count_sql} AS use_count, {latest_sql} AS latest_at, {first_sql} AS first_item_id "
-        f"FROM {table} e WHERE e.canonical_key LIKE ? ORDER BY {ordering} LIMIT ? OFFSET ?",
+        f"SELECT sub.*, {sql['first'].format(e='sub')} AS first_item_id FROM ("
+        f"SELECT e.*, {sql['count'].format(e='e')} AS use_count,"
+        f" {sql['latest'].format(e='e')} AS latest_at "
+        f"FROM {sql['table']} e WHERE e.canonical_key LIKE ? "
+        f"ORDER BY {ordering} LIMIT ? OFFSET ?) sub",
         (needle, limit + 1, cursor),
     ).fetchall()
     items = [
@@ -194,21 +219,12 @@ def list_entities(conn, kind, *, search="", order="frequency", cursor=0, limit=5
 
 
 def get_entity(conn, kind, entity_id):
-    if kind == "creator":
-        table = "creator"
-        count_sql = "(SELECT COUNT(*) FROM item i WHERE i.creator_id = e.id)"
-        latest_sql = "(SELECT MAX(favorited_at) FROM item i WHERE i.creator_id = e.id)"
-        first_sql = "(SELECT id FROM item i WHERE i.creator_id = e.id ORDER BY favorite_order DESC, id DESC LIMIT 1)"
-    elif kind == "hashtag":
-        table = "hashtag"
-        count_sql = "(SELECT COUNT(*) FROM item_hashtag ih WHERE ih.hashtag_id = e.id)"
-        latest_sql = "(SELECT MAX(i.favorited_at) FROM item_hashtag ih JOIN item i ON i.id = ih.item_id WHERE ih.hashtag_id = e.id)"
-        first_sql = "(SELECT i.id FROM item_hashtag ih JOIN item i ON i.id = ih.item_id WHERE ih.hashtag_id = e.id ORDER BY i.favorite_order DESC, i.id DESC LIMIT 1)"
-    else:
-        raise ValueError("unknown discovery resource")
+    sql = _entity_sql(kind)
     row = conn.execute(
-        f"SELECT e.*, {count_sql} AS use_count, {latest_sql} AS latest_at, {first_sql} AS first_item_id "
-        f"FROM {table} e WHERE e.id = ?", (entity_id,),
+        f"SELECT e.*, {sql['count'].format(e='e')} AS use_count,"
+        f" {sql['latest'].format(e='e')} AS latest_at,"
+        f" {sql['first'].format(e='e')} AS first_item_id "
+        f"FROM {sql['table']} e WHERE e.id = ?", (entity_id,),
     ).fetchone()
     if row is None:
         return None
