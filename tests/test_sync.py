@@ -402,6 +402,18 @@ def test_items_needing_backfill_skips_offloaded_and_ignored_items():
     assert [row["id"] for row in sync.items_needing_backfill(conn)] == [3]
 
 
+def test_source_probe_declining_with_none_means_no_quality_upgrade():
+    # ytdlp_adapter.extract_post returns None for a non-TikTok link instead of
+    # probing it; that must read as "nothing better on offer", not crash.
+    deps = sync.Deps(
+        lambda _link: None, lambda *_args: False, lambda *_args: True,
+        lambda *_args: None, "/default.mp3",
+        source_probe=lambda _link, include_comments=False: None,
+    )
+    facts = {"width": 720, "height": 1280, "has_audio": True, "audio_silent": False}
+    assert sync._source_offers_more_pixels(deps, "https://www.tiktok.com/x", facts) is False
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

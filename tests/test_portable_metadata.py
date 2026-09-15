@@ -10,7 +10,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import layout, portable_metadata, store
+from core import config, layout, portable_metadata, store
 
 
 def _library():
@@ -166,6 +166,23 @@ def test_embed_library_stream_copies_multiple_movies_concurrently_and_records_ev
     ).fetchone()[0] == 20
 
 
+def test_embedding_runs_ffmpeg_with_a_timeout():
+    conn = _library()
+    seen = []
+
+    def run(command, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        with open(command[-1], "wb") as output:
+            output.write(b"portable")
+
+    with tempfile.TemporaryDirectory() as downloads:
+        with open(layout.movie(downloads, 1), "wb") as output:
+            output.write(b"original")
+        portable_metadata.embed_library(conn, downloads, runner=run, validate=lambda _path: True)
+
+    assert seen == [config.MEDIA_TOOL_TIMEOUT]
+
+
 if __name__ == "__main__":
     test_embed_library_atomically_adds_tags_artwork_and_subtitles_once()
     print("PASS test_embed_library_atomically_adds_tags_artwork_and_subtitles_once")
@@ -175,3 +192,5 @@ if __name__ == "__main__":
     print("PASS test_real_ffmpeg_embedding_keeps_playable_av_and_adds_tags_artwork_and_subtitles")
     test_embed_library_stream_copies_multiple_movies_concurrently_and_records_every_result()
     print("PASS test_embed_library_stream_copies_multiple_movies_concurrently_and_records_every_result")
+    test_embedding_runs_ffmpeg_with_a_timeout()
+    print("PASS test_embedding_runs_ffmpeg_with_a_timeout")

@@ -258,6 +258,40 @@ def test_existing_sync_pipeline_gains_analysis_once_and_respects_later_removal()
     assert store.get_pipeline_settings(legacy)["phases"] == ["sync", "enrich"]
 
 
+def test_newer_schema_is_refused_before_any_migration_runs():
+    """A downgrade must fail closed: nothing in init_db may touch a database
+    whose schema version is newer than this build supports."""
+    conn = store.init_db(store.connect(":memory:"))
+    store.insert_item(conn, 1, "https://www.tiktok.com/@a/video/1", status="done")
+    # Make the FTS index look old so a run of init_db WOULD rebuild it, and
+    # stamp the database as coming from the future.
+    conn.executescript("""
+        DROP TRIGGER item_search_insert;
+        DROP TRIGGER item_search_delete;
+        DROP TRIGGER item_search_update;
+        DROP TABLE item_search;
+        CREATE VIRTUAL TABLE item_search USING fts5(
+            caption, author, link, content='item', content_rowid='id'
+        );
+        UPDATE schema_metadata SET version = 999 WHERE id = 1;
+    """)
+    conn.commit()
+    before = [row["sql"] for row in conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'item_search'")]
+
+    try:
+        store.init_db(conn)
+    except migrations.MigrationError as error:
+        assert "newer than supported" in str(error)
+    else:
+        raise AssertionError("init_db accepted a newer schema")
+
+    after = [row["sql"] for row in conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'item_search'")]
+    assert after == before  # the old 3-column FTS table was NOT rebuilt
+    assert migrations.schema_version(conn) == 999
+
+
 if __name__ == "__main__":
     import traceback
 

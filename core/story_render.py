@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import tempfile
 
-from core import layout, media_index, store, stories
+from core import config, layout, media_index, store, stories
 
 
 class StoryRenderError(RuntimeError):
@@ -25,7 +25,10 @@ def _error_text(error):
 
 
 def _run(command, runner):
-    return runner(command, check=True, capture_output=True, text=True)
+    return runner(
+        command, check=True, capture_output=True, text=True,
+        timeout=config.MEDIA_TOOL_TIMEOUT,
+    )
 
 
 def _concat_manifest_line(path):

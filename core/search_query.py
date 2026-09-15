@@ -56,6 +56,10 @@ def fts_query(tokens):
             expression += "*"
         (negative if token.negative else positive).append(expression)
     if not positive:
+        if negative:
+            # FTS5 has no "match everything" to subtract from, so a clear error
+            # beats silently returning the whole library.
+            raise ValueError("a negative search term needs a positive term to subtract from")
         return None
     query = " AND ".join(positive)
     if negative:

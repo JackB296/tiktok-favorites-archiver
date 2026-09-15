@@ -176,6 +176,11 @@ data/
 appdata/
 
 # Local working notes (specs, plans, research) — deliberately not published.
-docs/
+# docs/PERFORMANCE.md is the exception: the changelog cites it.
+docs/*
+!docs/PERFORMANCE.md
 tasks/
 plans/
+
+# Per-machine compose overrides (LAN IP, port mapping, extra mounts).
+docker-compose.override.yml

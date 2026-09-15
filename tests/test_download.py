@@ -179,6 +179,20 @@ def test_unexpected_error_stops_without_retrying_and_cleans_up():
         assert os.listdir(d) == []
 
 
+def test_download_larger_than_the_cap_is_aborted_and_cleaned_up():
+    with tempfile.TemporaryDirectory() as d:
+        target = os.path.join(d, "1.mp4")
+        saved = config.DOWNLOAD_MAX_BYTES
+        config.DOWNLOAD_MAX_BYTES = 5
+        try:
+            calls = _serve([b"abc", b"def"])          # 6 bytes > cap
+            assert download.download_file("http://x/v", target, max_retries=3) is False
+            assert os.listdir(d) == []                 # no .part left
+            assert calls["count"] == 1                 # no retry for a too-large file
+        finally:
+            config.DOWNLOAD_MAX_BYTES = saved
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

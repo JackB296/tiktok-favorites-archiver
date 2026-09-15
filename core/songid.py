@@ -30,6 +30,18 @@ def _section_album(track):
     return None
 
 
+def _http_url(value):
+    """Keep a provider URL only if it is http(s).
+
+    These values are stored verbatim and rendered as anchors in the web app, so
+    a javascript: or data: URI in a Shazam/iTunes payload must not survive
+    parsing. None makes the UI fall back to its generated search link.
+    """
+    if isinstance(value, str) and value.lower().startswith(("http://", "https://")):
+        return value
+    return None
+
+
 def _provider_url(track, *names):
     """Best-effort direct streaming URL for a provider (Apple Music / Spotify).
 
@@ -65,9 +77,9 @@ def _track_to_match(track):
         artist=track.get("subtitle"),
         album=_section_album(track),
         art_url=(track.get("images") or {}).get("coverart"),
-        shazam_url=track.get("url"),
-        apple_url=_provider_url(track, "applemusic", "apple music", "itunes"),
-        spotify_url=_provider_url(track, "spotify"),
+        shazam_url=_http_url(track.get("url")),
+        apple_url=_http_url(_provider_url(track, "applemusic", "apple music", "itunes")),
+        spotify_url=_http_url(_provider_url(track, "spotify")),
     )
 
 
@@ -122,7 +134,7 @@ def build_itunes_results(raw, limit=None):
             album=track.get("collectionName"),
             art_url=_itunes_art(track.get("artworkUrl100")),
             shazam_url=None,
-            apple_url=track.get("trackViewUrl"),
+            apple_url=_http_url(track.get("trackViewUrl")),
             spotify_url=None,
         ))
         if limit and len(matches) >= limit:

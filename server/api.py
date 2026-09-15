@@ -73,6 +73,19 @@ async def _json_body(request: Request):
         raise HTTPException(status_code=400, detail="request body must be valid JSON")
 
 
+def _gallery_query_or_400(run):
+    """Run a Gallery-filter evaluation, turning its ValueError into a 400.
+
+    Filter errors (a negative-only search, an empty field term, a stale
+    cursor) surface when the SQL is built, not when the query string is
+    parsed, so every site that *executes* a Gallery query needs this.
+    """
+    try:
+        return run()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
 async def _exclusive(request: Request, operation):
     """Run exclusive maintenance (may take minutes, e.g. imports) on a worker thread.
 
@@ -175,7 +188,7 @@ def _smart(request, preset_id, scope):
 def smart_collection_summary(request: Request, preset_id: int):
     conn, preset, chosen = _smart(request, preset_id, "feed")
     try:
-        ids = chosen.ids(conn)
+        ids = _gallery_query_or_400(lambda: chosen.ids(conn))
         return {
             "id": preset["id"], "name": preset["name"],
             "count": len(ids), "first_item_id": ids[0] if ids else None,
@@ -192,12 +205,13 @@ def smart_collection_items(
     conn, preset, chosen = _smart(request, preset_id, "feed" if feed else "page")
     try:
         if feed:
-            return {"id": preset["id"], "name": preset["name"], "item_ids": chosen.ids(conn)}
+            item_ids = _gallery_query_or_400(lambda: chosen.ids(conn))
+            return {"id": preset["id"], "name": preset["name"], "item_ids": item_ids}
         query = dict(chosen.query)
         query["limit"] = max(1, min(limit, 100))
         if cursor is not None:
             query["cursor"] = cursor
-        page = _archive_items(request, conn).page(**query)
+        page = _gallery_query_or_400(lambda: _archive_items(request, conn).page(**query))
         return {"id": preset["id"], "name": preset["name"], **page}
     finally:
         conn.close()
@@ -207,7 +221,7 @@ def smart_collection_items(
 def smart_collection_inventory(request: Request, preset_id: int):
     conn, preset, chosen = _smart(request, preset_id, "feed")
     try:
-        ids = chosen.ids(conn)
+        ids = _gallery_query_or_400(lambda: chosen.ids(conn))
         rows = store.get_items(conn, ids)
         ordered = [rows[item_id] for item_id in ids if item_id in rows]
         headers = {"Content-Disposition": f'attachment; filename="smart-collection-{preset_id}.csv"'}
@@ -230,9 +244,15 @@ async def smart_collection_mark(request: Request, preset_id: int):
     def operation():
         conn, _preset, chosen = _smart(request, preset_id, "set")
         try:
+            # Same prefix as _smart so the UI wording stays consistent; the
+            # HTTPException travels back through the worker thread unchanged.
+            try:
+                ids = chosen.ids(conn)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=f"Smart collection is invalid: {error}")
             return curation.mark(
                 conn, _download_dir(request), body["action"], "ids",
-                chosen.ids(conn), dry_run=dry_run,
+                ids, dry_run=dry_run,
             )
         finally:
             conn.close()
@@ -291,7 +311,7 @@ def feed_ids(request: Request):
             raise HTTPException(status_code=400, detail="preset must be an integer")
         conn, _preset, chosen = _smart(request, preset_id, "feed")
         try:
-            return chosen.ids(conn)
+            return _gallery_query_or_400(lambda: chosen.ids(conn))
         finally:
             conn.close()
     try:
@@ -305,7 +325,9 @@ def feed_ids(request: Request):
         raise HTTPException(status_code=400, detail=str(e))
     conn = _open_read(request)
     try:
-        return selection.ArchiveSelection.gallery(query, scope="feed").ids(conn)
+        return _gallery_query_or_400(
+            lambda: selection.ArchiveSelection.gallery(query, scope="feed").ids(conn)
+        )
     finally:
         conn.close()
 
@@ -822,7 +844,7 @@ async def repair_archive_coverage(request: Request):
             raise HTTPException(status_code=400, detail=str(error))
         conn = _open(request)
         try:
-            item_ids = store.item_ids_matching(conn, **query)
+            item_ids = _gallery_query_or_400(lambda: store.item_ids_matching(conn, **query))
         finally:
             conn.close()
     started = request.app.state.jobs.start(
@@ -1685,7 +1707,20 @@ def run_history(request: Request, limit: int = 20):
 
 
 @router.get("/verify")
+def verify_archive_report(request: Request):
+    """Read-only integrity report; never persists flags (GETs are exempt
+    from the browser-intent guard, so a GET must not write)."""
+    conn = _open_read(request)
+    try:
+        return verify.verify_archive(conn, _download_dir(request), record=False)
+    finally:
+        conn.close()
+
+
+@router.post("/verify")
 def verify_archive(request: Request):
+    """Run the integrity scan and persist ``archive_missing`` for the
+    Gallery recovery filter. POST so the CSRF guard applies."""
     conn = _open(request)
     try:
         return verify.verify_archive(conn, _download_dir(request))

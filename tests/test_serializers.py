@@ -225,6 +225,9 @@ def test_parse_page_query_rejects_unknown_params_and_bad_values():
         {"bogus": "1"},                # unknown param
         {"limit": "abc"},              # bad int
         {"min_duration": "fast"},      # bad float
+        {"min_duration": "nan"},       # float() accepts it; every comparison is false
+        {"max_duration": "inf"},       # same
+        {"min_duration": "-1"},        # durations are never negative
         {"assets": "sideways"},        # unknown assets value
         {"index_state": "weird"},      # unknown index state
         {"order": "upside_down"},      # unknown order
@@ -239,6 +242,7 @@ def test_parse_page_query_rejects_unknown_params_and_bad_values():
             pass
         else:
             raise AssertionError(f"{params} must be rejected")
+    assert parse_page_query({"min_duration": "2.5"})["min_duration"] == 2.5
 
 
 def test_parse_page_query_maps_the_offloaded_filter():
@@ -305,6 +309,13 @@ def test_parse_song_match_requires_string_fields():
     assert fields["artist"] == "The Weeknd"
     assert fields["album"] is None
 
+    # http(s) provider URLs are accepted verbatim; anything else is refused on
+    # the way in because the value is later rendered as an <a href>.
+    fields = parse_song_match({"title": "x", "spotify_url": "https://open.spotify.com/track/1",
+                               "apple_url": "HTTP://music.apple.com/x"})
+    assert fields["spotify_url"] == "https://open.spotify.com/track/1"
+    assert fields["apple_url"] == "HTTP://music.apple.com/x"
+
     for bad in (
         None,                                    # not an object
         {"title": ""},                           # empty title
@@ -313,6 +324,10 @@ def test_parse_song_match_requires_string_fields():
         {"title": "ok", "artist": {"x": 1}},     # non-string artist
         {"title": "ok", "key": 40522491},        # non-string key
         {"title": "ok", "spotify_url": ["x"]},   # non-string url
+        {"title": "x", "spotify_url": "javascript:alert(1)"},   # non-http scheme
+        {"title": "x", "apple_url": "data:text/html,x"},
+        {"title": "x", "shazam_url": "ftp://shazam.com/1"},
+        {"title": "x", "art_url": "javascript:alert(1)"},
     ):
         try:
             parse_song_match(bad)
@@ -450,6 +465,42 @@ def test_parse_mark_request_rejects_bad_bodies():
             pass
         else:
             raise AssertionError(f"{body} must be rejected")
+
+
+def test_page_projection_does_not_list_the_downloads_directory():
+    """Gallery pages must not pay for a full os.listdir of the media folder."""
+    from server import archive_items as module
+    conn = store.init_db(store.connect(":memory:"))
+    for item_id in (1, 2, 3):
+        store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", kind="video", status="done")
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "2.mp4"), "w").close()
+        real_listdir = module.os.listdir
+        module.os.listdir = lambda *a, **k: (_ for _ in ()).throw(AssertionError("listdir called"))
+        try:
+            page = ArchiveItems(conn, dl).page(limit=10, order="archive")
+        finally:
+            module.os.listdir = real_listdir
+    by_id = {item["id"]: item["video_url"] for item in page["items"]}
+    assert by_id == {1: None, 2: "/media/2.mp4", 3: None}
+
+
+def test_large_projection_falls_back_to_one_directory_listing():
+    from server import archive_items as module
+    conn = store.init_db(store.connect(":memory:"))
+    for item_id in range(1, module._MOVIE_LISTING_THRESHOLD + 2):
+        store.insert_item(conn, item_id, f"https://tiktok.com/{item_id}", kind="video", status="done")
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "1.mp4"), "w").close()
+        calls = []
+        real_listdir = module.os.listdir
+        module.os.listdir = lambda path: calls.append(path) or real_listdir(path)
+        try:
+            items = ArchiveItems(conn, dl).project(store.all_items(conn), include_assets=False)
+        finally:
+            module.os.listdir = real_listdir
+    assert len(calls) == 1
+    assert items[0]["video_url"] == "/media/1.mp4" and items[1]["video_url"] is None
 
 
 if __name__ == "__main__":

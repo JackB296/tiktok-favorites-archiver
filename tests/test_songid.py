@@ -108,6 +108,30 @@ def test_build_itunes_results_maps_fields_and_respects_limit():
     assert songid.build_itunes_results(None) == []
 
 
+def test_non_http_provider_urls_are_dropped_by_the_parsers():
+    # Provider URLs are rendered as anchors, so a javascript:/data: value in an
+    # upstream payload must be discarded while the rest of the match survives.
+    hostile = {
+        "key": "1", "title": "Blinding Lights", "subtitle": "The Weeknd",
+        "url": "javascript:alert(1)",
+        "hub": {"providers": [
+            {"type": "SPOTIFY", "actions": [{"uri": "data:text/html,x"}]},
+            {"type": "APPLEMUSIC", "actions": [{"uri": "https://music.apple.com/x"}]},
+        ]},
+    }
+    match = songid._track_to_match(hostile)
+    assert match.title == "Blinding Lights" and match.artist == "The Weeknd"
+    assert match.shazam_url is None
+    assert match.spotify_url is None
+    assert match.apple_url == "https://music.apple.com/x"
+
+    itunes = songid.build_itunes_results({"results": [
+        {"trackName": "Juice", "artistName": "Lizzo", "trackViewUrl": "javascript:alert(1)"},
+    ]})
+    assert itunes[0].title == "Juice"
+    assert itunes[0].apple_url is None
+
+
 def test_itunes_result_dedups_with_a_shazam_match_on_title_artist():
     # A manually-picked Apple result and a Shazam auto-match of the same track
     # collapse onto one song row (both key-less Apple picks use title+artist).

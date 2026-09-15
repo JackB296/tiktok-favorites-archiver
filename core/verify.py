@@ -20,8 +20,13 @@ def _summarize(values):
     return {"count": len(values), "examples": values[:_EXAMPLE_LIMIT]}
 
 
-def verify_archive(conn, download_dir):
-    """Compare Archive items against the download directory."""
+def verify_archive(conn, download_dir, *, record=True):
+    """Compare Archive items against the download directory.
+
+    ``record=False`` produces the same report without persisting
+    ``archive_missing`` — used by the read-only GET route so a plain GET
+    never writes (GETs are exempt from the browser-intent guard).
+    """
     items = store.all_items(conn)
     files = os.listdir(download_dir) if os.path.isdir(download_dir) else []
     movies = set(layout.finished_movie_ids(files))
@@ -31,7 +36,8 @@ def verify_archive(conn, download_dir):
         row["id"] for row in items
         if row["status"] == "done" and not row["offloaded"] and row["id"] not in movies
     )
-    store.record_archive_file_health(conn, missing)
+    if record:
+        store.record_archive_file_health(conn, missing)
     orphans = [f"{n}.mp4" for n in sorted(movies - known_ids)]
     leftovers = sorted(name for name in files if name.endswith(layout.TEMP_SUFFIXES))
 

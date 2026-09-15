@@ -3,6 +3,8 @@ import json
 import logging
 import re
 
+from core import links
+
 
 class ExportError(ValueError):
     """The export file exists but is not a readable TikTok export."""
@@ -45,13 +47,24 @@ def _saved_list(data, kind):
 
 def _parse_entries(entries, kind):
     try:
-        return [
+        parsed = [
             (re.sub(r"tiktokv\.com", "tiktok.com", item["Link"]), item.get("Date"))
             for item in entries
             if isinstance(item, dict) and "Link" in item
-        ][::-1]
+        ]
     except TypeError as exc:
         raise ExportError(f"{kind} entries must carry string links") from exc
+    # Only TikTok links may reach the resolvers: a crafted export could
+    # otherwise aim yt-dlp at an internal host. A stray malformed entry must
+    # not sink the whole import, so rejects are counted and logged, not raised.
+    accepted = [(link, date) for link, date in parsed if links.is_tiktok_link(link)]
+    rejected = len(parsed) - len(accepted)
+    if rejected:
+        logging.warning(
+            f"Skipped {rejected} {kind} entr{'y' if rejected == 1 else 'ies'} "
+            "whose link is not a TikTok URL"
+        )
+    return accepted[::-1]
 
 
 def _combine(oldest_first_lists):

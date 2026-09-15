@@ -1,12 +1,13 @@
 """Tests for durable Archive-media inspection."""
 import json
 import os
+import subprocess
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import media_index
+from core import config, media_index
 
 
 class _Result:
@@ -162,6 +163,37 @@ def test_make_poster_builds_a_single_frame_jpeg_command():
     assert cmd[cmd.index("-c:v") + 1] == "mjpeg"   # temp-suffix target needs explicit codec/muxer
     assert cmd[-1] == "/x/1.jpg.tmp"
     assert kwargs.get("check") is True
+
+
+def test_media_tools_run_with_a_timeout():
+    seen = []
+
+    def runner(cmd, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        return _ProbeResult(stdout='{"streams": [], "format": {}}')
+
+    try:
+        media_index.inspect_media("x.mp4", runner=runner)
+    except Exception:
+        pass  # an empty probe is rejected downstream; the kwarg is what matters
+    try:
+        media_index.inspect_audio("x.mp3", runner=runner)
+    except Exception:
+        pass
+    media_index.measure_max_volume_db("x.mp4", runner=runner)
+    media_index.has_audio_stream("x.mp4", runner=runner)
+    media_index.make_thumbnail("x.mp4", "t.webp", 480, runner=runner)
+    media_index.make_poster("x.mp4", "p.jpg.tmp", runner=runner)
+    media_index.extract_clip("x.mp4", "c.wav", runner=runner)
+    assert len(seen) == 7
+    assert all(t == config.MEDIA_TOOL_TIMEOUT for t in seen)
+
+
+def test_has_audio_stream_is_false_when_the_probe_times_out():
+    def hanging_runner(cmd, **_k):
+        raise subprocess.TimeoutExpired(cmd, 1)
+
+    assert media_index.has_audio_stream("/x/1.mp4", runner=hanging_runner) is False
 
 
 if __name__ == "__main__":

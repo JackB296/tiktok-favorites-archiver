@@ -115,7 +115,10 @@ def _embed_one(download_dir, item, runner, validate):
         )
         os.close(fd)
         os.unlink(temporary)
-        runner(_command(movie, temporary, tags, poster, subtitles), check=True, capture_output=True)
+        runner(
+            _command(movie, temporary, tags, poster, subtitles),
+            check=True, capture_output=True, timeout=config.MEDIA_TOOL_TIMEOUT,
+        )
         if not os.path.isfile(temporary) or not validate(temporary):
             raise ValueError("embedded MP4 did not pass media validation")
         os.replace(temporary, movie)

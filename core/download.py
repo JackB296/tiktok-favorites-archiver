@@ -17,6 +17,10 @@ _sleep = time.sleep  # indirection so tests can observe retry pacing without wai
 _RETRYABLE_STATUSES = frozenset({408, 429})
 
 
+class _TooLarge(Exception):
+    """The stream passed ``config.DOWNLOAD_MAX_BYTES``; retrying cannot help."""
+
+
 def _retry_wait(response, attempt):
     """Seconds to wait before the next retry: honor Retry-After, else back off."""
     header = getattr(response, "headers", {}).get("Retry-After") if response is not None else None
@@ -35,8 +39,12 @@ def download_file(url, filename, max_retries=5):
             response = requests.get(url, stream=True, timeout=config.REQUEST_TIMEOUT)
             try:
                 response.raise_for_status()
+                received = 0
                 with open(tmp_filename, "wb") as f:
                     for chunk in response.iter_content(chunk_size=config.DOWNLOAD_CHUNK_SIZE):
+                        received += len(chunk)
+                        if received > config.DOWNLOAD_MAX_BYTES:
+                            raise _TooLarge(received)
                         f.write(chunk)
             finally:
                 response.close()
@@ -60,6 +68,9 @@ def download_file(url, filename, max_retries=5):
         except (ChunkedEncodingError, ConnectionError, Timeout) as e:
             logging.error(f"Error downloading {url}: {e}. Retrying {attempt + 1}/{max_retries}...")
             _sleep(config.RETRY_DELAY)
+        except _TooLarge:
+            logging.error(f"Aborted {url}: exceeded DOWNLOAD_MAX_BYTES ({config.DOWNLOAD_MAX_BYTES})")
+            break  # the same file would be too large again; no retry
         except Exception as e:
             logging.exception(f"Failed to download {url} due to an unexpected error: {e}")
             break

@@ -4,8 +4,14 @@ The module hides SQLite rows and archive-file layout behind ``page`` and
 ``get``. Routes receive only the public Favorite shape consumed by the web app.
 """
 import os
+import re
 
 from core import annotations, discovery, layout, selection, store
+
+# Below this many rows a per-row os.path.exists is far cheaper than listing
+# the whole downloads directory (~7 entries per archived favorite; 60k+
+# entries on a large archive, on a bind mount). Above it, one listing wins.
+_MOVIE_LISTING_THRESHOLD = 200
 
 _GALLERY_PRESET_FIELDS = {
     "search", "searchScope", "kind", "status", "order", "minDuration", "maxDuration",
@@ -158,6 +164,10 @@ SAVED_LIST_RESOURCES = {
 
 
 _SONG_MATCH_FIELDS = ("key", "artist", "album", "art_url", "shazam_url", "apple_url", "spotify_url")
+# URL fields are stored verbatim and later rendered as <a href> / <img src>, so
+# a javascript: or data: value must be refused here, not just hidden at render.
+_SONG_URL_FIELDS = ("shazam_url", "apple_url", "spotify_url", "art_url")
+_HTTP_URL = re.compile(r"^https?://", re.I)
 
 
 def parse_song_match(body):
@@ -165,7 +175,7 @@ def parse_song_match(body):
 
     Every field must be a string (or absent); a non-string title once reached
     ``dedup_key``'s ``.strip()`` and 500'd, and non-string metadata reached
-    sqlite as un-bindable values.
+    sqlite as un-bindable values. URL fields must additionally be http(s).
     """
     if not isinstance(body, dict):
         raise ValueError("song must be an object")
@@ -177,6 +187,8 @@ def parse_song_match(body):
         value = body.get(field)
         if value is not None and not isinstance(value, str):
             raise ValueError(f"{field} must be a string")
+        if field in _SONG_URL_FIELDS and value is not None and not _HTTP_URL.match(value):
+            raise ValueError(f"{field} must be an http(s) URL")
         fields[field] = value
     return fields
 
@@ -210,6 +222,15 @@ def _nonnegative_int(value):
     return parsed
 
 
+def _finite_nonnegative_float(value):
+    number = float(value)
+    # float() accepts "nan"/"inf"; either makes every duration comparison false
+    # and returns an empty Gallery with no error.
+    if number != number or number in (float("inf"), float("-inf")) or number < 0:
+        raise ValueError("must be a finite non-negative number")
+    return number
+
+
 def _boolean(value):
     normalized = value.lower()
     if normalized in ("1", "true", "yes", "on"):
@@ -236,8 +257,8 @@ _PAGE_PARAMS = {
     "cursor": ("cursor", int),
     "order": ("order", str),
     "seed": ("seed", int),
-    "min_duration": ("min_duration", float),
-    "max_duration": ("max_duration", float),
+    "min_duration": ("min_duration", _finite_nonnegative_float),
+    "max_duration": ("max_duration", _finite_nonnegative_float),
     "min_size": ("min_size", int),
     "max_size": ("max_size", int),
     "min_width": ("min_width", int),
@@ -374,10 +395,14 @@ class ArchiveItems:
         return self._public_batch(rows, include_assets=include_assets)
 
     def _public_batch(self, rows, include_assets=True):
-        """Project many rows with one directory listing and one song query
-        instead of a per-row ``os.path.exists`` and ``get_song`` (N+1)."""
-        files = os.listdir(self._download_dir) if os.path.isdir(self._download_dir) else []
-        movies = set(layout.finished_movie_ids(files))
+        """Project many rows with one song/identity/annotation query each.
+        Movie presence is checked per row (``os.path.exists``) for normal
+        page-sized batches and via one directory listing only for large
+        projections."""
+        movies = None
+        if len(rows) > _MOVIE_LISTING_THRESHOLD:
+            files = os.listdir(self._download_dir) if os.path.isdir(self._download_dir) else []
+            movies = set(layout.finished_movie_ids(files))
         songs = store.get_songs(self._conn, [row["song_id"] for row in rows if row["song_id"]])
         identities = discovery.identities_for_items(
             self._conn, [row["id"] for row in rows],

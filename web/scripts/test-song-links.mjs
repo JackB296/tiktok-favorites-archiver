@@ -32,6 +32,13 @@ assert.equal(
 );
 assert.equal(links.primarySongUrl(bare), "https://open.spotify.com/search/Some%20Viral%20Sound");
 
+// Non-http(s) provider URLs (a hostile upstream or crafted manual attach) never
+// become an href: they fall through to the next safe link or the search URL.
+const hostile = { ...withUrls, spotify_url: "javascript:alert(1)", apple_url: "data:text/html,x", shazam_url: "https://www.shazam.com/track/1" };
+assert.equal(links.primarySongUrl(hostile), "https://www.shazam.com/track/1");
+assert.equal(links.spotifyUrl(hostile), "https://open.spotify.com/search/Blinding%20Lights%20The%20Weeknd");
+assert.equal(links.appleMusicUrl(hostile), "https://music.apple.com/search?term=Blinding%20Lights%20The%20Weeknd");
+
 // Label formatting.
 assert.equal(links.songLabel(withUrls), "Blinding Lights · The Weeknd");
 assert.equal(links.songLabel(bare), "Some Viral Sound");

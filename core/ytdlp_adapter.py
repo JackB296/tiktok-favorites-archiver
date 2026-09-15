@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import threading
 
+from core import config, links
+
 
 _POST_ID = re.compile(r"/(?:video|photo)/(\d+)")
 _SHARE_ID = re.compile(r"/share/(?:video|photo)/(\d+)")
@@ -83,10 +85,19 @@ def suppress_accept_encoding():
 
 
 def canonical_post_url(link):
-    match = _POST_ID.search(link or "") or _SHARE_ID.search(link or "")
+    """The URL to hand yt-dlp for ``link``, or ``None`` when it is not TikTok's.
+
+    The host is checked before the id regex so a ``/video/<id>`` path on some
+    other host is never rewritten into a TikTok URL; a non-TikTok link must
+    never reach yt-dlp's generic extractor, which would fetch it from inside
+    the container network.
+    """
+    if not links.is_tiktok_link(link):
+        return None
+    match = _POST_ID.search(link) or _SHARE_ID.search(link)
     if match:
         return f"https://www.tiktok.com/@x/video/{match.group(1)}"
-    return link
+    return link  # a short link (vm.tiktok.com/...) yt-dlp can expand itself
 
 
 def _comment(raw, parent=None):
@@ -194,13 +205,14 @@ def extract_post(link, include_comments=True, ydl_class=None):
         "retries": 3,
         "getcomments": bool(include_comments),
     }
+    url = canonical_post_url(link)
+    if url is None:
+        return None  # non-TikTok link: never hand it to the generic extractor
     if use_worker_instance:
-        info = _worker_ydl(ydl_class, options).extract_info(
-            canonical_post_url(link), download=False,
-        )
+        info = _worker_ydl(ydl_class, options).extract_info(url, download=False)
     else:
         with ydl_class(options) as ydl:
-            info = ydl.extract_info(canonical_post_url(link), download=False)
+            info = ydl.extract_info(url, download=False)
     if include_comments and info and not info.get("comments") and info.get("id"):
         try:
             info["comments"] = extract_comments(info["id"])
@@ -239,6 +251,7 @@ def _repair_silent_video(video_path, audio_path, output_path, runner):
         ],
         check=True,
         capture_output=True,
+        timeout=config.MEDIA_TOOL_TIMEOUT,
     )
 
 
@@ -252,6 +265,9 @@ def download_best_video(link, destination, ydl_class=None, inspect=None,
     if inspect is None:
         from core.media_index import inspect_media
         inspect = inspect_media
+    url = canonical_post_url(link)
+    if url is None:
+        return False  # non-TikTok link: never hand it to the generic extractor
     parent = os.path.dirname(os.path.abspath(destination))
     os.makedirs(parent, exist_ok=True)
     temporary_dir = tempfile.mkdtemp(prefix="ytdlp-", dir=parent)
@@ -284,7 +300,7 @@ def download_best_video(link, destination, ydl_class=None, inspect=None,
             }
             try:
                 with ydl_class(options) as ydl:
-                    ydl.download([canonical_post_url(link)])
+                    ydl.download([url])
             except Exception:
                 continue
             candidates = [
@@ -356,6 +372,9 @@ def download_audio(link, destination, ydl_class=None):
         from yt_dlp import YoutubeDL
         suppress_accept_encoding()
         ydl_class = YoutubeDL
+    url = canonical_post_url(link)
+    if url is None:
+        return False  # non-TikTok link: never hand it to the generic extractor
     parent = os.path.dirname(os.path.abspath(destination))
     os.makedirs(parent, exist_ok=True)
     temporary_dir = tempfile.mkdtemp(prefix="ytdlp-audio-", dir=parent)
@@ -377,7 +396,7 @@ def download_audio(link, destination, ydl_class=None):
         }
         try:
             with ydl_class(options) as ydl:
-                ydl.download([canonical_post_url(link)])
+                ydl.download([url])
         except Exception:
             return False
         produced = [

@@ -87,6 +87,9 @@ assert.deepEqual(lib.filtersToPageQuery(empty, 1), {
 assert.equal(lib.filtersToPageQuery({ ...empty, order: "random" }, 777).seed, 777);
 assert.equal(lib.filtersToPageQuery({ ...empty, minAttempts: "0" }, 1).min_attempts, 0);
 assert.equal(lib.filtersToPageQuery({ ...empty, minDuration: " " }, 1).min_duration, undefined);
+// A typo that Number() turns into NaN is dropped, not sent as a 400-bound value.
+assert.equal(lib.filtersToPageQuery({ ...empty, minDuration: "1.2.3" }, 0).min_duration, undefined);
+assert.equal(lib.filtersToPageQuery({ ...empty, maxDuration: "Infinity" }, 0).max_duration, undefined);
 // Fractional MB inputs land as whole byte counts (the server int()s them, so
 // "0.1" MB as 104857.6 bytes would be a 400).
 assert.equal(lib.filtersToPageQuery({ ...empty, minSize: "0.1" }, 1).min_size, 104858);

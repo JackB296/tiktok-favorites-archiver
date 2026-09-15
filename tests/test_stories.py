@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import layout, stories, story_render, store
+from core import config, layout, stories, story_render, store
 
 
 def _db():
@@ -257,6 +257,17 @@ def test_render_aborts_without_orphan_if_story_is_deleted():
             raise AssertionError("deleted story render should abort")
 
         assert not os.path.exists(layout.story_movie(downloads, story["id"]))
+
+
+def test_story_render_runs_ffmpeg_with_a_timeout():
+    seen = []
+
+    def run(command, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    story_render._run(["ffmpeg"], run)
+    assert seen == [config.MEDIA_TOOL_TIMEOUT]
 
 
 if __name__ == "__main__":

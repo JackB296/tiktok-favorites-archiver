@@ -11,7 +11,7 @@ import os
 import subprocess
 from collections import namedtuple
 
-from core import layout
+from core import config, layout
 
 
 MediaIndex = namedtuple(
@@ -54,6 +54,7 @@ def measure_max_volume_db(path, runner=subprocess.run):
          "-af", "volumedetect", "-f", "null", "-"],
         capture_output=True,
         text=True,
+        timeout=config.MEDIA_TOOL_TIMEOUT,
     )
     for line in (getattr(result, "stderr", "") or "").splitlines():
         if "max_volume:" in line:
@@ -75,6 +76,7 @@ def inspect_media(path, runner=subprocess.run):
         check=True,
         capture_output=True,
         text=True,
+        timeout=config.MEDIA_TOOL_TIMEOUT,
     )
     data = json.loads(result.stdout)
     video = next((stream for stream in data.get("streams", []) if stream.get("codec_type") == "video"), None)
@@ -116,6 +118,7 @@ def inspect_audio(path, runner=subprocess.run):
         check=True,
         capture_output=True,
         text=True,
+        timeout=config.MEDIA_TOOL_TIMEOUT,
     )
     data = json.loads(result.stdout)
     audio = next(
@@ -149,6 +152,7 @@ def make_thumbnail(source, target, width, runner=subprocess.run):
         check=True,
         capture_output=True,
         text=True,
+        timeout=config.MEDIA_TOOL_TIMEOUT,
     )
 
 
@@ -163,6 +167,7 @@ def make_poster(source, target, runner=subprocess.run):
         check=True,
         capture_output=True,
         text=True,
+        timeout=config.MEDIA_TOOL_TIMEOUT,
     )
 
 
@@ -189,6 +194,7 @@ def extract_clip(source, target, start=CLIP_START, seconds=CLIP_SECONDS, runner=
         check=True,
         capture_output=True,
         text=True,
+        timeout=config.MEDIA_TOOL_TIMEOUT,
     )
     return target
 
@@ -204,8 +210,11 @@ def has_audio_stream(path, runner=subprocess.run):
             ["ffprobe", "-v", "error", "-select_streams", "a",
              "-show_entries", "stream=codec_type", "-of", "json", path],
             capture_output=True, text=True, check=False,
+            timeout=config.MEDIA_TOOL_TIMEOUT,
         )
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
+        # TimeoutExpired is a SubprocessError, not an OSError; a probe that
+        # hangs on a crafted upload must read as "no audio" like any failure.
         return False
     if result.returncode != 0:
         return False

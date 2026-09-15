@@ -1,16 +1,15 @@
-const suites = [
-  "test-virtual-grid.mjs", "test-viewer-shortcuts.mjs", "test-ui-behavior.mjs",
-  "test-feed-items.mjs", "test-loading-presentation.mjs", "test-legacy-bootstrap.mjs",
-  "test-media-layout.mjs", "test-song-links.mjs", "test-gallery-filters.mjs",
-  "test-saved-list.mjs", "test-feed-window.mjs", "test-feed-sources.mjs",
-  "test-channel-playback.mjs", "test-stats-presentation.mjs", "test-storage-presentation.mjs",
-  "test-snapshot-presentation.mjs", "test-smart-collection-presentation.mjs",
-  "test-schedule-presentation.mjs", "test-discovery-presentation.mjs",
-  "test-lens-presentation.mjs", "test-history-presentation.mjs",
-  "test-memory-presentation.mjs", "test-navigation.mjs",
-  "test-comments-presentation.mjs",
-  "test-auto-advance.mjs", "test-panel-layout.mjs",
-];
+import { readdir } from "node:fs/promises";
+import { basename } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Every test-*.mjs beside this runner is a suite. Discovering them here means
+// a new file cannot be forgotten in a hand-kept list and silently never run.
+// The runner excludes itself by its own filename rather than a hardcoded name.
+const here = new URL("./", import.meta.url);
+const self = basename(fileURLToPath(import.meta.url));
+const suites = (await readdir(here))
+  .filter((name) => /^test-.*\.mjs$/.test(name) && name !== self)
+  .sort();
 
 for (const suite of suites) {
   await import(`./${suite}`);

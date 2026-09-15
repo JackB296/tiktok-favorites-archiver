@@ -19,3 +19,10 @@ web/dist
 docs/
 tasks/
 plans/
+
+# never copied into the image; excluding them keeps the build context small
+screenshots/
+tests/
+.github/
+templates/
+*.md

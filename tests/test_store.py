@@ -911,6 +911,82 @@ def test_init_db_upgrades_a_pre_attempt_count_database():
     assert [r["id"] for r in store.page_items(conn)] == [1]
 
 
+def test_exclude_keeps_items_that_have_no_caption_or_author():
+    conn = _db()
+    store.insert_item(conn, 1, "no-metadata", status="pending")  # caption/author NULL
+    store.insert_item(conn, 2, "dog-post", status="done")
+    store.set_metadata(conn, 2, "a dog video", "dan")
+    # NOT (NULL LIKE x) is NULL in SQLite; the un-enriched row must still show.
+    assert sorted(r["id"] for r in store.page_items(conn, exclude=["dog"])) == [1]
+    assert sorted(r["id"] for r in store.page_items(conn, include=["dog"])) == [2]
+
+
+def test_include_and_exclude_treat_percent_and_underscore_literally():
+    conn = _db()
+    store.insert_item(conn, 1, "a", status="done")
+    store.set_metadata(conn, 1, "snake_case tips", "x")
+    store.insert_item(conn, 2, "b", status="done")
+    store.set_metadata(conn, 2, "snakeXcase tips", "y")
+    store.insert_item(conn, 3, "c", status="done")
+    store.set_metadata(conn, 3, "give 100% today", "z")
+    assert [r["id"] for r in store.page_items(conn, include=["snake_case"])] == [1]
+    assert [r["id"] for r in store.page_items(conn, include=["100%"])] == [3]
+    assert [r["id"] for r in store.page_items(conn, include=["_"])] == [1]
+    assert sorted(r["id"] for r in store.page_items(conn, exclude=["_"])) == [2, 3]
+    # The creator: field shares the same escaping.
+    assert [r["id"] for r in store.page_items(conn, query="creator:x")] == [1]
+
+
+def test_field_search_without_searchable_words_is_a_validation_error():
+    conn = _db()
+    for query in ("comment:###", "song:!!!", "transcript:'\"'", "ocr:###", "-sponsored"):
+        try:
+            store.page_items(conn, query=query)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{query!r} should be rejected")
+
+
+def test_comment_entries_are_replaced_in_one_batch_with_identical_rows():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/a", status="done")
+    comments = [
+        {"id": "a", "text": "first", "author": "ann", "like_count": 3, "timestamp": 1700000000},
+        "not-a-dict",
+        {"id": "b", "text": None, "parent": "a", "author_username": "bob"},
+        {"id": "c", "text": "x" * 25000, "like_count": "nope", "timestamp": "nope"},
+    ]
+    snapshot_id = store.record_comment_snapshot(conn, 1, comments)
+    rows = conn.execute(
+        "SELECT comment_key, parent_key, author, author_username, length(text), posted_at, like_count "
+        "FROM comment_entry WHERE item_id = 1 ORDER BY id"
+    ).fetchall()
+    # _comment_identity prefixes the id field, so keys are "id:<id>".
+    assert [tuple(r) for r in rows] == [
+        ("id:a", None, "ann", None, 5, 1700000000, 3),
+        ("id:b", "a", None, "bob", 0, None, None),
+        ("id:c", None, None, None, 20000, None, None),
+    ]
+    # Each snapshot is history, so recording again appends a second snapshot
+    # with its own rows rather than touching the first one's.
+    second_id = store.record_comment_snapshot(conn, 1, comments[:1])
+    assert second_id != snapshot_id
+    assert conn.execute("SELECT COUNT(*) FROM comment_entry WHERE item_id = 1").fetchone()[0] == 4
+    # Rewriting one snapshot's entries replaces them, never duplicates.
+    store._replace_comment_entries(conn, snapshot_id, 1, comments[:1])
+    conn.commit()
+    assert [tuple(r) for r in conn.execute(
+        "SELECT snapshot_id, comment_key FROM comment_entry WHERE item_id = 1 ORDER BY id"
+    ).fetchall()] == [(second_id, "id:a"), (snapshot_id, "id:a")]
+    # A snapshot with no valid comments ends up empty (executemany over []).
+    store._replace_comment_entries(conn, snapshot_id, 1, ["not-a-dict"])
+    conn.commit()
+    assert conn.execute(
+        "SELECT COUNT(*) FROM comment_entry WHERE snapshot_id = ?", (snapshot_id,)
+    ).fetchone()[0] == 0
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

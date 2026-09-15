@@ -552,7 +552,7 @@ export function Dashboard() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-ink">Archive integrity</h2>
-              <p className="mt-1 text-sm text-ink-dim">Checks that every finished favorite has its video on disk and reports strays and leftover temp files. Read-only.</p>
+              <p className="mt-1 text-sm text-ink-dim">Checks that every finished favorite has its video on disk and reports strays and leftover temp files. Records which favorites are missing so the Gallery's Recovery inbox can show them.</p>
             </div>
             <Button variant="ghost" onClick={runVerify}>
               <Question size={16} /> Verify archive

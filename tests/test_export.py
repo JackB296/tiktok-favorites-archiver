@@ -46,10 +46,25 @@ def test_load_all_favorites_skips_items_without_link():
 def test_normalization_rewrites_only_literal_tiktokv_domain():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "e.json")
-        _make_export(p, ["https://www.tiktokv.com/a", "https://www.tiktokvXcom/b"])
+        _make_export(p, ["https://www.tiktokv.com/a", "https://www.tiktok.com/tiktokvXcom/b"])
         assert [link for link, _date in export.load_all_favorites(p)] == [
-            "https://www.tiktokvXcom/b",
+            "https://www.tiktok.com/tiktokvXcom/b",
             "https://www.tiktok.com/a",
+        ]
+
+
+def test_non_tiktok_links_are_dropped_from_the_export():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "e.json")
+        _make_export(p, [
+            "http://192.168.1.1:8006/api/",
+            "https://www.tiktok.com/@a/video/1",
+            "file:///etc/passwd",
+            "https://vm.tiktok.com/ZMabc/",
+        ])
+        assert [link for link, _ in export.load_all_favorites(p)] == [
+            "https://vm.tiktok.com/ZMabc/",
+            "https://www.tiktok.com/@a/video/1",
         ]
 
 

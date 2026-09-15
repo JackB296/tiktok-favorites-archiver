@@ -1,5 +1,7 @@
 """Tests for resumable Archive Gallery indexing."""
+import functools
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -158,6 +160,33 @@ def test_parallel_indexing_keeps_workers_busy_behind_a_slow_item():
 
     assert result == {"indexed": 8, "failed": 0}
     assert elapsed < 0.26
+
+
+def test_probe_timeout_is_recorded_like_any_failed_probe():
+    """A hung ffprobe (TimeoutExpired) must land on the same index_error path a
+    crashed one (CalledProcessError) does, instead of escaping the worker."""
+    def outcome(error):
+        conn = store.init_db(store.connect(":memory:"))
+        store.insert_item(conn, 1, "link-1", status="done")
+
+        def runner(cmd, **_kwargs):
+            raise error
+
+        inspect = functools.partial(
+            media_index.index_media,
+            inspect=lambda path: media_index.inspect_media(path, runner=runner),
+        )
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "1.mp4"), "wb") as f:
+                f.write(b"movie")
+            result = indexer.index_pending_items(conn, d, inspect=inspect)
+        return result, store.get_item(conn, 1)["index_error"]
+
+    timed_out = outcome(subprocess.TimeoutExpired(["ffprobe"], 1))
+    crashed = outcome(subprocess.CalledProcessError(1, ["ffprobe"]))
+    assert timed_out[0] == crashed[0] == {"indexed": 0, "failed": 1}
+    assert timed_out[1] and "timed out" in timed_out[1]
+    assert crashed[1]
 
 
 if __name__ == "__main__":

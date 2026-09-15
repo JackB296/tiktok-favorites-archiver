@@ -5,6 +5,10 @@
 # This pulls the prebuilt app image from GHCR. To build from source instead
 # (e.g. you're developing, or you want to audit what you run):
 #   docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
+#
+# Personal overrides (your LAN IP in ALLOWED_HOSTS, a "8080:8080" mapping,
+# extra mounts) belong in docker-compose.override.yml, which compose merges
+# automatically and which is gitignored — never edit the committed defaults.
 services:
   cobalt:
     # Official Cobalt API image. Check https://github.com/imputnet/cobalt
@@ -91,18 +95,25 @@ services:
       #   ALLOWED_HOSTS: "nas.local"                      # LAN hostname
       #   ALLOWED_HOSTS: "machine.tailnet-name.ts.net"    # Tailscale MagicDNS
       #   ALLOWED_HOSTS: "192.168.1.20,archive.home.lan"  # IP + reverse proxy
-      ALLOWED_HOSTS: "192.168.4.49"
+      ALLOWED_HOSTS: ""
     ports:
       # Bound to localhost: the app has no authentication, so out of the box it
       # is not reachable from the rest of the network. (Plex reads ./downloads
       # from disk directly and is unaffected.)
       #
       # Tailscale users don't need to change this: `tailscale serve` proxies to
-      # localhost. To expose the app on your LAN instead, replace the line with
-      #   - "8080:8080"
-      # and set ALLOWED_HOSTS above — everyone on the network can then reach
-      # your archive, so only do that on a network you trust.
-      - "8080:8080"
+      # localhost. To expose the app on your LAN instead, add a
+      # docker-compose.override.yml (gitignored) with
+      #   services:
+      #     app:
+      #       environment:
+      #         ALLOWED_HOSTS: "192.168.1.20"
+      #       ports: !override
+      #         - "8080:8080"
+      # The !override tag matters: without it Compose merges the two ports
+      # lists and binds both 127.0.0.1 and 0.0.0.0. Everyone on the network can
+      # then reach your archive, so only do that on a network you trust.
+      - "127.0.0.1:8080:8080"
     volumes:
       # Media lands here on the host — point Plex at ./downloads.
       - ./downloads:/app/downloads

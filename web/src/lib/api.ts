@@ -37,6 +37,57 @@ export type OffloadSuggestion = {
   range_already_offloaded: number;
 };
 
+/** Open the SSE stream and re-open it when the browser gives up on it.
+ *
+ * EventSource retries on its own after a network drop, but a non-2xx reply
+ * or a proxy that closes the stream fails it permanently (readyState
+ * CLOSED). Without this the progress UI silently freezes until a reload. */
+export function subscribeEvents(
+  onEvent: (e: ProgressEvent) => void,
+  makeSource: (url: string) => EventSource = (url) => new EventSource(url),
+  schedule: (fn: () => void, ms: number) => unknown = (fn, ms) => setTimeout(fn, ms),
+): () => void {
+  // EventSource.CLOSED is the constant 2. Tests inject a fake `makeSource` and
+  // run under Node, where the EventSource global is undefined, so compare
+  // against the numeric value rather than the global.
+  const CLOSED = 2;
+  let source: EventSource | null = null;
+  let closed = false;
+  let attempt = 0;
+
+  const open = () => {
+    if (closed) return;
+    source = makeSource("/api/events");
+    source.onopen = () => {
+      attempt = 0;
+    };
+    source.onmessage = (msg) => {
+      try {
+        onEvent(JSON.parse(msg.data) as ProgressEvent);
+      } catch {
+        /* ignore keep-alive / malformed frames */
+      }
+    };
+    source.onerror = () => {
+      if (closed || !source || source.readyState !== CLOSED) return;
+      source.close();
+      source = null;
+      // Exponential backoff capped at 30 s; the Dashboard also polls
+      // /api/status every 2 s, so the stream is a latency optimisation.
+      const delay = Math.min(30_000, 1_000 * 2 ** attempt);
+      attempt += 1;
+      schedule(open, delay);
+    };
+  };
+
+  open();
+  return () => {
+    closed = true;
+    source?.close();
+    source = null;
+  };
+}
+
 export const api = {
   health: () => json<{ status: string; cobalt_reachable: boolean }>("/api/health"),
 
@@ -223,7 +274,7 @@ export const api = {
   }),
   deleteRunSchedule: (id: number) => json<{ ok: boolean }>(`/api/run-schedules/${id}`, { method: "DELETE" }),
 
-  verify: () => json<VerifyReport>("/api/verify"),
+  verify: () => json<VerifyReport>("/api/verify", { method: "POST" }),
   requeueMissing: () => json<{ requeued: number }>("/api/verify/requeue", { method: "POST" }),
   requeueItems: (ids: number[]) => json<RequeueResult>("/api/items/requeue", {
     method: "POST",
@@ -371,15 +422,5 @@ export const api = {
     json<{ started?: boolean; ok?: boolean }>(`/api/sync/${action}${opts?.recheck ? "?recheck=1" : ""}`, { method: "POST" }),
 
   /** Subscribe to the SSE progress stream. Returns an unsubscribe fn. */
-  events: (onEvent: (e: ProgressEvent) => void): (() => void) => {
-    const es = new EventSource("/api/events");
-    es.onmessage = (msg) => {
-      try {
-        onEvent(JSON.parse(msg.data) as ProgressEvent);
-      } catch {
-        /* ignore keep-alive / malformed frames */
-      }
-    };
-    return () => es.close();
-  },
+  events: (onEvent: (e: ProgressEvent) => void): (() => void) => subscribeEvents(onEvent),
 };

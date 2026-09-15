@@ -99,6 +99,8 @@ def _source_offers_more_pixels(deps, link, current_facts):
         info = deps.source_probe(link, include_comments=False)
     except Exception:
         return False
+    if not info:
+        return False  # non-TikTok link: extract_post declines rather than probing
     advertised = int(info.get("width") or 0) * int(info.get("height") or 0)
     return advertised > _pixels(current_facts)
 

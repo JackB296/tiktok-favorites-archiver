@@ -403,6 +403,21 @@ def test_apply_rolls_back_every_row_when_an_insert_fails():
     assert store.all_items(conn) == []
 
 
+def test_preview_rejects_checkpoint_link_that_is_not_tiktok():
+    # The checkpoint is user-supplied text that becomes item.link, so it gets
+    # the same gate as every other link source before it can reach Cobalt.
+    with tempfile.TemporaryDirectory() as d:
+        old_path, current_path, checkpoint_path, downloads = _fixture(d)
+        with open(checkpoint_path, "w", encoding="utf-8") as f:
+            f.write("http://192.168.1.1/x\n")
+        try:
+            legacy_bootstrap.plan_bootstrap(old_path, current_path, checkpoint_path, downloads)
+        except legacy_bootstrap.LegacyBootstrapError as exc:
+            assert "must be a TikTok URL" in str(exc)
+        else:
+            raise AssertionError("expected a checkpoint validation error")
+
+
 if __name__ == "__main__":
     import traceback
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

@@ -28,12 +28,12 @@ def test_import_export_orders_and_dates():
     with tempfile.TemporaryDirectory() as d:
         exp = os.path.join(d, "e.json")
         # export is newest-first; importer reverses -> La(id1) .. Lc(id3)
-        _make_export(exp, [("Lc", "2023"), ("Lb", "2022"), ("La", "2021")])
+        _make_export(exp, [("https://www.tiktok.com/Lc", "2023"), ("https://www.tiktok.com/Lb", "2022"), ("https://www.tiktok.com/La", "2021")])
         n = importer.import_export(conn, exp)
         assert n == 3
-        assert [r["link"] for r in store.all_items(conn)] == ["La", "Lb", "Lc"]
+        assert [r["link"] for r in store.all_items(conn)] == ["https://www.tiktok.com/La", "https://www.tiktok.com/Lb", "https://www.tiktok.com/Lc"]
         assert store.get_item(conn, 1)["favorited_at"] == "2021"
-        assert store.get_item(conn, 3)["link"] == "Lc"
+        assert store.get_item(conn, 3)["link"] == "https://www.tiktok.com/Lc"
 
 
 def test_likes_and_combined_saved_video_modes_are_explicit_and_deduplicated():
@@ -43,22 +43,22 @@ def test_likes_and_combined_saved_video_modes_are_explicit_and_deduplicated():
         with open(exp, "w", encoding="utf-8") as target:
             json.dump({"Likes and Favorites": {
                 "Favorite Videos": {"FavoriteVideoList": [
-                    {"Link": "shared", "Date": "2024-02-01"},
-                    {"Link": "favorite", "Date": "2024-01-01"},
+                    {"Link": "https://www.tiktok.com/shared", "Date": "2024-02-01"},
+                    {"Link": "https://www.tiktok.com/favorite", "Date": "2024-01-01"},
                 ]},
                 "Like List": {"ItemFavoriteList": [
-                    {"Link": "liked", "Date": "2024-03-01"},
-                    {"Link": "shared", "Date": "2024-02-01"},
+                    {"Link": "https://www.tiktok.com/liked", "Date": "2024-03-01"},
+                    {"Link": "https://www.tiktok.com/shared", "Date": "2024-02-01"},
                 ]},
             }}, target)
 
         assert importer.import_export(conn, exp, selection="likes") == 2
-        assert [row["link"] for row in store.all_items(conn)] == ["shared", "liked"]
+        assert [row["link"] for row in store.all_items(conn)] == ["https://www.tiktok.com/shared", "https://www.tiktok.com/liked"]
 
         combined = store.init_db(store.connect(":memory:"))
         assert importer.import_export(combined, exp, selection="both") == 3
         assert [row["link"] for row in store.all_items(combined)] == [
-            "favorite", "shared", "liked",
+            "https://www.tiktok.com/favorite", "https://www.tiktok.com/shared", "https://www.tiktok.com/liked",
         ]
 
 
@@ -68,11 +68,11 @@ def test_favorites_remain_the_import_default_when_likes_are_present():
         exp = os.path.join(d, "e.json")
         with open(exp, "w", encoding="utf-8") as target:
             json.dump({"Activity": {
-                "Favorite Videos": {"FavoriteVideoList": [{"Link": "favorite"}]},
-                "Like List": {"ItemFavoriteList": [{"Link": "liked"}]},
+                "Favorite Videos": {"FavoriteVideoList": [{"Link": "https://www.tiktok.com/favorite"}]},
+                "Like List": {"ItemFavoriteList": [{"Link": "https://www.tiktok.com/liked"}]},
             }}, target)
         importer.import_export(conn, exp)
-    assert [row["link"] for row in store.all_items(conn)] == ["favorite"]
+    assert [row["link"] for row in store.all_items(conn)] == ["https://www.tiktok.com/favorite"]
 
 
 def test_import_ignores_crashed_encode_temp_files():
@@ -94,7 +94,7 @@ def test_import_existing_files_and_assets_and_manifest():
         exp = os.path.join(d, "e.json")
         dl = os.path.join(d, "downloads")
         os.makedirs(dl)
-        _make_export(exp, [("Lc", "2023"), ("Lb", "2022"), ("La", "2021")])  # -> La,Lb,Lc
+        _make_export(exp, [("https://www.tiktok.com/Lc", "2023"), ("https://www.tiktok.com/Lb", "2022"), ("https://www.tiktok.com/La", "2021")])  # -> La,Lb,Lc
         # Files 1.mp4 and 2.mp4 already downloaded; 2 is a slideshow with raw assets.
         open(os.path.join(dl, "1.mp4"), "w").close()
         open(os.path.join(dl, "2.mp4"), "w").close()
@@ -114,7 +114,7 @@ def test_import_existing_files_and_assets_and_manifest():
 
         rows = _rows(os.path.join(dl, importer.config.MANIFEST_FILE))
         assert [r["file"] for r in rows] == ["1.mp4", "2.mp4"]
-        assert [r["link"] for r in rows] == ["La", "Lb"]
+        assert [r["link"] for r in rows] == ["https://www.tiktok.com/La", "https://www.tiktok.com/Lb"]
 
 
 def test_import_is_idempotent():
@@ -123,7 +123,7 @@ def test_import_is_idempotent():
         exp = os.path.join(d, "e.json")
         dl = os.path.join(d, "downloads")
         os.makedirs(dl)
-        _make_export(exp, [("Lb", "2022"), ("La", "2021")])
+        _make_export(exp, [("https://www.tiktok.com/Lb", "2022"), ("https://www.tiktok.com/La", "2021")])
         open(os.path.join(dl, "1.mp4"), "w").close()
 
         importer.import_all(conn, exp, dl)
@@ -137,7 +137,7 @@ def test_missing_export_does_not_create_an_empty_history_checkpoint():
     conn = store.init_db(store.connect(":memory:"))
     with tempfile.TemporaryDirectory() as d:
         exp = os.path.join(d, "e.json")
-        _make_export(exp, [("La", "2021")])
+        _make_export(exp, [("https://www.tiktok.com/La", "2021")])
         first = importer.import_all(conn, exp, d)
 
         missing = importer.import_all(
@@ -156,7 +156,7 @@ def test_orphan_file_beyond_export_is_represented():
         exp = os.path.join(d, "e.json")
         dl = os.path.join(d, "downloads")
         os.makedirs(dl)
-        _make_export(exp, [("La", "2021")])         # only 1 favorite
+        _make_export(exp, [("https://www.tiktok.com/La", "2021")])         # only 1 favorite
         open(os.path.join(dl, "1.mp4"), "w").close()
         open(os.path.join(dl, "7.mp4"), "w").close()  # orphan (no matching favorite)
 

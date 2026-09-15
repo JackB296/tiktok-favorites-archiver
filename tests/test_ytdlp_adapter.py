@@ -7,7 +7,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import ytdlp_adapter
+from core import config, ytdlp_adapter
 
 
 class Response:
@@ -133,7 +133,7 @@ def test_video_download_prefers_an_audible_h264_rendition_over_silent_1080p():
     with tempfile.TemporaryDirectory() as directory:
         destination = os.path.join(directory, "chosen.mp4")
         assert ytdlp_adapter.download_best_video(
-            "https://tiktok/1", destination, ydl_class=YDL, inspect=inspect,
+            "https://tiktok.com/1", destination, ydl_class=YDL, inspect=inspect,
         ) is True
         assert open(destination, "rb").read() == b"audible-720"
 
@@ -181,7 +181,7 @@ def test_video_download_repairs_silent_high_resolution_video_with_synced_audio()
     with tempfile.TemporaryDirectory() as directory:
         destination = os.path.join(directory, "chosen.mp4")
         assert ytdlp_adapter.download_best_video(
-            "https://tiktok/1", destination, ydl_class=YDL,
+            "https://tiktok.com/1", destination, ydl_class=YDL,
             inspect=inspect, runner=run,
         ) is True
         assert open(destination, "rb").read().startswith(b"repaired:silent-1080:audible-720")
@@ -219,7 +219,7 @@ def test_real_ffmpeg_repair_preserves_higher_resolution_and_adds_audible_audio()
 
         destination = os.path.join(directory, "repaired.mp4")
         assert ytdlp_adapter.download_best_video(
-            "https://tiktok/1", destination, ydl_class=YDL,
+            "https://tiktok.com/1", destination, ydl_class=YDL,
         ) is True
         from core.media_index import inspect_media
         facts = inspect_media(destination)
@@ -255,7 +255,7 @@ def test_video_download_checks_a_lower_resolution_when_the_same_codec_hd_copy_is
 
     with tempfile.TemporaryDirectory() as directory:
         assert ytdlp_adapter.download_best_video(
-            "https://tiktok/1", os.path.join(directory, "out.mp4"),
+            "https://tiktok.com/1", os.path.join(directory, "out.mp4"),
             ydl_class=YDL, inspect=inspect, runner=run,
         ) is True
 
@@ -288,8 +288,27 @@ def test_accept_encoding_is_never_announced_to_tiktok():
     assert module.add_accept_encoding_header is ytdlp_adapter._keep_accept_encoding_off
 
 
+def test_canonical_post_url_refuses_non_tiktok_hosts():
+    from core import ytdlp_adapter as y
+    assert y.canonical_post_url("https://www.tiktok.com/@a/video/123") == "https://www.tiktok.com/@x/video/123"
+    assert y.canonical_post_url("https://vm.tiktok.com/ZMabc/") == "https://vm.tiktok.com/ZMabc/"
+    assert y.canonical_post_url("http://192.168.1.1/video/123") is None   # id regex alone is not enough
+    assert y.canonical_post_url("http://10.0.0.5:8006/") is None
+
+
+def test_silent_video_repair_runs_ffmpeg_with_a_timeout():
+    seen = []
+
+    def run(command, **kwargs):
+        seen.append(kwargs.get("timeout"))
+
+    ytdlp_adapter._repair_silent_video("v.mp4", "a.mp4", "out.mp4", run)
+    assert seen == [config.MEDIA_TOOL_TIMEOUT]
+
+
 if __name__ == "__main__":
     for test in (
+        test_canonical_post_url_refuses_non_tiktok_hosts,
         test_comment_collection_paginates_top_level_and_complete_replies_without_duplicates,
         test_default_comment_requester_reuses_the_worker_connection_pool,
         test_failed_comment_collection_stays_pending_instead_of_becoming_an_empty_snapshot,
@@ -299,6 +318,7 @@ if __name__ == "__main__":
         test_real_ffmpeg_repair_preserves_higher_resolution_and_adds_audible_audio,
         test_video_download_checks_a_lower_resolution_when_the_same_codec_hd_copy_is_silent,
         test_accept_encoding_is_never_announced_to_tiktok,
+        test_silent_video_repair_runs_ffmpeg_with_a_timeout,
     ):
         test()
         print(f"PASS {test.__name__}")

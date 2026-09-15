@@ -236,14 +236,14 @@ up at most one missed occurrence after restart.
 
 ## Details worth knowing
 
-- **More ways to add videos (opt-in).** Favorites/bookmarks remain the export-upload default. The same control can instead import Likes or both lists. The collapsed **More ways to add videos** panel can discover every public post from a username, monitor selected creators for new posts, and bulk-adopt an existing myfaveTT folder without re-downloading files it already contains.
+- **More ways to add videos (opt-in).** Favorites/bookmarks remain the export-upload default. The same control can instead import Likes or both lists. The collapsed **More ways to add videos** panel can discover every public post from a username, monitor selected creators for new posts, and bulk-adopt an existing myfaveTT folder without re-downloading files it already contains. Entries in an export whose link is not a TikTok URL are skipped, and the count is logged, so a tampered export can never point the downloader at another host.
 - **Rich source records and sidecars.** Creator imports and the resumable metadata backlog capture the original description, creator identity, post date, duration, source resolution, thumbnail, and public engagement counts. The Media sidecars phase saves a privacy-safe `.info.json`, `.description`, source thumbnail, available subtitle/automatic-caption tracks, and best-effort public `.comments.json` beside the media. Each explicit comment refresh keeps a dated local SQLite snapshot and records new, unavailable, and updated comments; Feed and Gallery can browse every saved version offline. Signed CDN URLs and cookies are deliberately excluded.
 - **Dead links stay meaningful.** When TikTok reports that an original post is gone, the favorite becomes an unavailable archive marker instead of a recurring failure. Its number and position remain visible in Feed and Gallery, and automatic Sync runs do not retry it.
 - **Original slideshow audio.** Photo posts request the full original sound, and a failed fetch is retried through an audio-only resolve and then `yt-dlp` before anything is substituted. Only when every route fails does a bundled default track fill in instead of failing the encode — replaceable with your own MP3 from the Sync tab's media settings. A substitution is recorded against the favorite rather than left to look like real audio, so it is never counted as that post's music.
 - **Push playlists to Spotify.** In the Music tab, connect your own free Spotify app once, then push any saved playlist to a private Spotify playlist. Matches come from each song's stored link or a search; unmatched songs are reported rather than guessed, and re-pushing updates the same playlist.
 - **Asset backfill.** Already had downloads before this existed? The Sync tab's Backfill re-fetches the raw slideshow images for your existing files so they render in the viewer. Local Lens has its own **Analyze missing** backfill for speech and OCR.
 - **Slideshow sound recovery.** Slideshows archived with the fallback track — including ones built while a different default was in use, which are recognised by fingerprint — appear under **Maintenance & settings → Slideshow sound recovery**. **Recover sound** refetches the real audio, rebuilds the MP4 around it, and clears any song identified from the substituted track, since that identification described the default rather than the favorite. Where TikTok has deleted the sound for good, the favorite stays marked so it is excluded from song identification instead of inflating one track's count forever.
-- **Silent-video repair.** Existing indexed videos with no audio stream or a confirmed-silent stream appear under **Maintenance & settings â†’ Silent-video repair**. **Repair sound** retries that backlog through the same quality-aware yt-dlp path, preserves archive numbers and metadata, refreshes media facts, and keeps the previous MP4 in `downloads/.archive/replaced/`.
+- **Silent-video repair.** Existing indexed videos with no audio stream or a confirmed-silent stream appear under **Maintenance & settings → Silent-video repair**. **Repair sound** retries that backlog through the same quality-aware yt-dlp path, preserves archive numbers and metadata, refreshes media facts, and keeps the previous MP4 in `downloads/.archive/replaced/`.
 - **Provenance.** `downloads/manifest.csv` maps each file to its source link, type, and status alongside the database.
 - **Gallery index.** Sync records duration, dimensions, codec, file size, and whether an audio stream exists, then renders a WebP thumbnail per favorite (480px or 320px), so the Gallery pages instantly instead of decoding video. Indexing runs on a small worker pool and can be rebuilt, paused, or turned off.
 - **Search metadata.** Sync can fetch missing captions and creator names from TikTok's public oEmbed endpoint at the configured rate limit, skipping entries already enriched. This powers author, hashtag, and caption search.
@@ -251,8 +251,8 @@ up at most one missed occurrence after restart.
 - **Media-server and portable metadata.** One click writes a `.nfo` title file and `.jpg` poster next to every video, so Plex, Jellyfin, and Kodi show real titles and artwork instead of bare numbers. Existing behavior remains non-destructive by default. An off-by-default setting can additionally embed the caption, creator, description, date, source link, poster, and available subtitles into each MP4. Embedding copies the original video/audio streams, validates a temporary output, publishes atomically, and keeps all separate sidecars.
 - **Integrity check.** Sync can verify the whole archive: finished favorites missing their video (one click re-queues them), stray files no favorite claims, and leftover temp files from interrupted runs.
 - **Local by default.** The app has no login, so Docker binds it to `127.0.0.1` out of the box; nothing else on your network can reach it. Plex reads `./downloads` from disk and is unaffected. Want to reach it from your phone or another machine? See [Access from other devices](#access-from-other-devices-lan-tailscale-reverse-proxy).
-- **Backups.** The Backups tab produces validated portable snapshots. A stopped-app copy of `./downloads` plus `./appdata/archive.db` remains a valid manual fallback.
-- **Scripting the API.** Reads are plain HTTP (`curl localhost:8080/api/stats`). Mutating requests additionally need the header `X-Archive-Request: 1` — it's the app's CSRF guard, and without it any POST answers 403.
+- **Backups.** The Backups tab produces validated portable snapshots. The live database sits on the `archive-data` named volume, not in a host folder; export a browsable copy into `./appdata` with the command under [Moving an existing database onto the named volume](#moving-an-existing-database-onto-the-named-volume), and a stopped-app copy of `./downloads` plus that exported `archive-export.db` remains a valid manual fallback.
+- **Scripting the API.** Reads are plain HTTP (`curl localhost:8080/api/stats`). Mutating requests additionally need the header `X-Archive-Request: 1` — it's the app's CSRF guard, and without it any POST answers 403. The integrity check is one of them: `GET /api/verify` reports, `POST /api/verify` reports **and** records the missing flags the Gallery's Recovery inbox uses.
 - **File ownership (Linux).** The container runs as root by default, so Docker creates `./downloads` and `./appdata` root-owned. To keep them owned by your user, pre-create the folders and set `user: "1000:1000"` on the `app` service (commented in the compose file).
 
 ## Project layout
@@ -309,16 +309,18 @@ With Docker, set these on the `app` service in `docker-compose.yml`:
 | `PORTABLE_METADATA_WORKERS` | `20` in Compose | Concurrent atomic MP4 metadata stream copies |
 | `ANALYSIS_TRANSCRIPT_WORKERS` | `5` in Compose | Concurrent Whisper jobs (the bundled CLI uses four CPU threads each) |
 | `ANALYSIS_OCR_WORKERS` | `8` in Compose | Concurrent OCR video jobs |
-| `RATE_MAX_CALLS` / `RATE_PERIOD` | `4` / `1.0` | Requests allowed per window, in seconds |
+| `RATE_MAX_CALLS` / `RATE_PERIOD` | `4` / `1.0` in Compose (code default `8` / `1.0`) | Requests allowed per window, in seconds |
 | `DB_FILE` | `/app/data/archive.db` | Path of the SQLite archive database |
 | `APP_PORT` | `8080` | Port the web app listens on |
 | `ALLOWED_HOSTS` | *(empty)* | Extra Host names the app answers to (comma-separated) for LAN/Tailscale/reverse-proxy access; loopback is always allowed |
 | `RETRY_DELAY` | `2.0` | Seconds between download retry attempts |
-| `SONG_ID_RATE_MAX_CALLS` / `SONG_ID_RATE_PERIOD` | `1` / `6.0` | Shazam recognitions allowed per window, in seconds |
+| `DOWNLOAD_MAX_BYTES` | `2147483648` | Hard cap per streamed media file (2 GiB); a larger download is aborted and not retried |
+| `SONG_ID_RATE_MAX_CALLS` / `SONG_ID_RATE_PERIOD` | `1` / `6.0` in Compose (code default `1` / `2.0`) | Shazam recognitions allowed per window, in seconds |
 | `WHISPER_CPP_BIN` | `/usr/local/bin/whisper-cli` | Local speech CLI path |
 | `WHISPER_MODEL` | `/opt/whisper/models/ggml-base.bin` | Local multilingual speech model path |
 | `TESSERACT_BIN` | `/usr/bin/tesseract` | Local OCR CLI path |
 | `ANALYSIS_TIMEOUT` | `900` | Maximum seconds for one local tool subprocess |
+| `MEDIA_TOOL_TIMEOUT` | `300` | Seconds allowed per ffmpeg/ffprobe helper call (probes, thumbnails, muxing, embedding) |
 | `ANALYSIS_MAX_OUTPUT_BYTES` | `8388608` | Maximum bytes read from one local tool's output |
 | `OCR_INTERVAL_SECONDS` | `2.0` | Seconds between sampled OCR frames |
 | `OCR_MAX_FRAMES` | `600` | Maximum OCR frames sampled from one favorite |
@@ -335,7 +337,8 @@ services:
   app:
     volumes:
       - ./downloads:/app/downloads
-      - ./appdata:/app/data
+      - archive-data:/app/data
+      - ./appdata:/app/backups
       - /mnt/archive-nas:/mnt/archive-nas
 ```
 
@@ -362,7 +365,7 @@ ALLOWED_HOSTS: "machine-name.your-tailnet.ts.net"
 
 Open `https://machine-name.your-tailnet.ts.net` from any device on your tailnet — phone included. Tailscale terminates HTTPS and proxies to localhost, so nothing is exposed beyond your tailnet and the loopback binding never changes.
 
-**Plain LAN.** Change the port mapping to `"8080:8080"` and set `ALLOWED_HOSTS` to however you'll address the machine, e.g. `"nas.local,192.168.1.20"`. Anyone on the network can then reach your archive — do this only on a network you trust.
+**Plain LAN.** Add a `docker-compose.override.yml` (gitignored) that sets `ALLOWED_HOSTS` to however you'll address the machine, e.g. `"nas.local,192.168.1.20"`, and replaces the port mapping with `ports: !override` followed by `- "8080:8080"` — the `!override` tag matters, and the comment above `ports:` in `docker-compose.yml` shows the exact shape. Anyone on the network can then reach your archive — do this only on a network you trust.
 
 **Reverse proxy (Caddy, nginx, Traefik).** Proxy to `127.0.0.1:8080`, keep the loopback binding, and set `ALLOWED_HOSTS` to the site name the proxy serves. The app has no authentication of its own, so if the proxy is reachable beyond your trusted network, put auth in front of it at the proxy layer.
 
@@ -371,8 +374,8 @@ A request with a Host name not on the list gets `403 forbidden request source` �
 ## Upgrading an existing web archive
 
 Pull the code, then `docker compose pull && docker compose up -d` (or rebuild
-with the build overlay if you run from source) against the same `downloads`
-and `appdata` bind mounts. Startup applies additive schema migrations only; it
+with the build overlay if you run from source) with the same `./downloads`
+bind mount and the same `archive-data` volume. Startup applies additive schema migrations only; it
 does not hash, copy, rename, or delete media. Creator/Hashtag discovery then
 backfills in bounded, persisted batches when the Archive is idle. It can resume
 after interruption. Existing presets become Smart collections with no rewrite,
@@ -386,6 +389,42 @@ follow-up in the app is remembered on later upgrades.
 
 Before moving an archive between computers, create and validate a metadata or
 complete snapshot in **Backups** before disconnecting the old installation.
+
+### Moving an existing database onto the named volume
+
+Releases before 2026-08-26 kept `archive.db` in `./appdata`. The compose
+file now stores it on the `archive-data` named volume, which is 5–150×
+faster on Docker Desktop. On first start with the new compose file the
+volume is empty, so copy your archive in once. Every copy *into* the volume
+runs with the app stopped: the running app keeps the database open, and the
+copy would fail with `database is locked`.
+
+1. `docker compose stop app` (Cobalt can keep running).
+2. Copy the old file into the volume with SQLite's backup API — safe even if
+   the old file has a `-wal` sidecar. This runs in a throwaway container that
+   mounts the same volumes, so nothing else has the database open:
+
+   ```bash
+   docker compose run --rm --no-deps --entrypoint python app -c "import sqlite3; src = sqlite3.connect('/app/backups/archive.db'); dst = sqlite3.connect('/app/data/archive.db'); src.backup(dst); dst.close()"
+   ```
+
+3. `docker compose start app` and open the app — your favorites are back.
+4. Keep `./appdata/archive.db` as a frozen backup or delete it.
+
+**Export a browsable copy** (safe while the app runs — the backup API takes a
+consistent snapshot; the file lands in `./appdata/archive-export.db`):
+
+```bash
+docker compose exec app python -c "import sqlite3; src = sqlite3.connect('/app/data/archive.db'); dst = sqlite3.connect('/app/backups/archive-export.db'); src.backup(dst); dst.close()"
+```
+
+**Restore a backup** (app stopped, one-off container, paths reversed):
+
+```bash
+docker compose stop app
+docker compose run --rm --no-deps --entrypoint python app -c "import sqlite3; src = sqlite3.connect('/app/backups/archive-export.db'); dst = sqlite3.connect('/app/data/archive.db'); src.backup(dst); dst.close()"
+docker compose start app
+```
 
 ## Getting your TikTok data
 
@@ -433,13 +472,13 @@ updated since the prior capture. Comment access is best effort because TikTok
 may withhold it by region or change its public API; the default saves up to 500
 top-level comments and replies per post.
 
-Under **Maintenance & settings â†’ Media server metadata**, **Embed portable
+Under **Maintenance & settings → Media server metadata**, **Embed portable
 metadata in MP4 files** is off by default. Enable it, then run Media sidecars
 to backfill existing videos safely. Unchanged files are skipped on later runs,
 and replacing a video or thumbnail marks that item for re-embedding.
 
 For videos already archived without usable sound, open **Maintenance & settings
-â†’ Silent-video repair** and press **Repair sound**. This is a resumable backlog
+→ Silent-video repair** and press **Repair sound**. This is a resumable backlog
 run; it only targets indexed local videos known to be silent, never renumbers
 them, and retains the previous MP4 as the most recent replacement backup.
 
@@ -474,8 +513,8 @@ archive and validated as MP4s before installation.
 <summary>Guarded legacy bootstrap for numbered MP4s from the old CLI</summary>
 
 Use the guarded legacy bootstrap if you have numbered MP4s and
-`last_downloaded_link.txt`, but no `downloads/manifest.csv` or established
-`appdata/archive.db`. It is designed for an unavailable NAS: only the numeric
+`last_downloaded_link.txt`, but no `downloads/manifest.csv` or an established
+archive database (the `archive-data` Docker volume). It is designed for an unavailable NAS: only the numeric
 MP4s currently in `downloads` are required.
 
 On Windows, install and start Docker Desktop first. In GitHub Desktop, fetch
@@ -489,16 +528,19 @@ Test-Path '.\last_downloaded_link.txt'
 Get-ChildItem '.\appdata' -Force -ErrorAction SilentlyContinue
 ```
 
-Bootstrap deliberately requires a database with no favorite rows. If
-`appdata` contains an earlier test database, preserve the whole directory and
-start with a new one; do not delete it:
+Bootstrap deliberately requires a database with no favorite rows. The live
+database lives on the `archive-data` named volume, so if a previous run
+already created one, preserve a copy and start with a fresh volume; do not
+just delete it. The volume's full name is the compose project name plus
+`_archive-data` (`docker volume ls` shows it), so a renamed checkout folder
+changes the prefix below:
 
 ```powershell
-if (Test-Path '.\appdata') {
-    $backup = ".\appdata-before-legacy-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
-    Rename-Item '.\appdata' $backup
-}
-New-Item -ItemType Directory -Force '.\appdata'
+docker compose down
+# If a previous run already created a database, keep a browsable copy first:
+docker compose run --rm --no-deps --entrypoint python app -c "import sqlite3; src = sqlite3.connect('/app/data/archive.db'); dst = sqlite3.connect('/app/backups/archive-before-legacy.db'); src.backup(dst); dst.close()"
+# Bootstrap needs an empty database, so start a fresh volume (the copy above is your backup):
+docker volume rm tiktok-favorites-archiver_archive-data
 docker compose up --build -d
 ```
 

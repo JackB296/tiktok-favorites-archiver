@@ -111,6 +111,60 @@ def test_due_creator_monitor_starts_its_import_and_sync_pipeline():
         assert jobs.starts == ["creator-monitor"]
 
 
+def test_a_failing_tick_is_logged_and_does_not_stop_later_ticks():
+    with tempfile.TemporaryDirectory() as directory:
+        db_path = os.path.join(directory, "archive.db")
+        store.init_db(store.connect(db_path)).close()
+
+        class Jobs:
+            calls = 0
+            def is_running(self):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("database is locked")
+                return False
+            def start(self, kind):
+                return False
+
+        jobs = Jobs()
+        service = scheduler.Scheduler(
+            db_path, jobs, clock=lambda: datetime(2026, 7, 17, 9, tzinfo=timezone.utc),
+        )
+        assert service._safe_tick() is False
+        assert service.last_error == "RuntimeError: database is locked"
+        assert service._safe_tick() is False   # second tick runs normally
+        assert service.last_error is None
+        assert jobs.calls == 2
+
+
+def test_scheduler_thread_survives_a_tick_exception():
+    import threading
+    with tempfile.TemporaryDirectory() as directory:
+        db_path = os.path.join(directory, "archive.db")
+        store.init_db(store.connect(db_path)).close()
+        seen = threading.Event()
+
+        class Jobs:
+            calls = 0
+            def is_running(self):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("boom")
+                if self.calls >= 3:
+                    seen.set()
+                return False
+            def start(self, kind):
+                return False
+
+        service = scheduler.Scheduler(db_path, Jobs(), interval=0.01)
+        service.start()          # startup tick raises (call 1); loop must continue
+        try:
+            assert seen.wait(timeout=5), "scheduler thread died after the first error"
+            assert service._thread.is_alive()
+        finally:
+            service.stop()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().copy().items()):
         if name.startswith("test_"):

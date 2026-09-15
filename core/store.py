@@ -640,25 +640,30 @@ def _comment_search_text(comments):
 
 def _replace_comment_entries(conn, snapshot_id, item_id, comments):
     conn.execute("DELETE FROM comment_entry WHERE snapshot_id = ?", (snapshot_id,))
-    for position, comment in enumerate(comments):
+    rows = []
+    for comment in comments:
         if not isinstance(comment, dict):
             continue
-        key = _comment_identity(comment)
         text = comment.get("text")
         if not isinstance(text, str):
             text = ""
-        conn.execute(
-            "INSERT INTO comment_entry "
-            "(snapshot_id, item_id, comment_key, parent_key, author, author_username, "
-            "text, posted_at, like_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                snapshot_id, item_id, key, str(comment.get("parent") or "") or None,
-                str(comment.get("author") or "") or None,
-                str(comment.get("author_username") or "") or None,
-                text[:20000], comment.get("timestamp") if isinstance(comment.get("timestamp"), (int, float)) else None,
-                comment.get("like_count") if isinstance(comment.get("like_count"), int) else None,
-            ),
-        )
+        rows.append((
+            snapshot_id, item_id, _comment_identity(comment),
+            str(comment.get("parent") or "") or None,
+            str(comment.get("author") or "") or None,
+            str(comment.get("author_username") or "") or None,
+            text[:20000],
+            comment.get("timestamp") if isinstance(comment.get("timestamp"), (int, float)) else None,
+            comment.get("like_count") if isinstance(comment.get("like_count"), int) else None,
+        ))
+    # One prepared statement for the whole snapshot: a refresh over a large
+    # archive inserts millions of rows, and per-row execute() calls dominated.
+    conn.executemany(
+        "INSERT INTO comment_entry "
+        "(snapshot_id, item_id, comment_key, parent_key, author, author_username, "
+        "text, posted_at, like_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
 
 
 def _ensure_item_search_schema(conn):
@@ -721,6 +726,17 @@ def connect_readonly(path):
 
 def init_db(conn):
     """Create tables (idempotent) and ensure the singleton run_state row exists."""
+    # Refuse a database written by a newer build BEFORE any migration below
+    # touches it: the column adds, the FTS rebuild, the comment compression
+    # and its VACUUM are all destructive to a schema this version does not
+    # understand. install_registry() repeats the check at the end as a
+    # belt-and-braces guard for the legacy (pre-registry) path.
+    found = migrations.schema_version(conn)
+    if found > migrations.CURRENT_SCHEMA_VERSION:
+        raise migrations.MigrationError(
+            f"database schema {found} is newer than supported "
+            f"schema {migrations.CURRENT_SCHEMA_VERSION}"
+        )
     # Add missing item columns BEFORE the schema script: SCHEMA's indexes
     # reference the newest columns, and CREATE TABLE IF NOT EXISTS will not
     # touch an existing table — so an old database must be migrated first or
@@ -1829,6 +1845,16 @@ def _item_filters(query=None, kinds=None, statuses=None):
     return clauses, params
 
 
+def _like_contains(term):
+    """LIKE parameter for 'contains term', with the user's % _ \\ escaped.
+
+    Pair every use with ``ESCAPE '\\'`` in the clause; otherwise a term such
+    as ``snake_case`` or ``100%`` is a wildcard pattern, not text.
+    """
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def _fts_query(query):
     """Turn free text into a safe, prefix-searchable FTS expression."""
     terms = re.findall(r"[A-Za-z0-9_]+", query or "")
@@ -1871,16 +1897,22 @@ def _advanced_search_clauses(parsed):
         for token in tokens:
             negate = token.negative
             if field == "creator":
-                clause = "LOWER(COALESCE(creator_username, author, '')) LIKE ?"
-                value_params = [f"%{token.value.casefold()}%"]
+                clause = "LOWER(COALESCE(creator_username, author, '')) LIKE ? ESCAPE '\\'"
+                value_params = [_like_contains(token.value.casefold())]
             elif field in ("comment", "song"):
                 match = structured_search.fts_query((structured_search.SearchToken(token.value, False, token.phrase),))
+                if match is None:
+                    raise ValueError(f"{raw_field}: needs at least one searchable word")
                 table = "comment_search" if field == "comment" else "item_search"
                 scope = "" if field == "comment" else "search_song_text : "
                 clause = f"EXISTS (SELECT 1 FROM {table} WHERE {table}.rowid = item.id AND {table} MATCH ?)"
-                value_params = [scope + f"({match})" if scope else match]
+                # Concatenation is safe here: match is the quoted, escaped FTS
+                # expression fts_query built, never raw user text.
+                value_params = [scope + "(" + match + ")" if scope else match]
             elif field in ("transcript", "ocr"):
                 match = structured_search.fts_query((structured_search.SearchToken(token.value, False, token.phrase),))
+                if match is None:
+                    raise ValueError(f"{raw_field}: needs at least one searchable word")
                 clause = (
                     "EXISTS (SELECT 1 FROM analysis_search JOIN analysis_segment aseg "
                     "ON analysis_search.rowid = aseg.id WHERE aseg.item_id = item.id "
@@ -2244,12 +2276,14 @@ def _page_filter_clauses(q):
     }
     if q["index_state"] in index_filters:
         clauses.append(index_filters[q["index_state"]])
+    # COALESCE keeps rows with no caption/author: NOT (NULL LIKE x) is NULL in
+    # SQLite's three-valued logic, which silently dropped them from any exclude.
     for term in q["include"] or []:
-        clauses.append("(caption LIKE ? OR author LIKE ?)")
-        params += [f"%{term}%", f"%{term}%"]
+        clauses.append("(COALESCE(caption, '') LIKE ? ESCAPE '\\' OR COALESCE(author, '') LIKE ? ESCAPE '\\')")
+        params += [_like_contains(term), _like_contains(term)]
     for term in q["exclude"] or []:
-        clauses.append("NOT (caption LIKE ? OR author LIKE ?)")
-        params += [f"%{term}%", f"%{term}%"]
+        clauses.append("NOT (COALESCE(caption, '') LIKE ? ESCAPE '\\' OR COALESCE(author, '') LIKE ? ESCAPE '\\')")
+        params += [_like_contains(term), _like_contains(term)]
     return clauses, params
 
 

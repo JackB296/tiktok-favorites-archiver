@@ -63,6 +63,7 @@ def test_mutating_routes_require_browser_intent():
                 headers={"Host": "evil.example"},
             ).status_code == 403
             assert client.post("/api/sync/unknown").status_code == 403
+            assert client.post("/api/verify").status_code == 403
             assert client.post(
                 "/api/sync/unknown",
                 headers={"Origin": "https://evil.example"},
@@ -833,8 +834,8 @@ def test_likes_profile_and_myfavett_import_routes_end_to_end():
     from core import store
 
     export_bytes = json.dumps({"Activity": {
-        "Favorite Videos": {"FavoriteVideoList": [{"Link": "favorite"}]},
-        "Like List": {"ItemFavoriteList": [{"Link": "liked"}]},
+        "Favorite Videos": {"FavoriteVideoList": [{"Link": "https://www.tiktok.com/favorite"}]},
+        "Like List": {"ItemFavoriteList": [{"Link": "https://www.tiktok.com/liked"}]},
     }}).encode()
     original_profile = api_module.profile_import.import_profile
     original_adopt = api_module.myfavett.adopt_video
@@ -866,7 +867,7 @@ def test_likes_profile_and_myfavett_import_routes_end_to_end():
 
                 conn = store.connect(db_path)
                 try:
-                    row = conn.execute("SELECT id FROM item WHERE link = 'liked'").fetchone()
+                    row = conn.execute("SELECT id FROM item WHERE link = 'https://www.tiktok.com/liked'").fetchone()
                     item_id = row["id"]
                     conn.execute(
                         "UPDATE item SET link = ? WHERE id = ?",
@@ -1064,10 +1065,22 @@ def test_verify_and_library_stats_routes():
         store.insert_item(conn, 1, "https://tiktok.com/a", status="done")  # file missing
         conn.close()
 
+        def missing_flag():
+            conn = store.connect(db_path)
+            try:
+                return conn.execute("SELECT archive_missing FROM item WHERE id = 1").fetchone()[0]
+            finally:
+                conn.close()
+
         with _client(app) as client:
-            report = client.get("/api/verify").json()
+            plain = client.get("/api/verify").json()
+            assert plain["missing"]["count"] == 1
+            assert missing_flag() == 0  # a plain GET never writes
+
+            report = client.post("/api/verify").json()
             assert report["ok"] is False
             assert report["missing"]["count"] == 1
+            assert missing_flag() == 1
 
             requeued = client.post("/api/verify/requeue").json()
             assert requeued == {"requeued": 1}
@@ -1238,6 +1251,40 @@ def test_archive_intelligence_feature_routes_work_together():
             assert client.delete(
                 f"/api/channels/{channel_id}",
             ).json() == {"ok": True}
+
+
+def test_gallery_filter_errors_are_400_at_every_execution_site():
+    """A negative-only search (or an empty field term) raises ValueError when
+    the SQL is built, not when the query string is parsed; every route that
+    executes a Gallery query must turn that into a 400, like /api/items/page."""
+    if TestClient is None:
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        app, _jobs, _db, _dl = _build(tmp)
+        with _client(app) as client:
+            assert client.get("/api/feed/ids", params={"search": "-sponsored"}).status_code == 400
+            assert client.get("/api/feed/ids", params={"search": "comment:###"}).status_code == 400
+            preset = client.post("/api/gallery-presets", json={"name": "Neg", "filters": {"search": "-sponsored"}})
+            assert preset.status_code == 200, preset.text
+            preset_id = preset.json()["id"]
+            for path in (
+                f"/api/gallery-presets/{preset_id}/summary",
+                f"/api/gallery-presets/{preset_id}/items",
+                f"/api/gallery-presets/{preset_id}/items?feed=true",
+                f"/api/gallery-presets/{preset_id}/inventory",
+                f"/api/feed/ids?preset={preset_id}",
+            ):
+                response = client.get(path)
+                assert response.status_code == 400, (path, response.status_code, response.text)
+            mark = client.post(
+                f"/api/gallery-presets/{preset_id}/mark", json={"action": "offload", "dry_run": True},
+            )
+            assert mark.status_code == 400, (mark.status_code, mark.text)
+            assert mark.json()["detail"].startswith("Smart collection is invalid: ")
+            repair = client.post("/api/coverage/repair", json={
+                "targets": ["comments"], "filter": {"search": "-sponsored"},
+            })
+            assert repair.status_code == 400, (repair.status_code, repair.text)
 
 
 if __name__ == "__main__":

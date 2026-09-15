@@ -10,7 +10,7 @@ import os
 import re
 from typing import Optional
 
-from core import export, layout, store
+from core import export, layout, links, store
 
 
 class LegacyBootstrapError(ValueError):
@@ -36,7 +36,12 @@ def _read_checkpoint(path):
         raise LegacyBootstrapError(f"Could not read the checkpoint file: {exc}") from exc
     if len(lines) != 1:
         raise LegacyBootstrapError("The checkpoint file must contain exactly one non-empty link.")
-    return _normalize_link(lines[0])
+    link = _normalize_link(lines[0])
+    # The checkpoint is user-supplied text that ends up as item.link and reaches
+    # Cobalt / yt-dlp, so it gets the same gate as every other link source.
+    if not links.is_tiktok_link(link):
+        raise LegacyBootstrapError("The checkpoint link must be a TikTok URL.")
+    return link
 
 
 def _numeric_mp4_ids(download_dir):

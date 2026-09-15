@@ -1,5 +1,6 @@
 """In-process daily/weekly Archive-run scheduler with DST-safe occurrences."""
 from datetime import date, datetime, time, timedelta, timezone
+import logging
 import re
 import threading
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -127,6 +128,7 @@ class Scheduler:
         self._stop = threading.Event()
         self._thread = None
         self._active_schedule_id = None
+        self.last_error = None
 
     def tick(self):
         now = _as_utc(self.clock())
@@ -165,6 +167,22 @@ class Scheduler:
         finally:
             conn.close()
 
+    def _safe_tick(self):
+        """Run one tick; never let an exception kill the scheduler thread.
+
+        A locked database during a long Sync, a vanished tzdata entry, or a
+        malformed schedule row must cost one missed check, not every future
+        schedule for the life of the process.
+        """
+        try:
+            result = self.tick()
+        except Exception as error:  # deliberately broad: any tick failure
+            self.last_error = f"{type(error).__name__}: {error}"
+            logging.exception("scheduler tick failed; will retry next interval")
+            return False
+        self.last_error = None
+        return result
+
     def start(self):
         if self._thread and self._thread.is_alive():
             return
@@ -172,11 +190,11 @@ class Scheduler:
 
         def loop():
             while not self._stop.wait(self.interval):
-                self.tick()
+                self._safe_tick()
 
         self._thread = threading.Thread(target=loop, name="run-scheduler", daemon=True)
         self._thread.start()
-        self.tick()  # one startup catch-up after the app is ready
+        self._safe_tick()  # one startup catch-up after the app is ready
 
     def stop(self):
         self._stop.set()

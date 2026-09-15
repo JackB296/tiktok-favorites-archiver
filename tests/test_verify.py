@@ -56,6 +56,23 @@ def test_requeue_resets_missing_done_items_but_skips_local_placeholders():
     assert store.get_item(conn, 3)["status"] == "done"
 
 
+def test_report_only_scan_does_not_persist_missing_flags():
+    conn = _db()
+    store.insert_item(conn, 1, "https://tiktok.com/missing", status="done")
+    store.insert_item(conn, 2, "https://tiktok.com/present", status="done")
+
+    def flagged():
+        return conn.execute("SELECT COUNT(*) FROM item WHERE archive_missing = 1").fetchone()[0]
+
+    with tempfile.TemporaryDirectory() as dl:
+        open(os.path.join(dl, "2.mp4"), "w").close()
+        report = verify.verify_archive(conn, dl, record=False)
+        assert report["missing"]["count"] == 1
+        assert flagged() == 0
+        verify.verify_archive(conn, dl)  # default records
+        assert flagged() == 1
+
+
 def test_integrity_scan_marks_an_actionable_recovery_inbox():
     conn = _db()
     store.insert_item(conn, 1, "https://tiktok.com/missing", status="done")

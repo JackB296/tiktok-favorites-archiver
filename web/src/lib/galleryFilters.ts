@@ -221,7 +221,12 @@ export function filtersKey(state: GalleryFiltersState): string {
     date conversions included). The wire mapping is spelled out per field so the
     HTTP query stays byte-identical to the old inline pageQuery. */
 export function filtersToPageQuery(state: GalleryFiltersState, randomSeed: number) {
-  const num = (s: string) => (s.trim() === "" ? undefined : Number(s));
+  const num = (s: string) => {
+    // A typo like "1.2.3" is NaN; drop it rather than send the server a
+    // value it must reject.
+    const n = Number(s);
+    return s.trim() === "" || !Number.isFinite(n) ? undefined : n;
+  };
   return {
     search: state.search, search_scope: state.searchScope as "posts" | "comments" | "songs" | "analysis" | "all", kind: state.kind, status: state.status, limit: 50, order: state.order,
     seed: state.order === "random" ? randomSeed : undefined,

@@ -23,8 +23,8 @@ def test_adjacent_imports_report_new_removed_unchanged_and_protected():
         os.makedirs(downloads)
         first_path = os.path.join(tmp, "first.json")
         second_path = os.path.join(tmp, "second.json")
-        _write_export(first_path, [("C", "2023"), ("B", "2022"), ("A", "2021")])
-        _write_export(second_path, [("D", "2024"), ("C", "2023"), ("B", "2022")])
+        _write_export(first_path, [("https://www.tiktok.com/C", "2023"), ("https://www.tiktok.com/B", "2022"), ("https://www.tiktok.com/A", "2021")])
+        _write_export(second_path, [("https://www.tiktok.com/D", "2024"), ("https://www.tiktok.com/C", "2023"), ("https://www.tiktok.com/B", "2022")])
 
         first = importer.import_all(
             conn, first_path, downloads, source_name="../first.json",
@@ -32,7 +32,7 @@ def test_adjacent_imports_report_new_removed_unchanged_and_protected():
         assert first["import_record"]["comparison"]["counts"] == {
             "new": 3, "removed": 0, "unchanged": 0, "protected": 0,
         }
-        store.set_status(conn, store.get_item_by_link(conn, "A")["id"], "done")
+        store.set_status(conn, store.get_item_by_link(conn, "https://www.tiktok.com/A")["id"], "done")
 
         second = importer.import_all(
             conn, second_path, downloads, source_name="second.json",
@@ -41,11 +41,11 @@ def test_adjacent_imports_report_new_removed_unchanged_and_protected():
         assert comparison["counts"] == {
             "new": 1, "removed": 1, "unchanged": 2, "protected": 1,
         }
-        assert [entry["link"] for entry in comparison["new"]] == ["D"]
-        assert [entry["link"] for entry in comparison["removed"]] == ["A"]
+        assert [entry["link"] for entry in comparison["new"]] == ["https://www.tiktok.com/D"]
+        assert [entry["link"] for entry in comparison["removed"]] == ["https://www.tiktok.com/A"]
         assert comparison["removed"][0]["protected"] is True
-        assert store.get_item_by_link(conn, "A")["status"] == "done"
-        assert store.get_item_by_link(conn, "A") is not None
+        assert store.get_item_by_link(conn, "https://www.tiktok.com/A")["status"] == "done"
+        assert store.get_item_by_link(conn, "https://www.tiktok.com/A") is not None
 
         assert first["import_record"]["source_name"] == "first.json"
         assert second["import_record"]["previous_id"] == first["import_record"]["id"]
@@ -57,7 +57,7 @@ def test_repeated_export_is_recorded_with_no_membership_changes():
         downloads = os.path.join(tmp, "downloads")
         os.makedirs(downloads)
         path = os.path.join(tmp, "same.json")
-        _write_export(path, [("B", "2022"), ("A", "2021")])
+        _write_export(path, [("https://www.tiktok.com/B", "2022"), ("https://www.tiktok.com/A", "2021")])
         first = importer.import_all(conn, path, downloads, source_name="same.json")
         second = importer.import_all(conn, path, downloads, source_name="same.json")
 
@@ -97,7 +97,7 @@ def test_import_detail_is_bounded_but_counts_remain_complete():
         downloads = os.path.join(tmp, "downloads")
         os.makedirs(downloads)
         path = os.path.join(tmp, "many.json")
-        _write_export(path, [(f"L{i}", f"2024-{i:02d}") for i in range(1, 6)])
+        _write_export(path, [(f"https://www.tiktok.com/L{i}", f"2024-{i:02d}") for i in range(1, 6)])
         result = importer.import_all(conn, path, downloads, source_name="many.json")
 
     detail = import_history.get_import(conn, result["import_record"]["id"], change_limit=2)
@@ -114,8 +114,8 @@ def test_listing_carries_the_newest_diff_and_counts_only_for_older_checkpoints()
         os.makedirs(downloads)
         first_path = os.path.join(tmp, "first.json")
         second_path = os.path.join(tmp, "second.json")
-        _write_export(first_path, [("B", "2022"), ("A", "2021")])
-        _write_export(second_path, [("C", "2023"), ("B", "2022")])
+        _write_export(first_path, [("https://www.tiktok.com/B", "2022"), ("https://www.tiktok.com/A", "2021")])
+        _write_export(second_path, [("https://www.tiktok.com/C", "2023"), ("https://www.tiktok.com/B", "2022")])
         importer.import_all(conn, first_path, downloads)
         importer.import_all(conn, second_path, downloads)
 
@@ -125,8 +125,8 @@ def test_listing_carries_the_newest_diff_and_counts_only_for_older_checkpoints()
     # The page opens on the newest checkpoint, so its diff arrives with the
     # list rather than costing a second request.
     assert newest["comparison"] == detail["comparison"]
-    assert [entry["link"] for entry in newest["comparison"]["new"]] == ["C"]
-    assert [entry["link"] for entry in newest["comparison"]["removed"]] == ["A"]
+    assert [entry["link"] for entry in newest["comparison"]["new"]] == ["https://www.tiktok.com/C"]
+    assert [entry["link"] for entry in newest["comparison"]["removed"]] == ["https://www.tiktok.com/A"]
     # Older checkpoints stay a one-line summary until they are opened.
     assert sorted(older["comparison"]) == ["counts"]
     assert older["comparison"]["counts"] == {
