@@ -13,10 +13,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # The suite itself is stdlib-only; installing the web tier lets the
-      # HTTP-level suite (tests/test_api_http.py) run instead of self-skipping.
-      - name: Install web tier
-        run: pip install -r requirements-web.txt -c constraints.txt
+      # HTTP tests need the web tier; the header regression test exercises
+      # yt-dlp's real urllib and requests handlers. Use the image's pins.
+      - name: Install backend test dependencies
+        run: pip install -r requirements-web.txt -c constraints.txt yt-dlp requests
       - name: Run every test file through its own harness
         run: |
           failures=0
