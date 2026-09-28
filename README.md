@@ -4,13 +4,9 @@ Save your TikTok favorites, likes, or a creator’s public posts to your own mac
 
 Already have a myfaveTT archive? Import its MP4s, including copies of posts that are no longer on TikTok.
 
-[![CI](https://github.com/JackB296/tiktok-favorites-archiver/actions/workflows/ci.yml/badge.svg)](https://github.com/JackB296/tiktok-favorites-archiver/actions/workflows/ci.yml) · [MIT license](LICENSE)
+![Gallery and Feed demo with edits by @jackbialecki](screenshots/browse-demo.gif)
 
-[![Current Feed playing an edit by @jackbialecki](screenshots/feed.png)](screenshots/browse-demo.mp4)
-
-[Watch the Gallery and Feed demo](screenshots/browse-demo.mp4) · [See the import controls](screenshots/import-options.mp4)
-
-Recorded from the current app with three of my own edits: Manchester by the Sea, Buffalo ’66, and Mysterious Skin. These are silent UI recordings of a prepared local archive. The import clip shows the setup controls; it does not show a completed download. [Recording details](screenshots/README.md).
+Recorded from the current app with three of my own edits: Manchester by the Sea, Buffalo ’66, and Mysterious Skin.
 
 ## Quick start
 
@@ -33,7 +29,7 @@ Open [localhost:8080](http://localhost:8080). The first launch downloads the pre
 
 Then choose an import method below. Once videos are available, open **Gallery** to search or **Feed** to watch.
 
-Using **Unraid, CasaOS, or Umbrel**? See the [installation templates](templates/). Building from source or developing the app? See the [user guide](USER_GUIDE.md#development).
+Using **Unraid, CasaOS, or Umbrel**? See the [installation templates](templates/).
 
 ## Choose what to import
 
@@ -44,6 +40,8 @@ All three paths start in **Sync**.
 | A TikTok data export | **Your TikTok export → Upload** | Imports Favorites, Likes, or both. Press **Start sync** to download. |
 | A public creator’s username or profile URL | **More ways to add videos → Archive a public username** | Discovers their posts and adds new ones to the archive. |
 | A myfaveTT download folder | **More ways to add videos → Import a myfaveTT archive** | Previews matching files, then copies the MP4s into the archive. |
+
+![Import controls for favorites, likes, and public creators](screenshots/import-options.gif)
 
 ### Favorites and likes
 
@@ -69,7 +67,7 @@ Matching uses each TikTok video ID. A saved MP4 can fill an existing unavailable
 
 ## Watch and find things
 
-[![Gallery showing three real edits by @jackbialecki](screenshots/gallery.png)](screenshots/browse-demo.mp4)
+![Gallery showing three real edits by @jackbialecki](screenshots/gallery.png)
 
 - **Feed:** scroll through videos and photo carousels. Use the arrow keys to move, Space to pause, M to mute, and F for fullscreen.
 - **Gallery:** search captions, creators, and hashtags. **Search in** can also target saved comments, identified songs, or local transcripts and on-screen text. Click a creator or hashtag to browse its posts.
@@ -117,6 +115,6 @@ Your archive stays on your machine. Downloading and metadata retrieval contact T
 
 ## Reference
 
-[User guide](USER_GUIDE.md) · [Configuration](USER_GUIDE.md#configuration) · [Development](USER_GUIDE.md#development) · [Measured performance](docs/PERFORMANCE.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+[User guide](USER_GUIDE.md) · [Configuration](USER_GUIDE.md#configuration) · [Changelog](CHANGELOG.md)
 
 Not affiliated with TikTok or ByteDance. Archive content you are entitled to save and respect the creators’ rights. [Full disclaimer](USER_GUIDE.md#disclaimer). Licensed under [MIT](LICENSE).
